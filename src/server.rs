@@ -98,6 +98,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/pin", post(pin))
         .route("/api/jellies/{name}/move", post(move_project))
         .route("/api/jellies/{name}/restore", post(restore))
+        .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
         .route("/api/inbox", get(inbox))
@@ -366,6 +367,10 @@ fn inject_head(html: &str, inject: &str) -> String {
     }
 }
 
+async fn archive(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+    app.change(|s| s.set_archived(&name, true, &by(r.by)?))
+}
+
 async fn restore(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
     app.change(|s| s.set_archived(&name, false, &by(r.by)?))
 }
@@ -509,22 +514,27 @@ async fn focus(State(app): State<Shared>, Json(r): Json<FocusReq>) -> Result<Jso
 #[derive(Deserialize)]
 struct ProjectQ {
     project: Option<String>,
+    /// List answered items instead of open ones: the decision record.
+    #[serde(default)]
+    answered: bool,
 }
 
-/// Everything open for the person, newest first.
+/// Everything open for the person, newest first; with `answered=true`, every
+/// answered item instead: what was asked, what was picked, by whom, and when.
 async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) -> Json<Value> {
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
     let mut items: Vec<Value> = Vec::new();
     for j in store.list().filter(|j| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)) {
-        for a in j.attention.iter().filter(|a| a.is_open()) {
+        for a in j.attention.iter().filter(|a| if q.answered { a.answer.is_some() } else { a.is_open() }) {
             let mut v = serde_json::to_value(a).expect("serializes");
             v["jelly"] = json!(j.name);
             v["about"] = json!(j.about);
             items.push(v);
         }
     }
-    items.sort_by_key(|i| std::cmp::Reverse(i["at_ms"].as_u64().unwrap_or(0)));
+    let when = |i: &Value| i["answer"]["at_ms"].as_u64().or(i["at_ms"].as_u64()).unwrap_or(0);
+    items.sort_by_key(|i| std::cmp::Reverse(when(i)));
     Json(json!(items))
 }
 

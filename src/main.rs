@@ -209,6 +209,8 @@ enum Cmd {
     Move { name: String, project: String },
     /// Mark a comment as dealt with.
     Resolve { name: String, id: String },
+    /// Hide a jelly from the jelly page without deleting it.
+    Archive { name: String },
     /// Bring an archived jelly back to the jelly page.
     Restore { name: String },
     /// Add files (images, video, models, data) next to a jelly. A view refers
@@ -493,6 +495,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 None => { print!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?); Ok(()) }
             }
         }
+        Cmd::Archive { name } => print(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by})).map(summary)?),
         Cmd::Restore { name } => print(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by})).map(summary)?),
         Cmd::Asset { name, files } => {
             let name = id(&name);

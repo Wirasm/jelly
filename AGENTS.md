@@ -7,6 +7,10 @@ verbs), **jelly page** (the internal jelly, id `surface`, that lays out the othe
 
 ## Invariants
 
+- Agents show, people react. An agent lays out options with tradeoffs, previews and
+  a recommendation; the person picks, says why, or comments. Never hand the person
+  an empty input field.
+
 - State changes only through verbs. Do not add an API that writes state directly;
   undo, events and attribution all depend on it.
 - Verbs run one at a time under the store lock in `server.rs`.
