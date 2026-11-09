@@ -47,11 +47,14 @@ function normalize(spec) {
   };
 }
 
-// The only place status is decided. Any change by the person reopens an
-// applied decision, so the agent hears about it.
+// The only place status is decided. A question counts as answered when the
+// person picked something or wrote a note: "not sure, keep it simple" is an
+// answer too. Any change by the person reopens an applied decision, so the
+// agent hears about it.
+const responded = (q) => Boolean(q.answer || q.note?.text);
 function settle(state) {
   state.applied = null;
-  state.status = state.questions.every((q) => q.answer) ? "answered" : "open";
+  state.status = state.questions.every(responded) ? "answered" : "open";
 }
 
 function question(state, qid) {

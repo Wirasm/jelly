@@ -517,7 +517,11 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
             items.push(v);
         }
         if is_decision(&j.state) && j.state.get("status") == Some(&json!("open")) {
-            items.push(json!({"jelly": j.name, "about": j.about, "id": "ask", "kind": "ask", "title": j.about, "by": j.made_by, "at_ms": j.updated_ms, "form": true}));
+            let qs = j.state["questions"].as_array().cloned().unwrap_or_default();
+            let done = qs.iter().filter(|q| !q["answer"].is_null() || q["note"]["text"].as_str().is_some_and(|t| !t.is_empty())).count();
+            if done < qs.len() {
+                items.push(json!({"jelly": j.name, "about": j.about, "id": "ask", "kind": "ask", "title": j.about, "by": j.made_by, "at_ms": j.updated_ms, "form": true, "progress": [done, qs.len()]}));
+            }
         }
     }
     items.sort_by_key(|i| std::cmp::Reverse(i["at_ms"].as_u64().unwrap_or(0)));

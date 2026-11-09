@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn a_set_of_questions_is_answered_when_each_has_a_pick_or_a_reason() {
+    fn a_set_of_questions_is_answered_when_each_has_a_pick_or_a_note() {
         let src = DECISION;
         let opts = json!([{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]);
         let spec = json!({"title": "Open questions", "questions": [
@@ -155,11 +155,11 @@ mod tests {
 
         let s = run(src, "note", &s, &json!({"q": "store", "text": "  only if it stays local "}), "person", 2).unwrap();
         assert_eq!(s.pointer("/questions/1/note"), Some(&json!({"text": "only if it stays local", "by": "person", "at_ms": 2})));
-        assert_eq!(s["status"], "open", "a note alone does not answer");
+        assert_eq!(s["status"], "open", "names has nothing yet");
 
         let s = run(src, "pick", &s, &json!({"q": "names", "option": "b"}), "person", 3).unwrap();
         assert_eq!(s.pointer("/questions/0/answer"), Some(&json!({"kind": "pick", "option": "b", "by": "person", "at_ms": 3})));
-        assert_eq!(s["status"], "open");
+        assert_eq!(s["status"], "answered", "a note is a response too: store has one");
         assert!(run(src, "pick", &s, &json!({"q": "store", "option": null, "note": " "}), "person", 4).is_err());
         let s = run(src, "pick", &s, &json!({"q": "store", "option": null}), "person", 4).unwrap();
         assert_eq!(s.pointer("/questions/1/answer/kind"), Some(&json!("none")), "the existing note is the reason");
