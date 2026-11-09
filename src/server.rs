@@ -1,5 +1,5 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
-//! views. The surface people look at is itself a jelly named `surface`.
+//! views. The jelly page people look at is itself an internal jelly named `surface`.
 
 use crate::store::{Error, Event, Store};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -47,7 +47,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     let mut store = store;
     if store.get("surface").is_err() {
         store
-            .create("surface", SURFACE_VIEW.into(), SURFACE_VERBS.into(), json!({"layout": {}}), "jelly", false, "Where every jelly lives", "")
+            .create("surface", SURFACE_VIEW.into(), SURFACE_VERBS.into(), json!({}), "jelly", false, "The jelly page", "")
             .and_then(|_| store.pin("surface", true, "jelly"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
@@ -55,7 +55,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, snapshots: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
-    // surface, restorable, and back on their own as soon as anything changes them.
+    // jelly page, restorable, and back on their own as soon as anything changes them.
     let sweeper = app.clone();
     tokio::spawn(async move {
         loop {
@@ -68,13 +68,14 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     });
 
     let router = Router::new()
-        .route("/", get(|| async { Redirect::to("/j/surface") }))
+        // The jelly page: every project at /, one project at /p/<project>.
+        .route("/", get(|st: State<Shared>| async move { view(st, Path("surface".into())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
         // Views live at /j/<name>/ so a view can use relative `assets/<file>` paths.
         .route("/j/{name}", get(|Path(name): Path<String>| async move { Redirect::permanent(&format!("/j/{name}/")) }))
         .route("/j/{name}/", get(view))
         .route("/j/{name}/assets/{file}", get(asset))
-        // A project's page is the surface, showing only that project's jellies.
+        // A project's page is the same page, showing only that project's jellies.
         .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path("surface".into())).await }))
         .route("/api/events", get(events))
         .route("/api/ws", get(ws))
@@ -110,7 +111,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
 
     // Loopback only: anything that reaches this port can run verbs.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    eprintln!("jelly surface on http://127.0.0.1:{port}");
+    eprintln!("jelly on http://127.0.0.1:{port}");
     axum::serve(listener, router).await
 }
 
@@ -284,7 +285,7 @@ async fn project(State(app): State<Shared>, Path(name): Path<String>, Json(r): J
 
 async fn remove(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ByQ>) -> Result<Json<Event>, ApiError> {
     if name == "surface" {
-        return Err(Error::Invalid("the surface cannot be removed; reshape or undo it instead".into()).into());
+        return Err(Error::Invalid("the jelly page cannot be removed; reshape or undo it instead".into()).into());
     }
     app.change(|s| s.remove(&name, &by(q.by)))
 }

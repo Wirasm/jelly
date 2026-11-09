@@ -121,7 +121,7 @@
       });
     },
     comment: (anchor, text) => post(`${api}/comment`, { anchor, text }),
-    /** Put another jelly on screen: inside the surface it is focused, alone it opens. */
+    /** Put another jelly on screen: on the jelly page it opens full size, alone it navigates. */
     show(name) {
       name = full(name);
       if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
@@ -147,12 +147,12 @@
       font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
     .jf-pin.agent { background: #46c4b8; }
     .jf-pin.done { opacity: .55; }
-    .jf-pop { position: absolute; z-index: 2147483001; width: 260px; background: #fff; color: #1b2221; border: 1px solid #e2e7e5; border-radius: 10px;
+    .jf-pop { color-scheme: light; position: absolute; z-index: 2147483001; width: 260px; background: #fff; color: #1b2221; border: 1px solid #e2e7e5; border-radius: 10px;
       box-shadow: 0 14px 34px -10px rgba(0,0,0,.45); padding: 8px; font: 12px -apple-system, sans-serif; }
     .jf-pop .jf-on { font: 10px ui-monospace, Menlo, monospace; color: #66726f; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .jf-pop textarea { width: 100%; box-sizing: border-box; min-height: 54px; font: 12px -apple-system, sans-serif; border: 1px solid #e2e7e5; border-radius: 6px; padding: 5px; resize: vertical; }
     .jf-pop .jf-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; align-items: center; }
-    .jf-pop button { font: 12px -apple-system, sans-serif; border: 1px solid #e2e7e5; background: #fff; border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+    .jf-pop button { font: 12px -apple-system, sans-serif; color: #1b2221; border: 1px solid #e2e7e5; background: #fff; border-radius: 6px; padding: 3px 9px; cursor: pointer; }
     .jf-pop button.jf-send { background: #0f7b74; color: #fff; border-color: #0f7b74; }
     .jf-pop .jf-by { font: 10px ui-monospace, monospace; color: #b26a12; }
     .jf-pop .jf-thread { display: grid; gap: 6px; margin-bottom: 6px; max-height: 260px; overflow-y: auto; }
@@ -161,11 +161,11 @@
     .jf-pop .jf-msg.agent .jf-by { color: #0f7b74; }
     .jf-pop .jf-text { white-space: pre-wrap; margin-top: 1px; }
     .jf-pop .jf-done { font-size: 11px; color: #66726f; }
-    .jf-att { position: absolute; z-index: 2147482999; height: 22px; min-width: 22px; padding: 0 7px; border-radius: 11px; background: #6d5ce8; color: #fff;
-      font: 700 12px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(80,60,200,.45); animation: jf-pulse 2s infinite; }
+    .jf-att { position: absolute; z-index: 2147482999; height: 24px; min-width: 24px; padding: 0 8px; border-radius: 12px; background: #e8336f; color: #fff;
+      font: 700 12px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(232,51,111,.45); animation: jf-pulse 2s infinite; }
     .jf-att.look { background: #0f7b74; box-shadow: 0 2px 8px rgba(15,123,116,.45); }
-    @keyframes jf-pulse { 50% { box-shadow: 0 0 0 6px rgba(109,92,232,.15); } }
-    .jf-chip { position: fixed; right: 12px; top: 12px; z-index: 2147483000; background: #6d5ce8; color: #fff; border: 0; border-radius: 999px; padding: 6px 12px; font: 600 12.5px -apple-system, sans-serif; cursor: pointer; box-shadow: 0 6px 18px -6px rgba(80,60,200,.6); }
+    @keyframes jf-pulse { 50% { box-shadow: 0 0 0 7px rgba(232,51,111,.15); } }
+    .jf-chip { position: fixed; right: 12px; top: 12px; z-index: 2147483000; background: #e8336f; color: #fff; border: 0; border-radius: 999px; padding: 8px 14px; font: 600 13px -apple-system, sans-serif; cursor: pointer; box-shadow: 0 8px 22px -8px rgba(216,27,96,.6); }
     .jf-pop .jf-q { font-weight: 600; font-size: 13px; margin: 2px 0 4px; }
     .jf-pop .jf-why { font-size: 11.5px; color: #4b3cc4; background: #f0eefe; border-radius: 6px; padding: 5px 7px; margin: 4px 0 6px; }
     .jf-pop .jf-opts { display: grid; gap: 4px; margin: 6px 0; }
@@ -175,7 +175,43 @@
     .jf-pop .jf-opt.on { border: 2px solid #6d5ce8; padding: 5px 7px; }
     .jf-pop .jf-list { display: grid; gap: 6px; } .jf-pop .jf-li { border: 1px solid #e2e7e5; border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 12.5px; }
     .jf-work { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2147483000; background: #141a19; color: #e8eeec; border-radius: 999px; padding: 6px 14px 6px 12px; font: 12.5px -apple-system, sans-serif; display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); }
-    .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: #46c4b8; animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }`;
+    .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: #46c4b8; animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }
+    .jf-hl { outline: 3px solid #e8336f !important; outline-offset: 4px; border-radius: 6px; transition: outline-color .3s; }
+    .jf-sheet { color-scheme: light; position: fixed; z-index: 2147483002; top: 12px; right: 12px; bottom: 12px; width: min(400px, calc(100vw - 24px)); overflow-y: auto;
+      background: #fff; color: #2a1620; border: 1px solid #f0dfe5; border-radius: 18px; box-shadow: 0 30px 70px -20px rgba(42,22,32,.45);
+      padding: 18px 20px 16px; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; animation: jf-in .3s cubic-bezier(.3,1.4,.5,1); }
+    @keyframes jf-in { from { opacity: 0; transform: translateX(24px); } }
+    .jf-sheet.jf-sh-done { animation: jf-out .45s ease-in forwards; } @keyframes jf-out { to { opacity: 0; transform: translateX(30px) scale(.98); } }
+    .jf-sheet * { box-sizing: border-box; font-family: inherit; letter-spacing: normal; text-transform: none; }
+    .jf-sh-top { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+    .jf-sh-who { font: 600 12px ui-monospace, Menlo, monospace; color: #c8255d; flex: 1; }
+    .jf-sh-n { font-size: 12px; color: #8a6b78; }
+    .jf-sh-nav, .jf-sh-x { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: #4a3340; font-size: 16px; }
+    .jf-sh-nav:hover, .jf-sh-x:hover { background: #fdf0f4; } .jf-sh-nav[disabled] { opacity: .3; cursor: default; background: none; }
+    .jf-sh-q { margin: 0; font-size: 20px; line-height: 1.3; font-weight: 700; color: #2a1620; letter-spacing: -.01em; }
+    .jf-sh-d { margin: 8px 0 0; color: #4a3340; } .jf-sh-d:empty { display: none; }
+    .jf-sh-about { margin-top: 10px; font-size: 12.5px; color: #c8255d; display: flex; gap: 6px; align-items: center; }
+    .jf-sh-about::before { content: ""; width: 14px; height: 10px; border: 2px solid #e8336f; border-radius: 3px; }
+    .jf-sh-rec { margin-top: 14px; background: #fdf0f4; border-radius: 12px; padding: 10px 12px; }
+    .jf-sh-rec b { display: block; color: #a3134c; font-size: 13.5px; } .jf-sh-rec span { display: block; color: #4a3340; font-size: 13.5px; margin-top: 2px; }
+    .jf-sh-opts { display: grid; gap: 8px; margin-top: 14px; }
+    .jf-sh-o { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; padding: 12px 14px; border: 1.5px solid #f0dfe5; border-radius: 12px; background: #fff; color: #2a1620; }
+    .jf-sh-o:hover { border-color: #e2c6d1; background: #fffafc; }
+    .jf-sh-o i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #d9bcc8; margin-top: 2px; }
+    .jf-sh-o b { display: block; font-size: 15px; font-weight: 650; color: #2a1620; }
+    .jf-sh-o em { display: block; font-style: normal; font-size: 13px; color: #6b5260; margin-top: 2px; } .jf-sh-o em:empty { display: none; }
+    .jf-sh-o.rec b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: #e8336f; border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
+    .jf-sh-o.on { border-color: #e8336f; background: #fff5f8; box-shadow: 0 0 0 3px rgba(232,51,111,.14); }
+    .jf-sh-o.on i { border-color: #e8336f; background: radial-gradient(#e8336f 45%, #fff 50%); }
+    .jf-sh-l { display: block; margin-top: 14px; font-size: 12.5px; color: #6b5260; }
+    .jf-sh-t { width: 100%; margin-top: 6px; font: inherit; font-size: 14px; color: #2a1620; background: #fff; border: 1.5px solid #f0dfe5; border-radius: 10px; padding: 8px 10px; resize: vertical; }
+    .jf-sh-t:focus { outline: none; border-color: #e8336f; }
+    .jf-sh-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .jf-sh-later, .jf-sh-go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; }
+    .jf-sh-later { color: #6b5260; } .jf-sh-later:hover { background: #fdf0f4; }
+    .jf-sh-go { background: #e8336f; color: #fff; } .jf-sh-go:hover { background: #c8255d; }
+    .jf-sh-go[disabled] { background: #f0dfe5; color: #b39aa5; cursor: default; }
+    .jf-att { cursor: pointer; }`;
   let commenting = false, hovered = null, pop = null;
   const btn = document.createElement("button");
   btn.className = "jf-btn";
@@ -194,7 +230,7 @@
   }
   const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-pin, .jf-att, .jf-chip, .jf-work");
 
-  // Inside the surface, the surface's header owns the Comment button.
+  // On the jelly page, the page's header owns the Comment button.
   const embedded = window.parent !== window;
   function setMode(on) {
     commenting = on;
@@ -290,33 +326,79 @@
   }
   // ---- attention: asks and looks the agent put here ------------------------
   let attEls = [];
-  function askPop(a, x, y) {
+  // The answer sheet: everything the agent put in front of the person, one at a
+  // time, with room to read. Fixed colours so it reads the same on any jelly.
+  let sheet = null, sheetAt = null, hl = null;
+  function openItems() { return attention.filter((a) => !a.answer); }
+  function highlight(a) {
+    hl?.classList.remove("jf-hl");
+    hl = null;
+    try { hl = a?.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
+    if (hl) { hl.classList.add("jf-hl"); hl.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  }
+  function closeSheet() { sheet?.remove(); sheet = null; sheetAt = null; highlight(null); }
+  function openSheet(id) {
+    const items = openItems();
+    if (!items.length) return closeSheet();
+    const i = Math.max(0, items.findIndex((x) => x.id === id));
+    const a = items[i];
+    sheetAt = a.id;
+    sheet?.remove();
+    sheet = document.createElement("aside");
+    sheet.className = "jf-sheet";
     const isAsk = a.kind === "ask";
+    const rec = a.options?.find((o) => o.id === a.recommend);
+    sheet.innerHTML = `<div class="jf-sh-top"><span class="jf-sh-who"></span><span class="jf-sh-n">${i + 1} of ${items.length}</span>
+        <button class="jf-sh-nav" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="Previous">‹</button><button class="jf-sh-nav" data-d="1" ${i === items.length - 1 ? "disabled" : ""} aria-label="Next">›</button><button class="jf-sh-x" aria-label="Close">✕</button></div>
+      <h2 class="jf-sh-q"></h2><p class="jf-sh-d"></p>
+      ${a.anchor?.selector ? '<div class="jf-sh-about">About the highlighted part of the page</div>' : ""}
+      ${rec ? '<div class="jf-sh-rec"><b></b><span></span></div>' : ""}
+      <div class="jf-sh-opts"></div>
+      <label class="jf-sh-l">${isAsk ? (a.options?.length ? "Add context or a condition (optional)" : "Your answer") : "Anything to say? (optional)"}</label>
+      <textarea class="jf-sh-t" rows="3"></textarea>
+      <div class="jf-sh-foot"><button class="jf-sh-later">Later</button><button class="jf-sh-go" ${isAsk && a.options?.length ? "disabled" : ""}>${isAsk ? "Answer" : "Seen"}</button></div>`;
+    sheet.querySelector(".jf-sh-who").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
+    sheet.querySelector(".jf-sh-q").textContent = a.title;
+    sheet.querySelector(".jf-sh-d").textContent = a.detail || "";
+    if (rec) {
+      sheet.querySelector(".jf-sh-rec b").textContent = `${a.by} recommends ${rec.label || rec.id}`;
+      sheet.querySelector(".jf-sh-rec span").textContent = a.why || "";
+    }
     let picked = null;
-    const p = openPop(x, y, `<div class="jf-by"></div><div class="jf-q"></div><div class="jf-text" style="color:#4b5553"></div>
-      ${a.why ? '<div class="jf-why"></div>' : ""}<div class="jf-opts"></div>
-      <textarea placeholder="${isAsk ? (a.options?.length ? "Add context or a condition (optional)" : "Your answer") : "Anything to say? (optional)"}"></textarea>
-      <div class="jf-row"><button class="jf-close">Later</button><button class="jf-send">${isAsk ? "Answer" : "Seen"}</button></div>`);
-    p.querySelector(".jf-by").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
-    p.querySelector(".jf-q").textContent = a.title;
-    p.querySelector(".jf-text").textContent = a.detail || "";
-    if (a.why) p.querySelector(".jf-why").textContent = `Recommends ${a.options.find((o) => o.id === a.recommend)?.label || a.recommend}: ${a.why}`;
-    const box = p.querySelector(".jf-opts");
+    const go = sheet.querySelector(".jf-sh-go");
+    const ta = sheet.querySelector(".jf-sh-t");
     for (const o of a.options || []) {
       const b = document.createElement("button");
-      b.className = "jf-opt" + (o.id === a.recommend ? " rec" : "");
-      b.innerHTML = "<b></b><span></span>";
+      b.className = "jf-sh-o" + (o.id === a.recommend ? " rec" : "");
+      b.innerHTML = '<i></i><span><b></b><em></em></span>';
       b.querySelector("b").textContent = o.label || o.id;
-      b.querySelector("span").textContent = o.does || "";
-      b.onclick = () => { picked = o.id; box.querySelectorAll(".jf-opt").forEach((x) => x.classList.toggle("on", x === b)); };
-      box.appendChild(b);
+      b.querySelector("em").textContent = o.does || "";
+      b.onclick = () => { picked = o.id; sheet.querySelectorAll(".jf-sh-o").forEach((x) => x.classList.toggle("on", x === b)); go.disabled = false; };
+      sheet.querySelector(".jf-sh-opts").appendChild(b);
     }
-    const ta = p.querySelector("textarea");
-    const close = () => { p.remove(); pop = null; };
-    p.querySelector(".jf-close").onclick = close;
-    p.querySelector(".jf-send").onclick = () => jelly.answer(a.id, { option: picked || undefined, text: ta.value }).then(close, (e) => alert(e.message));
+    if (isAsk && !a.options?.length) ta.oninput = () => (go.disabled = !ta.value.trim());
+    if (isAsk && !a.options?.length) go.disabled = true;
+    sheet.querySelector(".jf-sh-x").onclick = closeSheet;
+    sheet.querySelector(".jf-sh-later").onclick = closeSheet;
+    sheet.querySelectorAll(".jf-sh-nav").forEach((n) => (n.onclick = () => openSheet(items[i + +n.dataset.d]?.id)));
+    go.onclick = () => {
+      go.disabled = true;
+      jelly.answer(a.id, { option: picked || undefined, text: ta.value }).then(() => {
+        sheet?.classList.add("jf-sh-done");
+        setTimeout(() => { const next = openItems().find((x) => x.id !== a.id); next ? openSheet(next.id) : closeSheet(); }, 450);
+      }, (e) => { go.disabled = false; alert(e.message); });
+    };
+    sheet.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !go.disabled) go.click(); });
+    document.body.appendChild(sheet);
+    highlight(a);
   }
+  // The jelly page can open the sheet on a given item (from the attention dock).
+  addEventListener("message", (e) => {
+    if (e.origin === location.origin && e.data?.type === "jelly:attend") openSheet(e.data.id);
+  });
+
   function drawAttention() {
+    if (sheet && !openItems().some((x) => x.id === sheetAt)) { const n = openItems()[0]; n ? openSheet(n.id) : closeSheet(); }
     attEls.forEach((e) => e.remove());
     attEls = [];
     const open = attention.filter((a) => !a.answer);
@@ -332,26 +414,16 @@
       m.title = a.title;
       m.style.left = Math.max(2, r.right - 18) + scrollX + "px";
       m.style.top = Math.max(2, r.top - 10) + scrollY + "px";
-      m.onclick = (e) => { e.stopPropagation(); askPop(a, r.left, r.bottom); };
+      m.onclick = (e) => { e.stopPropagation(); openSheet(a.id); };
       document.body.appendChild(m);
       attEls.push(m);
     }
-    if (loose.length) {
+    if (open.length) {
       const c = document.createElement("button");
       c.className = "jf-chip";
-      c.textContent = loose.length === 1 ? (loose[0].kind === "look" ? "1 thing to look at" : "1 question for you") : `${loose.length} things for you`;
-      c.onclick = (e) => {
-        e.stopPropagation();
-        if (loose.length === 1) return askPop(loose[0], innerWidth - 290, 50);
-        const p = openPop(innerWidth - 290, 50, '<div class="jf-list"></div>');
-        for (const a of loose) {
-          const li = document.createElement("div");
-          li.className = "jf-li";
-          li.textContent = a.title;
-          li.onclick = () => askPop(a, innerWidth - 290, 50);
-          p.querySelector(".jf-list").appendChild(li);
-        }
-      };
+      const all = openItems();
+      c.textContent = all.length === 1 ? (all[0].kind === "look" ? "1 thing to look at" : "1 question for you") : `${all.length} questions for you`;
+      c.onclick = (e) => { e.stopPropagation(); openSheet(loose[0].id); };
       document.body.appendChild(c);
       attEls.push(c);
     }
@@ -429,7 +501,7 @@
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
   addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    // Esc inside a jelly closes the comment mode first, then reaches the surface.
+    // Esc inside a jelly closes the comment mode first, then reaches the jelly page.
     const inPop = e.target.closest?.(".jf-pop");
     if (embedded && !commenting && !inPop && !pop?.isConnected) parent.postMessage({ type: "jelly:escape", name: boot.name }, location.origin);
     setMode(false);

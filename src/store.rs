@@ -255,7 +255,6 @@ impl Store {
         self.commit(name, "call", by, Some(verb.into()), Some(args), changed)
     }
 
-    /// Replaces the view and/or verbs while keeping state.
     /// Replaces the view and/or verbs while keeping state. `about` alone only
     /// relabels the jelly; open views do not reload for it.
     pub fn reshape(&mut self, name: &str, view: Option<String>, verbs_src: Option<String>, about: Option<String>, by: &str) -> Result<Event, Error> {

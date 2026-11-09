@@ -1,34 +1,34 @@
 # jelly
 
 Allow your agent to show you what it means instead of telling you: a prototype you
-can click, a decision with the options side by side, a plan, a dashboard, a 3D
+can click, a choice with the options side by side, a plan, a dashboard, a 3D
 render, a question you answer in one tap. You use it, comment on any part of it,
 and your agent hears everything you did. jelly runs on your machine and works with
 any agent that has a shell.
 
 ## For agents
 
-jelly gives you a place to put jellyware in front of your human: small live apps
-you write in minutes and they use, answer and shape with you. Reach for it whenever
-a picture, a prototype, a comparison or a choice would land better than prose, and
-whenever you need their decision.
+jelly gives you a place to put jellies in front of the person you work for: small
+live pages you write in minutes that they use, answer and shape with you. Reach for
+it whenever a picture, a prototype, a comparison or a choice would land better than
+prose, and whenever you need them to choose.
 
 - **Show anything.** A jelly is a view (any HTML), state (JSON) and verbs (the JS
   functions that change state). Prototypes, three.js, charts, forms, animations.
   No component kit, no ceiling.
 - **Hear their answer.** Every click is a verb call with an author. `jelly ask` and
-  `jelly look` put a question on the exact element it is about. Comments pin to
-  elements. You get all of it from `jelly inbox` (or a hook at the start of your
+  `jelly look` put a question on the exact element it is about. Comments attach
+  to elements. You get all of it from `jelly inbox` (or a hook at the start of your
   turn), or block on `jelly wait`.
-- **Get decisions made.** `jelly ask --spec` lays out options with live previews,
+- **Get choices made.** `jelly ask --spec` lays out options with live previews,
   gains, costs and your recommendation. They pick, add a note, or add their own question.
 - **See what you made.** `jelly see NAME` prints the page as text, with everything
   waiting on them and what they did lately. `--png` when layout matters.
 - **Keep working on it together.** Reshape while it runs and state stays. Undo
-  anything. Notes for the next agent. One page per project. Share as one file.
+  the last state change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
-jelly ls                                         # is the daemon up? (your human runs `jelly serve`)
+jelly ls                                         # is the daemon up? (the person runs `jelly serve`)
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
@@ -40,7 +40,7 @@ jelly see plan                                   # what is on screen, as text
 The full guide is [`skill/SKILL.md`](skill/SKILL.md). Install it as a skill so every
 session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 
-## For the human: install
+## For the person: install
 
 ```bash
 cargo install --path .

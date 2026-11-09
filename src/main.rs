@@ -21,7 +21,7 @@ struct Cli {
     #[arg(long = "as", env = "JELLY_AS", default_value = "agent", global = true)]
     by: String,
     /// The project new jellies belong to. Defaults to the name of the git repo
-    /// you run from; the surface shows each project on its own page.
+    /// you run from; the jelly page shows each project on its own page.
     #[arg(long, env = "JELLY_PROJECT", global = true)]
     project: Option<String>,
     #[command(subcommand)]
@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run the daemon and the surface.
+    /// Run the daemon and the jelly page.
     Serve {
         #[arg(long, default_value_t = 7878)]
         port: u16,
@@ -53,7 +53,7 @@ enum Cmd {
         /// Replace an existing jelly of the same name, losing its state.
         #[arg(long)]
         replace: bool,
-        /// One line on what this jelly is for, shown beside it on the surface.
+        /// One line on what this jelly is for, shown above it on the jelly page.
         #[arg(long, default_value = "")]
         about: String,
     },
@@ -74,11 +74,12 @@ enum Cmd {
         view: Option<PathBuf>,
         #[arg(long)]
         verbs: Option<PathBuf>,
-        /// New one-line description shown on the surface.
+        /// New one-line description, shown above it on the jelly page.
         #[arg(long)]
         about: Option<String>,
     },
-    /// Undo the last change of any kind, by anyone.
+    /// Undo the last change to the view, verbs or state, by anyone. Comments,
+    /// answers and pins are not undone.
     Undo { name: String },
     /// Keep a jelly.
     Pin { name: String },
@@ -95,9 +96,11 @@ enum Cmd {
         #[arg(long)]
         state: bool,
     },
-    /// Open the surface, or one jelly, in the browser.
+    /// Open the jelly page (this project's, if any), or one jelly, in the browser.
     Open { name: Option<String> },
-    /// Ask the person something. Two forms:
+    /// Ask the person something: one question on a jelly, or a set of them.
+    ///
+    /// Two forms:
     ///
     /// `jelly ask NAME "Which header?" --option a="Bold" --option b="Quiet" --recommend b --why "…" --at "#hero"`
     /// puts one ask on an existing jelly, next to what it is about. It shows on
@@ -186,7 +189,7 @@ enum Cmd {
     /// Block until someone other than you changes the jelly, then print that
     /// event and the state. This is how an agent waits for the person.
     Wait {
-        /// Leave out to wait on every jelly (the surface's own focus changes excepted).
+        /// Leave out to wait on every jelly (the jelly page's own changes are skipped).
         name: Option<String>,
         /// Give up after this many seconds (exit 2).
         #[arg(long)]
@@ -204,7 +207,7 @@ enum Cmd {
     Project { name: String, project: String },
     /// Mark a comment as dealt with.
     Resolve { name: String, id: String },
-    /// Bring an archived jelly back to the surface.
+    /// Bring an archived jelly back to the jelly page.
     Restore { name: String },
     /// Add files (images, video, models, data) next to a jelly. A view refers
     /// to them as `assets/<file>`. They stay out of state and undo.
@@ -538,7 +541,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
                 (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)),
-                (None, "") => format!("{}/j/surface", cli.url),
+                (None, "") => format!("{}/", cli.url),
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
             std::process::Command::new("open").arg(&url).status().map_err(|e| e.to_string())?;
@@ -606,7 +609,7 @@ fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
             "comment" => format!("commented on \"{}\": {}", a["anchor"]["quote"].as_str().unwrap_or(""), clip(a["text"].as_str().unwrap_or(""))),
             "reply" => format!("replied on comment {}: {}", a["id"].as_str().unwrap_or("?"), clip(a["text"].as_str().unwrap_or(""))),
             "resolve" => format!("resolved comment {}", a.as_str().unwrap_or("?")),
-            "undo" => "undid the last change".to_string(),
+            "undo" => "undid the last state change".to_string(),
             k => k.to_string(),
         };
         println!("- {j}: {what}");

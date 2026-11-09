@@ -101,21 +101,6 @@
   @media (max-width: 900px) { .app { grid-template-columns: 1fr 0; } aside { display: none; } .top .keys { display: none; } .col { padding: 16px 14px 40vh; } }
   .group { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--dark-faint); padding: 14px 4px 8px; display: flex; gap: 6px; }
   .group .n { color: var(--dark-muted); }
-  .need { display: block; width: 100%; text-align: left; background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 10px; padding: 9px 11px; cursor: pointer; margin-bottom: 6px; }
-  .need:hover, .tile:hover { border-color: var(--line-2); }
-  .need .t { display: flex; gap: 6px; align-items: center; font-weight: 600; }
-  .need .t .tag { margin-left: auto; }
-  .need .t span:not(.tag):not(.kind):not(.jn) { margin-left: auto; font-weight: 400; color: var(--dark-muted); font-size: 11px; }
-  .need .a { color: var(--dark-muted); margin-top: 2px; font-size: 12px; }
-  .need .q { color: var(--dark-ink); margin-top: 4px; font-weight: 500; }
-  .need .t .jn { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--dark-faint); font-weight: 400; }
-  .kind { font: 600 10px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 1px 7px; background: var(--brand-soft); color: #cfc8ff; }
-  .kind.k-look, .kind.k-reply { background: var(--sun-soft); color: var(--sun-ink); }
-  .aopts { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
-  .aopt { font: 600 12px -apple-system, sans-serif; border: 1px solid var(--dark-line); background: var(--dark-2); color: var(--dark-ink); border-radius: 7px; padding: 4px 9px; cursor: pointer; }
-  .aopt:hover { border-color: var(--brand); }
-  .aopt.rec { border-color: var(--brand); background: var(--brand-soft); }
-  .aopt.rec::after { content: " ★"; color: var(--brand); }
   .tag.work { background: var(--brand-soft); color: var(--brand-soft-ink); }
   .tile { display: block; width: 100%; text-align: left; background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 10px; padding: 0; cursor: pointer; margin-bottom: 10px; overflow: hidden; }
   .thumb { position: relative; height: 168px; overflow: hidden; background: var(--page); }
@@ -173,11 +158,6 @@
   .dock-h span { color: var(--dark-faint); font-size: 12px; flex: 1; }
   .dock-h .btn { color: var(--dark-muted); }
   .dock-list { display: grid; gap: 8px; }
-  .dock .need { margin: 0; cursor: default; }
-  .dock .need .open { font: 600 11.5px -apple-system, sans-serif; background: none; border: 0; color: var(--dark-muted); padding: 0; cursor: pointer; margin-top: 8px; }
-  .dock .need .open:hover { color: var(--dark-ink); }
-  .need.melt { animation: melt .6s cubic-bezier(.5,-0.3,.7,1) forwards; transform-origin: 50% 100%; }
-  @keyframes melt { 30% { transform: scale(1.06,.9); } 100% { transform: scale(1.1,.1) translateY(40px); opacity: 0; } }
   .dock-empty { color: var(--dark-faint); font-size: 13px; padding: 14px 6px; text-align: center; }
   .party { position: fixed; inset: 0; pointer-events: none; z-index: 30; }
   .drop { position: absolute; width: 10px; height: 10px; border-radius: 50% 50% 50% 0; animation: fall 1.4s cubic-bezier(.2,.6,.4,1) forwards; }
@@ -226,7 +206,7 @@
   const lastEvent = new Map(); // name -> {text, by, at}
   let sel = null, full = null, booted = false;
   let archived = [], showArchived = false; // jellies hidden after a quiet week
-  // /p/<project> is this same page showing one project's jellies; /j/surface shows all.
+  // /p/<project> is this same page showing one project's jellies; / shows all.
   const PROJECT = location.pathname.startsWith("/p/") ? decodeURIComponent(location.pathname.slice(3)) : null;
   if (PROJECT) document.title = `${PROJECT} · jelly`;
 
@@ -394,7 +374,7 @@
   // happens there, next to what it is about.
   function row(a) {
     const pg = a.progress ? `${a.progress[0]}/${a.progress[1]}` : a.kind === "look" ? "look" : a.kind === "reply" ? "reply" : "ask";
-    return `<button class="ditem" data-goto="${esc(a.jelly)}" data-sel="${esc(a.anchor?.selector || "")}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
+    return `<button class="ditem" data-goto="${esc(a.jelly)}" data-item="${a.form || a.kind === "reply" ? "" : esc(a.id)}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
   }
   function renderDock() {
     const items = attentionCards();
@@ -462,24 +442,18 @@
   })();
   $("dock-close").onclick = () => setDock(false);
   $("dock").addEventListener("click", (e) => {
-    const ab = e.target.closest("[data-answer]");
-    if (ab) {
-      const cardEl = ab.closest(".need");
-      jiggle(ab);
-      cardEl?.classList.add("melt");
-      setTimeout(() => act(`/api/jellies/${enc(ab.dataset.jelly)}/attention/${enc(ab.dataset.answer)}/answer`, ab.dataset.option ? { option: ab.dataset.option } : {}), 450);
-      return;
-    }
+
     const g = e.target.closest("[data-goto]");
     if (g) {
       setDock(false);
       openFull(g.dataset.goto);
-      // Point at the element the ask is about once the view has loaded.
-      if (g.dataset.sel) setTimeout(() => {
-        const doc = $("full").querySelector("iframe")?.contentDocument;
-        const el = doc?.querySelector(g.dataset.sel);
-        if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); el.classList.add("hl-target"); const st = doc.createElement("style"); st.textContent = ".hl-target{outline:3px solid #e8336f!important;outline-offset:4px;border-radius:6px}"; doc.head.appendChild(st); setTimeout(() => el.classList.remove("hl-target"), 2600); }
-      }, 900);
+      // Open the answer sheet on that item once the view has loaded.
+      if (g.dataset.item) {
+        const send = () => $("full").querySelector("iframe")?.contentWindow?.postMessage({ type: "jelly:attend", id: g.dataset.item }, location.origin);
+        const f = $("full").querySelector("iframe");
+        f?.addEventListener("load", () => setTimeout(send, 150), { once: true });
+        setTimeout(send, 700);
+      }
     }
   });
 
@@ -601,11 +575,7 @@
     if (b) ({ comment: () => toggleComment(name), open: () => openFull(name), unfold: () => { const fr = b.closest(".frame"); fr.dataset.open = 1; fr.classList.remove("tall"); }, pin: () => pin(name), rm: () => remove(name) })[b.dataset.act]();
   });
   $("board").addEventListener("click", (e) => {
-    const ab = e.target.closest("[data-answer]");
-    if (ab) {
-      e.stopPropagation();
-      return act(`/api/jellies/${enc(ab.dataset.jelly)}/attention/${enc(ab.dataset.answer)}/answer`, ab.dataset.option ? { option: ab.dataset.option } : {});
-    }
+
     const name = e.target.closest("[data-name]")?.dataset.name;
     if (!name) return;
     if (entries.has(name) && !full) select(name, true); else openFull(name);
@@ -652,7 +622,7 @@
     const counts = {};
     for (const j of all) if (j.project) counts[j.project] = (counts[j.project] || 0) + 1;
     const link = (href, label, n, on) => `<a href="${href}" class="${on ? "on" : ""}">${esc(label)}<span>${n}</span></a>`;
-    $("projects").innerHTML = link("/j/surface", "All", all.length, !PROJECT)
+    $("projects").innerHTML = link("/", "All", all.length, !PROJECT)
       + Object.keys(counts).sort().map((p) => link(`/p/${enc(p)}`, p, counts[p], p === PROJECT)).join("")
       + (PROJECT && !counts[PROJECT] ? link(`/p/${enc(PROJECT)}`, PROJECT, 0, true) : "");
   }
