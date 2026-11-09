@@ -107,16 +107,16 @@ enum Cmd {
     /// puts one ask on an existing jelly, next to what it is about. It shows on
     /// the jelly and in the person's attention queue.
     ///
-    /// `jelly ask NAME --spec spec.json` makes an ask jelly: one or more
-    /// questions, each with options (title, summary, gains, costs, effort, a live
-    /// HTML preview), a recommendation and a note field. Asking again with the
-    /// same name starts a new round. Spec: {"title", "context", "questions":
-    /// [{"id", "question", "context", "recommend", "why", "options": [...]}]}.
+    /// `jelly ask NAME --spec spec.json` makes an ask page: one or more questions,
+    /// each an attention item with options (label, does, gains, costs, effort, a
+    /// live HTML preview), a recommendation and why. Asking again with the same
+    /// name starts a new round. Spec: {"title", "context", "questions": [{"id",
+    /// "question", "context", "recommend", "why", "options": [...]}]}.
     Ask {
         name: String,
         /// The question, for an ask on an existing jelly.
         question: Option<String>,
-        /// A spec file for an ask jelly (or - for stdin).
+        /// A spec file for an ask page.
         #[arg(long, conflicts_with = "question")]
         spec: Option<PathBuf>,
         /// An option as id=label, or id=label|what picking it does. Repeat it.
@@ -244,8 +244,6 @@ enum Cmd {
     },
 }
 
-const DECISION_VIEW: &str = include_str!("../assets/decision.html");
-const DECISION_VERBS: &str = include_str!("../assets/decision.verbs.js");
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -366,28 +364,10 @@ fn run(cli: Cli) -> Result<(), String> {
         Cmd::Done { name } => print(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": null, "by": by})).map(summary)?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
         Cmd::Ask { name, spec: Some(spec), .. } => {
-            let p = project();
-            let name = if p.is_empty() || name.contains(':') { name } else { format!("{p}:{name}") };
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
-            let exists = ureq::get(&api(&format!("/{}", id(&name)))).call().is_ok();
-            let verb = if exists { "revise" } else { "init" };
-            let about = spec["title"].as_str().or(spec["question"].as_str()).unwrap_or_default();
-            if exists {
-                // Bring an older decision up to the current view and verbs before the new round.
-                let body = json!({"view": DECISION_VIEW, "verbs": DECISION_VERBS, "about": about, "by": by});
-                let _ = send("POST", &api(&format!("/{}/reshape", id(&name))), body);
-            } else {
-                let body = json!({"name": name, "view": DECISION_VIEW, "verbs": DECISION_VERBS, "state": {}, "by": by, "about": about, "project": project()});
-                send("POST", &api(""), body)?;
-            }
-            let ev = send("POST", &api(&format!("/{}/call", id(&name))), json!({"verb": verb, "args": spec, "by": by}));
-            if ev.is_err() && !exists {
-                // A spec the verbs refuse must not leave an empty decision behind.
-                let _ = send("DELETE", &api(&format!("/{}?by={}", id(&name), encode(&by))), Value::Null);
-            }
-            let ev = ev?;
-            print(json!({"jelly": name, "round": ev["state"]["round"], "status": "open",
-                "next": format!("jelly wait {name}  # blocks until the person reacts")}))
+            let r = send("POST", &api(&format!("/{}/ask", id(&name))), json!({"spec": spec, "project": project(), "by": by}))?;
+            let jelly = r["jelly"].as_str().unwrap_or(&name).to_string();
+            print(json!({"jelly": jelly, "round": r["state"]["round"], "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}))
         }
         Cmd::Wait { name, timeout } => {
             let name = name.map(|n| id(&n));

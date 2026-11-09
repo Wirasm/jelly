@@ -1,237 +1,171 @@
 ---
 name: jelly
-description: Show things to the person instead of writing walls of text. Use jelly whenever a picture, a prototype, a live dashboard, a plan, a diff, a comparison or a choice between options would explain better than prose, and whenever you need the person to decide something. Also use it to read what the person did or said in a jelly, to reshape one while it runs, or when they say "show me" or "jelly".
+description: Show things to the person instead of writing walls of text. Use jelly whenever a picture, a prototype, a live dashboard, a plan, a diff, a comparison or a choice between options would explain better than prose, and whenever you need the person to choose. Also use it to read what the person did or said in a jelly, to change one while it runs, or when they say "show me" or "jelly".
 ---
 
-# Jelly
+# jelly
 
-jelly is how you show the person things. You can build anything in a jelly in minutes: a clickable
-prototype, an animated explainer, a 3D scene, a live dashboard pulling real data, a
-plan with dependencies drawn out, a side-by-side of options. The person sees it at
-http://127.0.0.1:7878 and answers by clicking, picking and pinning comments.
+jelly is how you show the person things. A jelly is a small live page you write in
+minutes: a clickable prototype, an animated explainer, a 3D scene, a dashboard, a
+plan, options side by side. The person sees it on the jelly page
+(http://127.0.0.1:7878), uses it, answers your questions and comments on any part
+of it. You hear all of it.
 
-**Show, then let them react.** Never hand the person an empty question with an input
-field. Do the thinking: lay out the options, what each gains and costs, what each
-would look like, and which you recommend. The person's job is to react, not to
-write your spec.
+**Show, then let them react.** Never hand the person an empty question. Do the
+thinking: lay out the options, what each gains and costs, what each looks like,
+and which you recommend. Their job is to react, not to write your spec.
 
 Check the daemon first: `jelly ls`. If it cannot be reached, ask the person to run
 `jelly serve`; do not start it yourself unless they asked.
 
-## Ask for a decision: `jelly ask`
+## Make a jelly
 
-For any choice, use a decision jelly. One spec can hold one question or several
-related ones. Every option shows its gains and costs; the person picks, adds a
-note to any question, and can add their own questions or context at the end.
+Write three files in a scratch folder, never in the person's repo:
+
+- `view.html`: any page. `window.jelly` exists before your scripts run.
+- `verbs.js`: `const verbs = { name(state, args, { by, at_ms }) { … } }`. Verbs are
+  the only way state changes; a button and you call the same verb. Change `state`
+  in place or return a new one; throw to refuse. `const verbs = {};` for a page
+  that only shows.
+- `state.json`: the starting state.
+
+```bash
+jelly new plan --view view.html --verbs verbs.js --state state.json --about "One line: why this exists"
+jelly reshape plan --view v2.html    # new view or verbs, same state; open pages reload
+jelly call plan add '{"title":"…"}'  # run a verb yourself
+jelly undo plan                      # undo the last change to view, verbs or state
+jelly pin plan                       # keep it; unpinned jellies archive after a quiet week
+jelly rm plan
+```
+
+In the view:
+
+```js
+jelly.onState((state, event) => render(state)); // now, and after every change by anyone
+jelly.call("add", { title });                   // runs a verb; rejects with its error
+jelly.read("other"); jelly.watch("other", fn);  // another jelly's state
+jelly.focus("other");                           // open another jelly
+jelly.asset("shot.png");                        // URL of a file added with jelly asset
+```
+
+Keep data in state, not in page variables or localStorage, so you and the person
+see the same thing. Give elements stable `id`s: questions and comments point at them.
+
+## Show it
+
+```bash
+jelly working plan "rebuilding the header"   # the person sees it and waits
+jelly done plan
+jelly see plan                 # check your work: the page as text, plus what waits on the person
+jelly see plan --width 390     # at phone width; add --png when layout matters
+jelly focus plan               # open it full size on their screen
+```
+
+Always look before you show: run `jelly see`, and fix what is off before you focus
+the jelly or ask about it. Add `assets/poster.png`, a frame that tells the story on
+its own, and the jelly page uses it as the thumbnail.
+
+## Ask the person: attention
+
+Attention is everything you need from the person. It sits on the jelly, next to
+what it is about, and in their attention dock on the jelly page.
+
+One question on an existing jelly, about one part of it:
+
+```bash
+jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
+  --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
+  --why "Calmer, and the button stands out more" --at "#hero"
+jelly ask plan "Anything missing before I ship?"     # answered in words
+jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
+```
+
+Several related questions, with options laid out side by side, make an ask page:
+
+```bash
+jelly ask sharing --spec spec.json   # asking again starts a new round; open questions are withdrawn
+```
 
 ```json
 {
-  "title": "Open questions about sharing",
-  "context": "Why these matter, in two short paragraphs.",
+  "title": "Sharing a jelly with a colleague",
+  "context": "Why these matter, in a short paragraph.",
   "questions": [
-    { "id": "host", "question": "Where should shared jellies live?", "context": "...",
-      "recommend": "worker", "why": "One sentence on why",
+    { "id": "host", "question": "Where should shared jellies live?", "context": "…",
+      "recommend": "relay", "why": "One sentence on why",
       "options": [
-        { "id": "worker", "title": "A small hosted relay", "summary": "One or two sentences.",
-          "gains": ["..."], "costs": ["..."], "effort": "M · two days",
-          "preview": "<!doctype html>... any HTML: a mockup, an animation, a chart, a 3D scene ..." }
+        { "id": "relay", "label": "A small hosted relay", "does": "One or two sentences.",
+          "gains": ["…"], "costs": ["…"], "effort": "M · two days",
+          "preview": "<!doctype html>… any HTML: a mockup, an animation, a chart, a 3D scene …" }
       ] }
   ]
 }
 ```
 
-A single question can skip the wrapper: `{"question", "context", "recommend", "why", "options"}`.
-
-```bash
-jelly ask sharing --spec spec.json        # same name again = a new round, old one kept
-jelly wait sharing                        # or let the inbox tell you next turn
-jelly state sharing /status               # open | answered | applied
-jelly state sharing /questions/0/answer   # {kind: pick|none, option, by, at_ms} or null
-jelly state sharing /questions/0/note     # {text, by, at_ms} or null: context or a condition
-jelly state sharing /added                # questions or context the person added for you
-jelly call sharing applied '{"note":"Built in 3f2a1c"}'   # when you have acted on it
-```
-
+- Every question is an attention item, answered with an option, words, or both.
+  "None of these" is an answer in words: read it, and ask a better round.
 - Make every preview real and different. It runs live in a sandbox: scripts, CSS
   animation, canvas, WebGL and CDN imports all work. Two to four options.
-- Read the notes and the added items, not only the picks. "None of these" comes
-  with a note saying what is missing: ask again with a better round.
-
-## Put something in front of the person: attention
-
-Attention is everything you need from the person. It shows on the jelly itself,
-next to the element it is about, and in the person's attention queue on the jelly
-page, where they can answer in one click.
-
-```bash
-# An ask: wants an answer. Options are id=label or id=label|what it does.
-jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
-  --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
-  --why "Calmer, and the CTA stands out more" --at "#hero"
-jelly ask plan "Anything missing before I ship?"          # free-text answer
-# A look: wants a glance. They answer "seen" or with a word back.
-jelly look plan "Check the footer links" --at "#footer"
-jelly attention                       # what is still waiting on the person
-jelly withdraw plan a2                # it no longer applies
-jelly state plan                      # answers are in `jelly show plan` under attention
-```
-
-Prefer an ask on the jelly it is about over a separate ask jelly. Use
-`jelly ask NAME --spec` (above) when there are several related questions with
-previews and tradeoffs. Never ask a bare question you could have answered
-yourself: recommend an option and say why.
-
-## While you change a jelly
-
-```bash
-jelly working plan "rebuilding the header"   # the person sees it and waits
-jelly reshape plan --view v2.html
-jelly done plan
-jelly focus plan                             # open it full size on their screen
-```
-
-Look before you show: screenshot the jelly (for example with playwright) and
-check it, ideally with a reviewer that sees only the screenshots, before you
-focus it or ask about it. Add `assets/poster.png`, a frame that tells the story
-on its own, and the jelly page uses it as the thumbnail.
-
-## See a jelly the way you need to
-
-```bash
-jelly see plan                 # what it is, verbs, state shape, what waits on the person,
-                               # what they did lately, and what is on screen as text
-jelly see plan --width 390     # rendered at phone width
-jelly see plan --png           # also a screenshot path, when layout matters
-jelly note plan "Cards move next→doing→done; Rasmus decides what moves to doing."
-```
-
-Start every session on an existing jelly with `jelly see`. Check your own work
-with it before you focus a jelly or ask about it. Leave a `jelly note` for the next
-agent when you learn something about the jelly that is not in its view.
-
-## Work from files
-
-```bash
-jelly pull plan ./plan         # view.html, verbs.js, state.json, assets/
-jelly dev plan ./plan          # reshapes on every save; open views reload
-```
-
-The jelly stays the source of truth, so scratch folders can come and go.
-
-## Use the project's design
-
-If the repo has a DESIGN.md (github.com/google-labs-code/design.md), jelly picks
-it up when you run `jelly new` there. `jelly design` prints it; its tokens are CSS
-variables at `/p/<project>/design.css` (`--color-primary`, `--rounded-md`, …):
-
-```html
-<link rel="stylesheet" href="/p/archon/design.css">
-```
-
-Use it when it helps the jelly feel like the product; ignore it when it doesn't.
-
-## Make any other jelly
-
-Write three files in a scratch directory, never in the person's repo.
-
-`verbs.js` declares `const verbs = { ... }`. Each verb is `(state, args, { by, at_ms })`;
-it changes `state` in place or returns a new state, and throws to refuse.
-
-`view.html` is any page. `window.jelly` exists before your scripts run:
-
-```js
-jelly.onState((state, event) => render(state));  // now, and after every change by anyone
-jelly.call("verb", { ...args });                   // runs a verb; rejects with its error
-jelly.watch("other", (state) => ...);              // another jelly's state, live
-```
-
-Keep data in state and change it through verbs, never in page variables or
-localStorage, so you and the person see the same thing. A read-only page can use
-`const verbs = {};`.
-
-```bash
-jelly new plan --view view.html --verbs verbs.js --state state.json
-jelly reshape plan --view view2.html     # new view or verbs, same state; open views reload
-jelly undo plan                          # last change of any kind, by anyone
-jelly pin plan                           # keep it; unpinned jellies are throwaway
-jelly rm plan
-```
+- Recommend one, and say why. If you could have decided yourself, do not ask.
+- `jelly withdraw plan a2` when a question no longer applies.
+- `jelly call sharing applied '{"note":"Built in 3f2a1c"}'` when you acted on the answers.
 
 ## Hear the person
 
-Comments are how the person asks for changes. They Option-click any element of any
-jelly and pin a comment to it. Answer on the same pin.
-
-If the person has the inbox hook installed, what they did since your last turn
-arrives at the start of your turn ("The person acted on your jellies…"). Act on
-it. Without the hook, run `jelly inbox` yourself, or block with `jelly wait`.
+If the person has the inbox hook, what they did since your last turn arrives at
+the start of your turn ("The person acted on your jellies…"). Act on it. Otherwise:
 
 ```bash
-jelly inbox                         # what the person did in this project since you last asked
-jelly wait                          # blocks until the person does anything, in any jelly
-jelly comments                      # open comments on every jelly: element selector, quote, thread
-jelly reply plan f3 "Split it into two steps. Reshaped v4." --resolve   # done: closes the thread
-jelly reply plan f3 "Which date, the 12th or the 19th?"                 # asking: stays open
+jelly inbox                  # what they did in this project since you last asked
+jelly attention              # what still waits on them
+jelly see plan               # includes their answers and recent actions
+jelly wait [plan]            # block until someone other than you changes something
+jelly events [plan]          # stream every event as JSON lines
 ```
 
-- Do what the comment asks (usually a `jelly reshape` or a verb call), then reply
-  saying what you changed. Use `--resolve` when it is done. If the person replies
-  on a resolved thread, it opens again and `jelly wait` wakes you.
-- Give elements stable `id`s so comments still point at the right thing after a reshape.
-- `jelly wait NAME` waits on one jelly. `jelly watch [NAME]` streams every event.
-  Events say `by` and which state pointers changed.
-- Set `JELLY_AS=<your name>` when several agents share one jelly page.
+Comments: the person can Option-click any element of any jelly and say what should
+change. Answer on the same thread, and change the jelly if they asked for it:
+
+```bash
+jelly comments
+jelly reply plan c3 "Split it into two steps." --resolve   # done: closes the thread
+jelly reply plan c3 "Which date, the 12th or the 19th?"    # asking back: stays open
+```
+
+Set `JELLY_AS=<your name>` when several agents share one jelly page.
 
 ## Projects and names
 
-A jelly is named `project:name`. The project defaults to the git repo you run `jelly`
-from (or `--project`, `JELLY_PROJECT`). Use short names: `jelly new plan` in the
-archon repo makes `archon:plan`, and `jelly call plan …` there finds it. From
-anywhere else, use the full `archon:plan`. Inside a view, `jelly.show("plan")` and
-`jelly.read("plan")` mean this project's plan. The person sees each project on its
-own page, `/p/<project>`. `jelly project NAME OTHER` moves a jelly.
+A jelly is named `project:name`. The project is the git repo you run `jelly` in
+(or `--project`, `JELLY_PROJECT`). Use short names: `jelly new plan` in the archon
+repo makes `archon:plan`, and `jelly call plan …` there finds it. Elsewhere use the
+full name. Inside a view, `jelly.read("plan")` means this project's plan. The
+person sees each project on its own page, `/p/<project>`. `jelly move NAME OTHER`
+moves a jelly; `jelly restore NAME` brings back an archived one.
 
-Unpinned jellies that nobody touches for a week are archived: hidden, not deleted.
-Any change brings one back, as does `jelly restore NAME`. Pin what the person should keep.
-
-## Images, video, models, data
-
-Do not inline big files as base64. Add them as assets and refer to them by a
-relative path:
+## Files, assets, design, sharing
 
 ```bash
-jelly asset plan shot.png demo.mp4 model.glb     # stored beside the jelly, not in state
+jelly note plan "Cards move next→doing→done; the person decides what moves to doing."  # for the next agent
+jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/
+jelly dev plan ./plan            # changes the jelly on every save
+jelly asset plan shot.png demo.mp4 model.glb   # beside the jelly; use as assets/shot.png
+jelly design                     # the project's DESIGN.md, if the repo has one
+jelly share plan                 # one read-only HTML file, state and assets baked in
 ```
-```html
-<img src="assets/shot.png">   <!-- or jelly.asset("shot.png") from script -->
-```
+
+A repo's DESIGN.md (github.com/google-labs-code/design.md) becomes CSS variables at
+`/p/<project>/design.css` (`--color-primary`, `--rounded-md`, …). Use it when it
+helps the jelly feel like the product. Do not inline big files as base64; add them
+as assets.
 
 ## Live data
 
 Verbs have no network. To keep a dashboard live, push data in from outside, from
-your own turn, a script or a cron job: `jelly call dash add '{"t":…, "v":…}'`.
-The view can also fetch public APIs itself in the browser.
-
-## Share it
-
-`jelly share NAME` writes `NAME.html`: one read-only file, with state and assets
-baked in, that opens in any browser. Send that file, or publish it with your
-artifact tool if you have one. Clicks that would change state do nothing in it.
-
-## The jelly page
-
-New jellies appear at the bottom of the person's stream under your `--about`
-line, so always write one: it is the why. Pinned jellies sit on the board beside
-the stream; pin what the person should keep (`jelly pin`). To put a jelly in front
-of the person full size:
-
-```bash
-jelly focus plan
-```
-
-Inside a view, `jelly.show("other")` does the same, for links between jellies.
+your own turn, a script or a cron job: `jelly call dash add '{"t":…,"v":…}'`. The
+view can also fetch public APIs itself in the browser.
 
 ## Limits
 
 A verb runs at most 1 second and has no file, network or process access. The view
-has the full browser. The daemon listens on 127.0.0.1 only.
+has the full browser. The daemon listens on 127.0.0.1 only and has no login.

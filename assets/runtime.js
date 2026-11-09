@@ -20,6 +20,7 @@
   let version = boot.version;
   let comments = boot.comments || boot.feedback || [];
   let attention = boot.attention || [];
+  const attentionSubs = [];
   let working = boot.working || null;
   const subs = [];
   const enc = encodeURIComponent;
@@ -133,6 +134,10 @@
     resolve: (id) => post(`${api}/resolve`, { id }),
     /** Open asks and looks the agent put on this jelly. */
     get attention() { return attention.filter((a) => !a.answer && !a.withdrawn); },
+    /** Every attention item, answered and withdrawn ones too. */
+    get items() { return attention; },
+    /** fn() now and whenever attention items or comments change. */
+    onAttention(fn) { attentionSubs.push(fn); fn(); },
     /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
     answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
     asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
@@ -401,10 +406,14 @@
     if (e.origin === location.origin && e.data?.type === "jelly:attend") openSheet(e.data.id);
   });
 
+  // A page that shows its own questions (the ask page) opts out of markers:
+  // <meta name="jelly-attention" content="inline">.
+  const inline = () => document.querySelector('meta[name="jelly-attention"]')?.content === "inline";
   function drawAttention() {
     if (sheet && !openItems().some((x) => x.id === sheetAt)) { const n = openItems()[0]; n ? openSheet(n.id) : closeSheet(); }
     attEls.forEach((e) => e.remove());
     attEls = [];
+    if (inline()) return;
     const open = openItems();
     const loose = [];
     for (const a of open) {
@@ -487,7 +496,7 @@
 
   async function refreshThreads() {
     const r = await fetch(api);
-    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; drawMarkers(); drawWorking(); }
+    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
   }
 
   addEventListener("DOMContentLoaded", () => {

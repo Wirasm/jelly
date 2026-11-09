@@ -123,64 +123,6 @@ mod tests {
         assert_eq!(s, json!({"log": ["person@7"]}));
     }
 
-    const DECISION: &str = include_str!("../assets/decision.verbs.js");
-
-    #[test]
-    fn decision_rounds_keep_history() {
-        let src = DECISION;
-        let spec = json!({"question": "Which?", "recommend": "b", "options": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]});
-        let s = run(src, "init", &json!({}), &spec, "agent", 1).unwrap();
-        assert_eq!((s["status"].clone(), s["round"].clone()), (json!("open"), json!(1)));
-        // One question needs no `q`.
-        let s = run(src, "pick", &s, &json!({"option": "b", "note": "but smaller"}), "person", 2).unwrap();
-        assert_eq!(s.pointer("/questions/0/answer/option"), Some(&json!("b")));
-        assert_eq!(s["status"], "answered");
-        assert!(run(src, "pick", &s, &json!({"option": "z"}), "person", 3).unwrap_err().contains("options are a, b"));
-        let s = run(src, "revise", &s, &spec, "agent", 4).unwrap();
-        assert_eq!((s["round"].clone(), s["status"].clone()), (json!(2), json!("open")));
-        assert_eq!(s.pointer("/history/0/questions/0/note/text"), Some(&json!("but smaller")));
-        let bad = json!({"question": "Which?", "recommend": "x", "options": [{"id": "a", "title": "A"}]});
-        assert!(run(src, "init", &json!({}), &bad, "agent", 5).unwrap_err().contains("recommend"));
-    }
-
-    #[test]
-    fn a_set_of_questions_is_answered_when_each_has_a_pick_or_a_note() {
-        let src = DECISION;
-        let opts = json!([{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]);
-        let spec = json!({"title": "Open questions", "questions": [
-            {"id": "names", "question": "Names?", "options": opts},
-            {"id": "store", "question": "Store?", "options": opts}]});
-        let s = run(src, "init", &json!({}), &spec, "agent", 1).unwrap();
-        assert!(run(src, "pick", &s, &json!({"option": "a"}), "person", 2).unwrap_err().contains("names, store"));
-
-        let s = run(src, "note", &s, &json!({"q": "store", "text": "  only if it stays local "}), "person", 2).unwrap();
-        assert_eq!(s.pointer("/questions/1/note"), Some(&json!({"text": "only if it stays local", "by": "person", "at_ms": 2})));
-        assert_eq!(s["status"], "open", "names has nothing yet");
-
-        let s = run(src, "pick", &s, &json!({"q": "names", "option": "b"}), "person", 3).unwrap();
-        assert_eq!(s.pointer("/questions/0/answer"), Some(&json!({"kind": "pick", "option": "b", "by": "person", "at_ms": 3})));
-        assert_eq!(s["status"], "answered", "a note is a response too: store has one");
-        assert!(run(src, "pick", &s, &json!({"q": "store", "option": null, "note": " "}), "person", 4).is_err());
-        let s = run(src, "pick", &s, &json!({"q": "store", "option": null}), "person", 4).unwrap();
-        assert_eq!(s.pointer("/questions/1/answer/kind"), Some(&json!("none")), "the existing note is the reason");
-        assert_eq!(s["status"], "answered");
-        assert!(run(src, "note", &s, &json!({"q": "store", "text": ""}), "person", 5).unwrap_err().contains("clear the answer"));
-
-        let s = run(src, "applied", &s, &json!({"note": "done"}), "agent", 5).unwrap();
-        assert_eq!(s["status"], "applied");
-        let s = run(src, "clear", &s, &json!({"q": "names"}), "person", 6).unwrap();
-        assert_eq!((s["status"].clone(), s["applied"].clone()), (json!("open"), json!(null)));
-        assert!(run(src, "applied", &s, &json!({}), "agent", 7).is_err());
-
-        let s = run(src, "add", &s, &json!({"text": "What about remote access?"}), "person", 7).unwrap();
-        let s = run(src, "add", &s, &json!({"text": "I work on two machines"}), "person", 8).unwrap();
-        assert!(run(src, "add", &s, &json!({"text": "  "}), "person", 9).is_err());
-        let s = run(src, "drop", &s, &json!({"id": "a1"}), "person", 9).unwrap();
-        assert_eq!(s["added"], json!([{"id": "a2", "text": "I work on two machines", "by": "person", "at_ms": 8}]));
-        let s = run(src, "add", &s, &json!({"text": "third"}), "person", 10).unwrap();
-        assert_eq!(s.pointer("/added/1/id"), Some(&json!("a3")), "ids are not reused");
-    }
-
     #[test]
     fn check_lists_verbs() {
         assert_eq!(check(VERBS).unwrap(), vec!["label", "reset", "boom", "spin"]);

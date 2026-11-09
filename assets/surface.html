@@ -224,7 +224,6 @@
   function flags(j) {
     const out = [];
     if (j.working) out.push(`<span class="tag work">${esc(who(j.working.by))} is working</span>`);
-    if (j.decision === "open") out.push(`<span class="tag">ask</span>`);
     if (j.attention) out.push(`<span class="tag">${j.attention} for you</span>`);
     if (j.replies_waiting) out.push(`<span class="tag soft">${j.replies_waiting} repl${j.replies_waiting > 1 ? "ies" : "y"} for you</span>`);
     else if (j.open_comments) out.push(`<span>${j.open_comments} open comment${j.open_comments > 1 ? "s" : ""}</span>`);
@@ -366,15 +365,25 @@
   // ---- attention dock ---------------------------------------------------------
 
   let dockOpen = false, lastCount = null;
+  // One row per thing to do: a round of questions on an ask page is one row
+  // ("3 questions"), a single ask or look is one row, comment replies are one row.
   function attentionCards() {
+    const rows = [], groups = new Map();
+    for (const a of attentionItems) {
+      if (!a.group) { rows.push(a); continue; }
+      const k = a.jelly + "/" + a.group;
+      if (!groups.has(k)) { const r = { jelly: a.jelly, kind: "ask", title: a.about || a.title, count: 0 }; groups.set(k, r); rows.push(r); }
+      groups.get(k).count++;
+    }
     const replies = jellies.filter((j) => j.replies_waiting > 0).map((j) => ({ jelly: j.name, kind: "reply", title: `${j.replies_waiting} comment repl${j.replies_waiting > 1 ? "ies" : "y"} from ${who(j.made_by)}` }));
-    return [...attentionItems, ...replies];
+    return [...rows, ...replies];
   }
   // The dock only points: each row opens the jelly the item is on. Answering
   // happens there, next to what it is about.
   function row(a) {
-    const pg = a.progress ? `${a.progress[0]}/${a.progress[1]}` : a.kind === "look" ? "look" : a.kind === "reply" ? "reply" : "ask";
-    return `<button class="ditem" data-goto="${esc(a.jelly)}" data-item="${a.form || a.kind === "reply" ? "" : esc(a.id)}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
+    const pg = a.count ? `${a.count} question${a.count > 1 ? "s" : ""}` : a.kind;
+    const item = a.count || a.kind === "reply" ? "" : esc(a.id);
+    return `<button class="ditem" data-goto="${esc(a.jelly)}" data-item="${item}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
   }
   function renderDock() {
     const items = attentionCards();

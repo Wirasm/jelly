@@ -22,6 +22,8 @@ const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 const SURFACE_VIEW: &str = include_str!("../assets/surface.html");
 const SURFACE_VERBS: &str = include_str!("../assets/surface.verbs.js");
 const SNAPSHOT_JS: &str = include_str!("../assets/snapshot.js");
+const ASK_VIEW: &str = include_str!("../assets/ask.html");
+const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
 const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
 
 struct App {
@@ -33,6 +35,15 @@ struct App {
 type Shared = Arc<App>;
 
 impl App {
+    /// Several store changes as one: every event is broadcast.
+    fn change_many(&self, f: impl FnOnce(&mut Store) -> Result<Vec<Event>, Error>) -> Result<Json<Value>, ApiError> {
+        let evs = f(&mut self.store.lock().expect("store lock"))?;
+        for ev in &evs {
+            let _ = self.events.send(ev.clone());
+        }
+        Ok(Json(json!({"jelly": evs.last().map(|e| e.jelly.clone()), "events": evs.len(), "state": evs.last().and_then(|e| e.state.clone())})))
+    }
+
     /// Runs one store change and broadcasts its event. The store lock is what
     /// makes verbs run one at a time.
     fn change(&self, f: impl FnOnce(&mut Store) -> Result<Event, Error>) -> Result<Json<Event>, ApiError> {
@@ -100,6 +111,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/attention", get(attention_list))
         .route("/api/focus", post(focus))
         .route("/api/jellies/{name}/attention", post(attend))
+        .route("/api/jellies/{name}/ask", post(ask))
         .route("/api/jellies/{name}/attention/{id}/answer", post(answer))
         .route("/api/jellies/{name}/attention/{id}/withdraw", post(withdraw))
         .route("/api/jellies/{name}/working", post(working))
@@ -149,7 +161,6 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
-            "decision": is_decision(&j.state).then(|| j.state.get("status").cloned()).flatten(),
             "attention": j.attention.iter().filter(|a| a.is_open()).count(),
             "working": j.working,
             "poster": store.assets(&j.name).into_iter().find(|f| f.starts_with("poster.")),
@@ -443,10 +454,6 @@ async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value
     Json(json!(items))
 }
 
-/// Decision jellies have `questions` (older ones had a single `options` list).
-fn is_decision(state: &Value) -> bool {
-    state.get("questions").or_else(|| state.get("options")).is_some()
-}
 
 #[derive(Deserialize)]
 struct AttendReq {
@@ -504,8 +511,7 @@ struct ProjectQ {
     project: Option<String>,
 }
 
-/// Everything open for the person, newest first: attention items, plus open
-/// asks made with `jelly ask --spec`.
+/// Everything open for the person, newest first.
 async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) -> Json<Value> {
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
@@ -516,13 +522,6 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
             v["jelly"] = json!(j.name);
             v["about"] = json!(j.about);
             items.push(v);
-        }
-        if is_decision(&j.state) && j.state.get("status") == Some(&json!("open")) {
-            let qs = j.state["questions"].as_array().cloned().unwrap_or_default();
-            let done = qs.iter().filter(|q| !q["answer"].is_null() || q["note"]["text"].as_str().is_some_and(|t| !t.is_empty())).count();
-            if done < qs.len() {
-                items.push(json!({"jelly": j.name, "about": j.about, "id": "ask", "kind": "ask", "title": j.about, "by": j.made_by, "at_ms": j.updated_ms, "form": true, "progress": [done, qs.len()]}));
-            }
         }
     }
     items.sort_by_key(|i| std::cmp::Reverse(i["at_ms"].as_u64().unwrap_or(0)));
@@ -788,4 +787,18 @@ struct FrameQ {
 
 async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
     Html(format!("<!doctype html><body style=\"margin:0;background:#2b3133\"><iframe src=\"/j/{name}/?agent=1\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff\"></iframe></body>", w = q.w, h = q.h))
+}
+
+#[derive(Deserialize)]
+struct AskReq {
+    spec: Value,
+    #[serde(default)]
+    project: String,
+    by: Option<String>,
+}
+
+/// A round of questions on an ask page, made or updated in one step.
+async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
+    let who = by(r.by)?;
+    app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
 }

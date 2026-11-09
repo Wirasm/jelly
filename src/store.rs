@@ -537,12 +537,11 @@ impl Store {
     }
 
     /// Archives unpinned jellies nobody touched for `idle_ms`, unless they still
-    /// wait on the person (an open decision or an open comment).
+    /// wait on the person (an open attention item or an open comment).
     pub fn sweep(&mut self, idle_ms: u64) -> Vec<Event> {
         let cutoff = now_ms().saturating_sub(idle_ms);
         let stale: Vec<String> = self.list()
             .filter(|j| !j.pinned && !j.archived && j.name != "surface" && j.updated_ms < cutoff)
-            .filter(|j| !(j.state.get("questions").or_else(|| j.state.get("options")).is_some() && j.state.get("status") == Some(&Value::from("open"))))
             .filter(|j| j.comments.iter().all(|f| f.resolved))
             .filter(|j| j.attention.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
@@ -597,53 +596,59 @@ impl Store {
     /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
     /// "context"?, "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
     pub fn attend(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
-        let kind = match spec["kind"].as_str().unwrap_or("ask") {
-            "ask" => AttentionKind::Ask,
-            "look" => AttentionKind::Look,
-            k => return Err(Error::Invalid(format!("attention kind must be ask or look, not {k:?}"))),
-        };
-        let title = spec["title"].as_str().unwrap_or("").trim().to_string();
-        if title.is_empty() {
-            return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
-        }
-        let options: Vec<AskOption> = serde_json::from_value(spec.get("options").cloned().unwrap_or(Value::Array(vec![])))
-            .map_err(|e| Error::Invalid(format!("options: {e}")))?;
-        let mut ids = std::collections::HashSet::new();
-        for o in &options {
-            if o.id.is_empty() {
-                return Err(Error::Invalid("every option needs an id".into()));
-            }
-            if !ids.insert(o.id.as_str()) {
-                return Err(Error::Invalid(format!("option id {:?} appears twice", o.id)));
-            }
-        }
-        let recommend = spec["recommend"].as_str().map(String::from);
-        if let Some(r) = &recommend {
-            if !ids.contains(r.as_str()) {
-                return Err(Error::Invalid(format!("recommend {r:?} is not one of the options")));
-            }
-        }
-        let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
-        let entry = self.entry(name)?;
-        let id = format!("a{}", entry.jelly.attention.len() + 1);
-        let item = Attention {
-            id,
-            kind,
-            title,
-            context: if spec.get("context").is_some() { text("context") } else { text("detail") },
-            anchor: spec.get("anchor").cloned().unwrap_or(Value::Null),
-            options,
-            recommend,
-            why: text("why"),
-            group: spec["group"].as_str().map(String::from),
-            by: by.into(),
-            at_ms: now_ms(),
-            answer: None,
-            withdrawn: None,
-        };
+        let n = self.get(name)?.attention.len();
+        let item = attention_from(&spec, format!("a{}", n + 1), by)?;
         let args = serde_json::to_value(&item).expect("serializes");
-        entry.jelly.attention.push(item);
+        self.entry(name)?.jelly.attention.push(item);
         self.commit(name, EventKind::Attention, by, None, Some(args), Vec::new())
+    }
+
+    /// One round of an ask: a set of questions the person answers together, on
+    /// a jelly made for it (created with `view` and `verbs` if it does not
+    /// exist). Asking again starts a new round and withdraws what the last
+    /// round left open. All or nothing: a bad question changes nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ask_round(&mut self, name: &str, spec: &Value, view: &str, verbs_src: &str, project: &str, by: &str) -> Result<Vec<Event>, Error> {
+        let single = spec.get("questions").is_none();
+        let questions: Vec<Value> = if single { vec![spec.clone()] } else { spec["questions"].as_array().cloned().unwrap_or_default() };
+        if questions.is_empty() {
+            return Err(Error::Invalid("an ask needs at least one question".into()));
+        }
+        let title = spec["title"].as_str().or(spec["question"].as_str()).unwrap_or("").to_string();
+        let id = if project.is_empty() || name.contains(':') { name.to_string() } else { format!("{project}:{name}") };
+        let exists = self.jellies.contains_key(&id);
+        let round = if exists { self.get(&id)?.state["round"].as_u64().unwrap_or(0) + 1 } else { 1 };
+        let group = format!("round-{round}");
+        let start = if exists { self.get(&id)?.attention.len() } else { 0 };
+        // Validate every question before touching anything.
+        let mut items = Vec::new();
+        for (i, q) in questions.iter().enumerate() {
+            let qid = q["id"].as_str().map(String::from).unwrap_or_else(|| format!("q{}", i + 1));
+            let mut q = q.clone();
+            q["kind"] = "ask".into();
+            q["title"] = q.get("question").cloned().or_else(|| q.get("title").cloned()).unwrap_or(Value::Null);
+            q["group"] = group.clone().into();
+            q["anchor"] = serde_json::json!({"selector": format!("#q-{qid}")});
+            items.push(attention_from(&q, format!("a{}", start + i + 1), by)?);
+        }
+        let mut events = Vec::new();
+        if !exists {
+            events.push(self.create(&id, view.into(), verbs_src.into(), serde_json::json!({}), by, false, &title, "")?);
+        } else if self.get(&id)?.view != view {
+            events.push(self.reshape(&id, Some(view.into()), Some(verbs_src.into()), Some(title.clone()), by)?);
+        }
+        let open: Vec<String> = self.get(&id)?.attention.iter().filter(|a| a.is_open()).map(|a| a.id.clone()).collect();
+        for a in open {
+            events.push(self.withdraw(&id, &a, by)?);
+        }
+        let setup = serde_json::json!({"title": title, "context": spec["context"], "round": round});
+        events.push(self.call(&id, "setup", setup, by)?);
+        for item in items {
+            let args = serde_json::to_value(&item).expect("serializes");
+            self.entry(&id)?.jelly.attention.push(item);
+            events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new())?);
+        }
+        Ok(events)
     }
 
     /// The person answers an item, or changes their answer: an option id,
@@ -771,6 +776,52 @@ fn snapshot(entry: &mut Entry) {
 }
 
 /// Names become file names and URL segments.
+/// Builds an attention item from an agent's spec, checking it.
+fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error> {
+    let kind = match spec["kind"].as_str().unwrap_or("ask") {
+        "ask" => AttentionKind::Ask,
+        "look" => AttentionKind::Look,
+        k => return Err(Error::Invalid(format!("attention kind must be ask or look, not {k:?}"))),
+    };
+    let title = spec["title"].as_str().unwrap_or("").trim().to_string();
+    if title.is_empty() {
+        return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
+    }
+    let options: Vec<AskOption> = serde_json::from_value(spec.get("options").cloned().unwrap_or(Value::Array(vec![])))
+        .map_err(|e| Error::Invalid(format!("{title:?}: options: {e}")))?;
+    let mut ids = std::collections::HashSet::new();
+    for o in &options {
+        if o.id.is_empty() {
+            return Err(Error::Invalid(format!("{title:?}: every option needs an id")));
+        }
+        if !ids.insert(o.id.as_str()) {
+            return Err(Error::Invalid(format!("{title:?}: option id {:?} appears twice", o.id)));
+        }
+    }
+    let recommend = spec["recommend"].as_str().map(String::from);
+    if let Some(r) = &recommend {
+        if !ids.contains(r.as_str()) {
+            return Err(Error::Invalid(format!("{title:?}: recommend {r:?} is not one of the options")));
+        }
+    }
+    let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
+    Ok(Attention {
+        id,
+        kind,
+        title,
+        context: if spec.get("context").is_some_and(|c| c.is_string()) { text("context") } else { text("detail") },
+        anchor: spec.get("anchor").cloned().unwrap_or(Value::Null),
+        options,
+        recommend,
+        why: text("why"),
+        group: spec["group"].as_str().map(String::from),
+        by: by.into(),
+        at_ms: now_ms(),
+        answer: None,
+        withdrawn: None,
+    })
+}
+
 /// `name` or `project:name`, each part 1-64 of a-z, 0-9, - and _.
 fn valid_name(name: &str) -> Result<(), Error> {
     let part = |p: &str| !p.is_empty() && p.len() <= 64 && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
@@ -948,6 +999,36 @@ mod tests {
         assert!(s.get("j").unwrap().attention[0].answer.is_some(), "undo leaves answers alone");
         let old: Attention = serde_json::from_value(json!({"id": "a9", "kind": "ask", "title": "t", "detail": "d", "by": "x", "at_ms": 1, "answer": {"withdrawn": true, "by": "x", "at_ms": 2}})).unwrap();
         assert!(old.withdrawn.is_some() && old.answer.is_none() && old.context == "d", "old files still load");
+    }
+
+    const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
+
+    #[test]
+    fn an_ask_round_is_attention_items_and_a_new_round_replaces_open_ones() {
+        let (_d, mut s) = store();
+        let spec = json!({"title": "Sharing", "context": "why", "questions": [
+            {"id": "host", "question": "Where?", "recommend": "w", "why": "cheap", "options": [{"id": "w", "title": "Worker", "summary": "A relay", "gains": ["free"]}, {"id": "s", "title": "Static"}]},
+            {"id": "who", "question": "Who?", "options": [{"id": "l", "title": "Link"}]}]});
+        let evs = s.ask_round("sharing", &spec, "<p>ask</p>", ASK_VERBS, "jelly", "claude").unwrap();
+        assert_eq!(evs[0].jelly, "jelly:sharing");
+        let j = s.get("jelly:sharing").unwrap();
+        assert_eq!((j.state["round"].clone(), j.about.as_str()), (json!(1), "Sharing"));
+        assert_eq!(j.attention.len(), 2);
+        let host = &j.attention[0];
+        assert_eq!((host.options[0].label.as_str(), host.options[0].does.as_str(), host.group.as_deref()), ("Worker", "A relay", Some("round-1")));
+        assert_eq!(host.anchor["selector"], "#q-host");
+        s.answer("jelly:sharing", "a1", Some("w"), "only if it stays private", "person").unwrap();
+
+        let bad = json!({"questions": [{"question": "Ok?", "options": [{"id": "a"}]}, {"question": "", "options": []}]});
+        assert!(s.ask_round("sharing", &bad, "<p>ask</p>", ASK_VERBS, "jelly", "claude").is_err());
+        assert_eq!(s.get("jelly:sharing").unwrap().attention.len(), 2, "a bad round changes nothing");
+
+        s.ask_round("sharing", &json!({"question": "And now?", "options": [{"id": "y", "title": "Yes"}]}), "<p>ask</p>", ASK_VERBS, "jelly", "claude").unwrap();
+        let j = s.get("jelly:sharing").unwrap();
+        assert_eq!(j.state["round"], 2);
+        assert!(j.attention[0].answer.is_some(), "answers stay");
+        assert!(j.attention[1].withdrawn.is_some(), "what the last round left open is withdrawn");
+        assert_eq!(j.attention[2].group.as_deref(), Some("round-2"));
     }
 
     #[test]
