@@ -25,11 +25,18 @@ something else: before/after screenshots, a rendered preview, a table of rows.
 | `total_lines` | Added plus removed lines of the whole change (`git diff --numstat`). Not needed when `assets/full.diff` is attached. |
 | `next` | What you do when they say go: "Commit and push to x". |
 | `outcomes[]` | `id`, `text`, `status` (`seen`, `tested` or `unverified`), `evidence`. One per thing they asked for. |
-| `groups[]` | `id`, `intent`, `outcome` (an outcome id), `risk` (`low`, `medium`, `high`), `why`, `evidence`, `files[]`, `diff`, and `mechanical: true` when there is nothing to decide. |
+| `groups[]` | `id`, `intent` (a few words: it is a label on the map), `outcome` (an outcome id, or a list of them), `risk` (`low`, `medium`, `high`), `why`, `show`, `evidence`, `files[]`, `diff`, and `mechanical: true` when there is nothing to decide. |
+| `groups[].show` | The picture of the change: `{"kind", "before", "after", "caption"}`. `terminal` (the default) takes command output, `image` takes two assets (`assets/before.png`) and gives a slider, `html` takes two pages and runs them live. Leave `before` out when there was nothing before. |
 | `not_done[]` | `kind` (`skipped`, `unverified` or `outside`) and `text`. |
 
 ## Rules that make it worth their time
 
+- **Show, do not describe.** The page is a map (what they asked for, wired to the
+  changes made for it), then one change at a time with its before and after.
+  Give every change that decides something a `show`: run the old and the new and
+  paste both, or screenshot both (`jelly see NAME --png`, then `jelly asset`).
+  Without a `show` the person gets a diff, which is the thing this recipe is for
+  avoiding. Keep `intent` and outcome `text` to a few words.
 - **Group by intent, not by file.** One group per reason you changed code. A file
   can appear in several groups; each group's `diff` holds only its own hunks.
 - **Every changed line is in a group.** The bar counts the lines in the groups
