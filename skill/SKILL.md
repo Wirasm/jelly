@@ -31,6 +31,7 @@ Write three files in a scratch folder, never in the person's repo:
 
 ```bash
 jelly new plan --view view.html --verbs verbs.js --state state.json --about "One line: why this exists"
+jelly new plan --from ./plan         # the same from a folder: a recipe, or what `jelly pull` wrote
 jelly reshape plan --view v2.html    # new view or verbs, same state; open pages reload
 jelly call plan add '{"title":"…"}'  # run a verb yourself; '@args.json' or - for big args
 jelly set plan --at /title '"Better title"'   # write state yourself, no verb needed
@@ -53,6 +54,17 @@ jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a questio
 
 Keep data in state, not in page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at them.
+
+## Recipes
+
+Optional starting points for jellies that are easy to get wrong the first time.
+A recipe is a folder next to this file with `view.html`, `verbs.js`, an example
+`state.json` and a `RECIPE.md`. Read its `RECIPE.md` only when you use it, copy
+the folder to a scratch place, write your own state, and change the view and
+verbs as the job needs: `jelly new review --from /tmp/review`.
+
+- `recipes/review`: you changed code and the person must judge it. Outcomes with
+  evidence, changes grouped by intent, approve or push back per group, then go.
 
 ## Show it
 
