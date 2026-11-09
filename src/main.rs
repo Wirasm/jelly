@@ -660,8 +660,7 @@ fn report(ev: Value) -> Result<(), String> {
     let s = |v: &Value| v.as_str().unwrap_or("").to_string();
     let what = match ev["kind"].as_str().unwrap_or("") {
         "call" => format!("{} ran", s(&ev["verb"])),
-        "attention" => format!("asked {} {:?}; it shows on the page{}. Answers arrive in `jelly inbox`", s(&ev["args"]["id"]), s(&ev["args"]["title"]),
-            ev["args"]["anchor"]["selector"].as_str().map(|a| format!(" below {a}")).unwrap_or_default()),
+        "attention" => format!("asked {} {:?}; {}. Answers arrive in `jelly inbox`", s(&ev["args"]["id"]), s(&ev["args"]["title"]), placement(&ev)),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
         "new" => "made".into(),
         k => k.to_string(),
@@ -670,6 +669,18 @@ fn report(ev: Value) -> Result<(), String> {
     let changed = match changed.len() { 0 => String::new(), 1..=6 => format!(" · changed {}", changed.join(" ")), n => format!(" · changed {n} places") };
     println!("{} v{}: {what}{changed}", s(&ev["jelly"]), ev["version"]);
     Ok(())
+}
+
+/// Where an ask or look shows on the page, as the daemon found it: `anchored`
+/// is whether its `--at` matched something, and is absent when nothing could check.
+fn placement(ev: &Value) -> String {
+    match (ev["args"]["anchor"]["selector"].as_str(), ev["anchored"].as_bool()) {
+        (None, _) => "it shows at the top of the page".into(),
+        (Some(at), Some(true)) => format!("it shows on the page below {at}"),
+        (Some(at), Some(false)) => format!("{at} matches nothing on the page, so it shows at the top"),
+        (Some(at), None) => format!("it shows below {at} if that matches something, else at the top: not checked ({})",
+            ev["anchor_unchecked"].as_str().unwrap_or("no snapshot")),
+    }
 }
 
 /// A JSON argument: literal JSON, @FILE, or - for stdin (for data too big for a command line).
@@ -735,4 +746,24 @@ fn encode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::placement;
+    use serde_json::json;
+
+    #[test]
+    fn an_ask_says_where_its_card_really_shows() {
+        let at = |extra: serde_json::Value| {
+            let mut ev = json!({"args": {"anchor": {"selector": "#list"}}});
+            ev.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            placement(&ev)
+        };
+        assert_eq!(at(json!({"anchored": true})), "it shows on the page below #list");
+        assert_eq!(at(json!({"anchored": false})), "#list matches nothing on the page, so it shows at the top");
+        let unchecked = at(json!({"anchor_unchecked": "no Chrome found"}));
+        assert!(unchecked.contains("not checked (no Chrome found)") && !unchecked.starts_with("it shows on the page below"));
+        assert_eq!(placement(&json!({"args": {"anchor": null}})), "it shows at the top of the page");
+    }
 }
