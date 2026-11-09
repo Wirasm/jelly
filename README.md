@@ -1,107 +1,59 @@
 # jelly
 
-Agents share anything with their humans visually, and ask for the human's input
-in a way the human understands.
+Allow your agent to show you what it means instead of telling you: a prototype you
+can click, a decision with the options side by side, a plan, a dashboard, a 3D
+render, a question you answer in one tap. You use it, comment on any part of it,
+and your agent hears everything you did. jelly runs on your machine and works with
+any agent that has a shell.
 
-jelly renders jellyware: small live apps that agents make in minutes, such as a
-clickable prototype, a decision with live previews, a 3D render, an animation, a
-dashboard or a form. The person uses them, and the agent hears what they did.
+## For agents
 
-A **jelly** is a view (HTML), its state (JSON) and the verbs that change that state
-(JavaScript), held together by a local daemon under one name. Jellies appear on the
-jelly page in the browser, one page per project. An agent makes one from the CLI,
-the person uses it, and either side can call its verbs, read its state, or reshape
-it while it runs.
+jelly gives you a place to put jellyware in front of your human: small live apps
+you write in minutes and they use, answer and shape with you. Reach for it whenever
+a picture, a prototype, a comparison or a choice would land better than prose, and
+whenever you need their decision.
 
+- **Show anything.** A jelly is a view (any HTML), state (JSON) and verbs (the JS
+  functions that change state). Prototypes, three.js, charts, forms, animations.
+  No component kit, no ceiling.
+- **Hear their answer.** Every click is a verb call with an author. `jelly ask` and
+  `jelly look` put a question on the exact element it is about. Comments pin to
+  elements. You get all of it from `jelly inbox` (or a hook at the start of your
+  turn), or block on `jelly wait`.
+- **Get decisions made.** `jelly ask --spec` lays out options with live previews,
+  gains, costs and your recommendation. They pick, add a note, or add their own question.
+- **See what you made.** `jelly see NAME` prints the page as text, with everything
+  waiting on them and what they did lately. `--png` when layout matters.
+- **Keep working on it together.** Reshape while it runs and state stays. Undo
+  anything. Notes for the next agent. One page per project. Share as one file.
+
+```bash
+jelly ls                                         # is the daemon up? (your human runs `jelly serve`)
+jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
+jelly focus plan                                 # put it in front of them
+jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
+  --recommend roomy --why "Easier to scan on a phone" --at "#grid"
+jelly inbox                                      # what they did since you last looked
+jelly see plan                                   # what is on screen, as text
 ```
-agent ── jelly CLI ──┐                ┌── jelly page (browser)
-                     ├── jelly daemon ┤      ├── work
-person ── clicks ────┘   view, state, │      ├── design
-                         verbs, events└──    └── ...
-```
 
-## Why it's built this way
+The full guide is [`skill/SKILL.md`](skill/SKILL.md). Install it as a skill so every
+session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 
-- **Verbs are the only way to change state.** A button and an agent's `jelly call`
-  run the same verb, one at a time, inside the daemon. That one rule gives events,
-  attribution (`by`), history and undo, with no merge logic in any page.
-- **No file per jelly, no server per jelly.** The agent never manages paths, ports
-  or data files. It names a jelly and talks to it.
-- **Reshape keeps state.** New view or verbs swap in while the jelly runs; open views
-  reload and pick up the same state. Verbs that fail to load are refused.
-- **The jelly page is a jelly too.** It is a stream of every unpinned jelly in the
-  order agents made them, each under the agent's one line of why, and a board with
-  your attention queue and pinned jellies. `jelly focus NAME` opens one full size.
-- **Attention is everything an agent needs from you.** An *ask* wants an answer, a
-  *look* wants a glance. Both sit on the jelly next to what they are about and in
-  your attention queue, where one click answers them.
-- **One page per project.** A jelly is named `project:name`, the project being by
-  default the git repo the agent ran `jelly` in. Names only need to be unique in a
-  project, and a short name means "in this project". `/p/<project>` shows only that
-  project's jellies.
-- **Quiet jellies archive themselves.** An unpinned jelly nobody touched for a week
-  leaves the jelly page, unless it still waits on the person. Any change brings it back.
-- **Comments are the ask.** Option-click any part of any jelly to pin a comment. The
-  agent answers on the same pin, by reshaping, replying or both.
-
-## Use
+## For the human: install
 
 ```bash
 cargo install --path .
-jelly serve                       # http://127.0.0.1:7878, data in ~/.jelly
-jelly open
-jelly watch                       # every change, as JSON lines
+jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
-The repo ships no jellies. Agents make them while they work: they write a view,
-verbs and starting state for what the moment needs, and run `jelly new`. Give an
-agent `skill/SKILL.md` so it knows how, for example
-`ln -s "$PWD/skill" ~/.claude/skills/jelly`.
+To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
+`UserPromptSubmit` hook. It prints nothing when there is nothing new.
 
-Two things come built in, because every agent needs them:
+## How it works
 
-- **`jelly ask`** opens a decision: options with gains, costs, effort and a live
-  preview each, plus the agent's recommendation. The person picks, likes, dislikes,
-  notes or sends them back; the agent waits with `jelly wait`.
-- **Comments anywhere:** Option-click any element of any jelly to pin a comment.
-  Agents read them with `jelly comments`.
-
-- **Assets:** `jelly asset NAME shot.png` stores files beside a jelly, outside its
-  state and undo. Views use them as `assets/shot.png`.
-- **Share:** `jelly share NAME` writes one read-only HTML file, with state and
-  assets baked in, that opens anywhere.
-- **Inbox:** `jelly inbox --hook`, run as a Claude Code `UserPromptSubmit` hook, tells
-  the agent at the start of each turn what the person did in this project's jellies.
-
-`jelly --help` lists the rest.
-
-## Dogfooding
-
-jelly is built with jelly. The agents working on it keep a `work` jelly (the board:
-next, doing, done, and how we work) and a `design` jelly (rules, decisions, open
-questions) on the jelly page. Those live in `~/.jelly`, not in this repo, and the
-agents reshape them as the work changes.
-
-## Layout
-
-| Path | What |
-| --- | --- |
-| `src/store.rs` | Jellies, verbs-only state changes, undo, events, persistence |
-| `src/verbs.rs` | Runs verbs in QuickJS with a 1 s and 64 MB limit |
-| `src/server.rs` | HTTP API, events, view injection, assets, snapshots, inbox, archiving |
-| `src/main.rs` | The CLI |
-| `assets/runtime.js` | `window.jelly`, injected into every view |
-| `assets/snapshot.js` | The read-only `window.jelly` inside a shared snapshot |
-| `assets/surface.*` | The jelly page (an internal jelly, id `surface`) |
-
-Data lives in `~/.jelly` (or `JELLY_HOME`): one JSON file per jelly with its undo
-history, `assets/<jelly>/` for its files, and `events.jsonl` with every change.
-
-## Not built yet
-
-- Hosted sharing: a link a colleague can use and answer, not only a read-only file.
-- Verbs with access beyond their own state. Live data is pushed in from outside
-  with `jelly call` instead.
-
-The daemon binds to 127.0.0.1 only and has no authentication. Anything that can
-reach the port can call verbs and reshape jellies.
+A local daemon holds every jelly and serves them on 127.0.0.1 only, without
+authentication: anything that can reach the port can run verbs. Verbs run one at a
+time in QuickJS with a 1 second, 64 MB limit and no network, which keeps every
+change attributable and undoable. Live data is pushed in from outside with
+`jelly call`. Contributors: read [`AGENTS.md`](AGENTS.md).
