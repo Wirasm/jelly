@@ -1,0 +1,77 @@
+{
+  "title": "Asks warn when their anchor matches nothing",
+  "ask": "When I ask about a part of the page that does not exist, tell me right away instead of saying it worked.",
+  "range": "main..ask-anchor-check",
+  "total_lines": 29,
+  "next": "Commit and push to ask-anchor-check",
+  "outcomes": [
+    {
+      "id": "warns",
+      "text": "jelly ask says so when --at matches nothing",
+      "status": "seen",
+      "evidence": "$ jelly ask plan \"Which order?\" --at \"#nope\"\ndemo:plan v4: asked a2 \"Which order?\"; #nope matches nothing on the page, so it shows at the top"
+    },
+    {
+      "id": "still-asks",
+      "text": "The ask is still created; this is a warning, not a refusal",
+      "status": "tested",
+      "evidence": "$ cargo test ask_with_dead_anchor\ntest store::tests::ask_with_dead_anchor_is_kept ... ok"
+    },
+    {
+      "id": "no-browser",
+      "text": "Without a browser, the reply says the anchor was not checked",
+      "status": "unverified",
+      "evidence": "This machine has Chrome, so I could not make the no-browser case happen. The code path is in group \"reply\"."
+    }
+  ],
+  "groups": [
+    {
+      "id": "check",
+      "intent": "Check the selector against the page before answering",
+      "outcome": "warns",
+      "risk": "medium",
+      "why": "Adds a headless render to every anchored ask: about a second slower.",
+      "evidence": "Ran it against a view with #list and without #nope; both replies were right.",
+      "files": ["src/server.rs"],
+      "diff": "--- a/src/server.rs\n+++ b/src/server.rs\n@@ -498,6 +498,14 @@ async fn attend(\n     let ev = store.attend(&name, spec)?;\n+    // Look at the page once, so the reply can say where the card really shows.\n+    let anchored = match ev.args.as_ref().and_then(|a| a[\"anchor\"][\"selector\"].as_str()) {\n+        Some(sel) => match snapshot(&app, &name).await {\n+            Ok(snap) => Some(!snap.missing.iter().any(|m| m.ends_with(sel))),\n+            Err(_) => None,\n+        },\n+        None => Some(true),\n+    };\n     Ok(Json(json!(ev)))\n"
+    },
+    {
+      "id": "reply",
+      "intent": "Say what happened in the one-line reply",
+      "outcome": "warns",
+      "risk": "low",
+      "why": "Only wording changes; the event is the same.",
+      "evidence": "Covers all three cases: matched, matched nothing, not checked.",
+      "files": ["src/main.rs"],
+      "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -656,8 +656,13 @@ fn report(ev: Value) -> Result<(), String> {\n-        \"attention\" => format!(\"asked {} {:?}; it shows on the page{}. Answers arrive in `jelly inbox`\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]),\n-            ev[\"args\"][\"anchor\"][\"selector\"].as_str().map(|a| format!(\" below {a}\")).unwrap_or_default()),\n+        \"attention\" => {\n+            let at = ev[\"args\"][\"anchor\"][\"selector\"].as_str();\n+            let place = match (at, ev[\"anchored\"].as_bool()) {\n+                (Some(a), Some(true)) => format!(\"it shows below {a}\"),\n+                (Some(a), Some(false)) => format!(\"{a} matches nothing on the page, so it shows at the top\"),\n+                (Some(a), None) => format!(\"could not check {a}: no browser\"),\n+                (None, _) => \"it shows at the top\".into(),\n+            };\n+            format!(\"asked {} {:?}; {place}\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]))\n+        }\n"
+    },
+    {
+      "id": "test",
+      "intent": "Test that a dead anchor does not stop the ask",
+      "outcome": "still-asks",
+      "risk": "low",
+      "why": "",
+      "evidence": "$ cargo test ask_with_dead_anchor\n1 passed",
+      "files": ["src/store.rs"],
+      "diff": "--- a/src/store.rs\n+++ b/src/store.rs\n@@ -1140,3 +1140,10 @@ mod tests {\n+    #[test]\n+    fn ask_with_dead_anchor_is_kept() {\n+        let mut s = store();\n+        let ev = s.attend(\"demo:plan\", ask_at(\"#nope\")).unwrap();\n+        assert_eq!(s.get(\"demo:plan\").unwrap().attention.len(), 1);\n+        assert_eq!(ev.kind, EventKind::Attention);\n+    }\n"
+    },
+    {
+      "id": "docs",
+      "intent": "Skill text matches the new reply",
+      "outcome": "warns",
+      "risk": "low",
+      "mechanical": true,
+      "why": "One sentence in the guide; no behaviour.",
+      "evidence": "",
+      "files": ["skill/SKILL.md"],
+      "diff": "--- a/skill/SKILL.md\n+++ b/skill/SKILL.md\n@@ -68,3 +68,3 @@\n-and questions whose `--at` matches nothing (`!` lines): fix both.\n+and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` says so too.\n"
+    }
+  ],
+  "not_done": [
+    { "kind": "unverified", "text": "The no-browser reply: I could not make that case happen here." },
+    { "kind": "skipped", "text": "jelly look has the same gap. I left it alone because you asked about ask." },
+    { "kind": "outside", "text": "None. Every change serves the ask." }
+  ],
+  "go": null,
+  "applied": null
+}

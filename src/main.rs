@@ -50,10 +50,15 @@ enum Cmd {
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
     New {
         name: String,
+        /// Start from a folder with view.html, verbs.js, state.json and assets/:
+        /// a recipe, or what `jelly pull` wrote. --view, --verbs and --state
+        /// replace the folder's own.
         #[arg(long)]
-        view: PathBuf,
-        #[arg(long)]
-        verbs: PathBuf,
+        from: Option<PathBuf>,
+        #[arg(long, required_unless_present = "from")]
+        view: Option<PathBuf>,
+        #[arg(long, required_unless_present = "from")]
+        verbs: Option<PathBuf>,
         /// Starting state as a JSON file.
         #[arg(long)]
         state: Option<PathBuf>,
@@ -344,14 +349,24 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::New { name, view, verbs, state, replace, about } => {
+        Cmd::New { name, from, view, verbs, state, replace, about } => {
             sync_design(&cli.url, &project());
-            let state: Value = match state {
+            let in_from = |file: &str| from.as_ref().map(|d| d.join(file));
+            let view = view.or_else(|| in_from("view.html")).ok_or("give --view or --from")?;
+            let verbs = verbs.or_else(|| in_from("verbs.js")).ok_or("give --verbs or --from")?;
+            let state: Value = match state.or_else(|| in_from("state.json").filter(|p| p.exists())) {
                 Some(p) => serde_json::from_str(&read(&p)?).map_err(|e| format!("{}: {e}", p.display()))?,
                 None => json!({}),
             };
             let body = json!({"name": name, "view": read(&view)?, "verbs": read(&verbs)?, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
-            report(send("POST", &api(""), body)?)
+            let ev = send("POST", &api(""), body)?;
+            // The folder's assets come along, as `jelly asset` would add them.
+            let made = ev["jelly"].as_str().unwrap_or(&name).to_string();
+            let mut assets: Vec<PathBuf> = in_from("assets").and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten()
+                .map(|f| f.path()).filter(|p| p.is_file()).collect();
+            assets.sort();
+            report(ev)?;
+            add_assets(&api(&format!("/{made}")), &assets, &by)
         }
         Cmd::Call { name, verb, args } => {
             let args = json_arg(&args, "args")?;
@@ -552,17 +567,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by}))?),
         Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by}))?),
         Cmd::Asset { name, files } => {
-            let name = id(&name);
-            for f in files {
-                let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
-                let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
-                ureq::post(&api(&format!("/{name}/assets/{}?by={}", encode(&file), encode(&by))))
-                    .set("content-type", "application/octet-stream")
-                    .send_bytes(&bytes)
-                    .map_err(describe)?;
-                println!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024));
-            }
-            Ok(())
+            add_assets(&api(&format!("/{}", id(&name))), &files, &by)
         }
         Cmd::Share { name, out } => {
             let name = id(&name);
@@ -680,6 +685,20 @@ fn read(p: &PathBuf) -> Result<String, String> {
         return Ok(s);
     }
     std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// Adds files beside a jelly; `jelly` is its API address.
+fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<(), String> {
+    for f in files {
+        let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
+        let bytes = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
+        ureq::post(&format!("{jelly}/assets/{}?by={}", encode(&file), encode(by)))
+            .set("content-type", "application/octet-stream")
+            .send_bytes(&bytes)
+            .map_err(describe)?;
+        println!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024));
+    }
+    Ok(())
 }
 
 fn get(url: &str) -> Result<Value, String> {

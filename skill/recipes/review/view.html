@@ -1,0 +1,250 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>review</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 12px);
+    --good: #2f7d3b; --good-soft: #e3f3e6; --warn: #8a5a00; --warn-soft: #fff1c7; --bad: #b8382f; --bad-soft: #fde7e4;
+    --add: #e6f6e9; --del: #fdeceb; --hunk: #eef1f8;
+    color-scheme: light;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #6fd38a; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --bad-soft: #3d1f1d;
+    --add: #17301e; --del: #3a1c1c; --hunk: #22263a;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 20px 90px; }
+  .kicker { font: 600 11.5px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 27px; line-height: 1.2; letter-spacing: -.02em; margin: 6px 0 12px; text-wrap: balance; }
+  h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 34px 0 10px; }
+  header { padding-top: 26px; }
+  #ask { margin: 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--soft); border-radius: 0 var(--r) var(--r) 0; color: var(--ink-2); }
+  #ask b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .range { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); margin-top: 8px; }
+
+  #bar { position: sticky; top: 0; z-index: 5; margin: 18px -20px 0; padding: 10px 20px; display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: baseline;
+    background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); font-size: 14px; }
+  #bar b { font-size: 15px; }
+  #bar .acct { color: var(--muted); font-size: 13px; }
+  #bar .acct.off { color: var(--bad); font-weight: 600; }
+
+  .chip { display: inline-block; font: 600 11.5px -apple-system, sans-serif; padding: 2px 8px; border-radius: 99px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+  .chip.seen, .chip.tested, .chip.low { background: var(--good-soft); color: var(--good); }
+  .chip.unverified, .chip.medium { background: var(--warn-soft); color: var(--warn); }
+  .chip.high { background: var(--bad-soft); color: var(--bad); }
+
+  .list { display: grid; gap: 8px; }
+  /* Blocks, not a grid: a question about a group then sits right below that group. */
+  .list.cards { display: block; } .list.cards > * { margin-bottom: 10px; }
+  .row, .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); }
+  .row { padding: 10px 14px; }
+  .row .top { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 6px; list-style-position: outside; margin-left: 16px; }
+  pre { margin: 6px 0 0; font: 12.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre; overflow-x: auto; }
+  pre.ev { background: var(--soft); padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; }
+
+  .card { padding: 16px 18px; scroll-margin-top: 60px; }
+  .card.approved { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+  .card.change, .card.question { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+  .card h3 { margin: 0; font-size: 18px; line-height: 1.3; }
+  .meta { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; margin-top: 7px; font-size: 13px; color: var(--muted); }
+  .meta a { color: inherit; }
+  .why { margin: 8px 0 0; color: var(--ink-2); }
+  .files { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
+  .diff { border: 1px solid var(--line); border-radius: 8px; padding: 6px 0; }
+  .diff span { display: block; padding: 0 10px; min-width: max-content; }
+  .diff .a { background: var(--add); } .diff .d { background: var(--del); }
+  .diff .h { background: var(--hunk); color: var(--muted); } .diff .f { color: var(--muted); font-weight: 600; }
+  .talk { margin-top: 12px; display: grid; gap: 6px; }
+  .said { padding: 8px 12px; border-radius: 10px; background: var(--warn-soft); }
+  .said.agent { background: var(--soft); }
+  .said b { font-size: 12px; display: block; color: var(--muted); }
+  .said span { white-space: pre-wrap; }
+  .since { margin-top: 10px; font-weight: 600; font-size: 13px; color: var(--accent); }
+  .act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  .act button, #go button { border: 1.5px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
+  .act button.yes, #go button { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .act .verdict { font-weight: 600; } .approved .verdict { color: var(--good); }
+  .act .undo { border: 0; background: none; color: var(--muted); font-weight: 500; padding: 8px 4px; text-decoration: underline; }
+  .compose { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+  .compose textarea { flex: 1; min-height: 44px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+  .compose textarea:focus { outline: none; border-color: var(--accent); }
+  .mech-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .mech-head h2 { margin-bottom: 10px; }
+  .mech-head button { border: 1.5px solid var(--line); background: var(--card); border-radius: 10px; padding: 5px 12px; font-size: 13px; font-weight: 600; }
+  .nd { display: flex; gap: 10px; align-items: baseline; }
+  #go { margin-top: 30px; padding: 16px 18px; border-radius: var(--r); background: var(--soft); display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  #go.ready { background: var(--good-soft); }
+  #go button[disabled] { opacity: .4; cursor: default; }
+  #go .next { color: var(--ink-2); }
+  @media (max-width: 520px) { h1 { font-size: 23px; } .card { padding: 14px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">Review</div>
+    <h1 id="title"></h1>
+    <p id="ask"></p>
+    <div class="range" id="range"></div>
+  </header>
+  <div id="bar"></div>
+  <h2>What you asked for</h2>
+  <div class="list" id="outcomes"></div>
+  <h2 id="groups-h">The changes, by what they are for</h2>
+  <div class="list cards" id="groups"></div>
+  <div id="mech"></div>
+  <h2>Not done</h2>
+  <div class="list" id="not-done"></div>
+  <h2>Everything, ungrouped</h2>
+  <div class="row"><details id="whole"><summary>The whole diff</summary><div id="whole-body"></div></details></div>
+  <div id="go"></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const STATUS = { seen: "Seen working", tested: "Covered by a test", unverified: "Not verified" };
+const KIND = { skipped: "Skipped", unverified: "Not verified", outside: "Outside your ask" };
+
+// Changed lines in a unified diff: + and - lines, not the file headers.
+const changed = (diff) => String(diff || "").split("\n").filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)( |$)/.test(l)).length;
+const diffHtml = (diff, id) => `<pre class="diff">${String(diff || "").replace(/\n$/, "").split("\n").map((l, i) => {
+  const c = /^(\+\+\+|---) /.test(l) ? "f" : l[0] === "+" ? "a" : l[0] === "-" ? "d" : l.startsWith("@@") ? "h" : "";
+  return `<span id="${id}-L${i + 1}"${c ? ` class="${c}"` : ""}>${esc(l) || " "}</span>`;
+}).join("")}</pre>`;
+
+// What is only on this screen: which composer is open. Everything else is state.
+let composing = null; // { group, kind }
+let wholeDiff = null; // text of assets/full.diff once loaded, false if there is none
+const who = (by) => (by === "person" ? "You" : by);
+
+function card(g, state) {
+  const v = g.verdict, kind = v?.kind || "";
+  const o = (state.outcomes || []).find((o) => o.id === g.outcome);
+  const n = changed(g.diff);
+  const talk = [];
+  if (g.last && g.last.kind !== "approved") talk.push(`<div class="said"><b>${esc(who(g.last.by))} ${g.last.kind === "question" ? "asked" : "pushed back"}</b><span>${esc(g.last.note)}</span></div>`);
+  if (g.reply) talk.push(`<div class="said agent"><b>${esc(g.reply.by)} replied</b><span>${esc(g.reply.note)}</span></div>`);
+  if (v && kind !== "approved") talk.push(`<div class="said"><b>${esc(who(v.by))} ${kind === "question" ? "asked" : "pushed back"} · waiting on the agent</b><span>${esc(v.note)}</span></div>`);
+  const open = composing?.group === g.id;
+  const act = kind === "approved"
+    ? `<span class="verdict">✓ Approved by ${esc(who(v.by).toLowerCase())}</span><button class="undo" data-do="take_back">Take back</button>`
+    : `<button class="yes" data-do="approve">Approve</button><button data-open="change">Change this</button><button data-open="question">Question</button>${v ? `<button class="undo" data-do="take_back">Take back</button>` : ""}`;
+  return `<section class="card ${kind}" id="g-${esc(g.id)}" data-group="${esc(g.id)}">
+    <h3>${esc(g.intent)}</h3>
+    <div class="meta"><span class="chip ${esc(g.risk)}">${esc(g.risk || "?")} risk</span>${o ? `<span>for <a href="#o-${esc(o.id)}">${esc(o.text)}</a></span>` : ""}<span>${n} line${n === 1 ? "" : "s"}</span></div>
+    ${g.why ? `<p class="why">${esc(g.why)}</p>` : ""}
+    <div class="files">${(g.files || []).map(esc).join(" · ")}</div>
+    ${talk.length ? `<div class="talk">${talk.join("")}</div>` : ""}
+    ${g.delta ? `<div class="since">Changed since you looked</div>${diffHtml(g.delta, `g-${g.id}-delta`)}` : ""}
+    ${g.evidence ? `<details id="g-${esc(g.id)}-ev"><summary>Evidence</summary><pre class="ev">${esc(g.evidence)}</pre></details>` : ""}
+    <details id="g-${esc(g.id)}-diff"><summary>${g.delta ? "The full diff for this group" : "Diff"}</summary>${diffHtml(g.diff, `g-${g.id}`)}</details>
+    <div class="act">${act}</div>
+    ${open ? `<div class="compose"><textarea id="g-${esc(g.id)}-note" aria-label="${composing.kind === "question" ? "Your question" : "What should change"}" placeholder="${composing.kind === "question" ? "What do you want to know?" : "What should change?"}"></textarea><button class="yes" data-send="${composing.kind}">Send</button></div>` : ""}
+  </section>`;
+}
+
+function render(state) {
+  // Keep what the person has open and half-typed across a redraw.
+  const opened = new Set([...document.querySelectorAll("details[open]")].map((d) => d.id));
+  const draft = document.querySelector(".compose textarea");
+  const kept = draft && { id: draft.id, value: draft.value, focus: document.activeElement === draft };
+
+  const groups = state.groups || [], outcomes = state.outcomes || [];
+  const main = groups.filter((g) => !g.mechanical), mech = groups.filter((g) => g.mechanical);
+  const approved = (g) => g.verdict?.kind === "approved";
+
+  $("title").textContent = state.title || "Review";
+  $("ask").innerHTML = `<b>You asked</b>${esc(state.ask || "")}`;
+  $("range").textContent = state.range || "";
+
+  $("outcomes").innerHTML = outcomes.map((o) => `<div class="row" id="o-${esc(o.id)}">
+      <div class="top"><span>${esc(o.text)}</span><span class="chip ${esc(o.status)}">${STATUS[o.status] || esc(o.status)}</span></div>
+      ${o.evidence ? `<details id="o-${esc(o.id)}-ev"><summary>Evidence</summary><pre class="ev">${esc(o.evidence)}</pre></details>` : ""}
+    </div>`).join("");
+
+  $("groups").innerHTML = main.map((g) => card(g, state)).join("");
+  $("mech").innerHTML = !mech.length ? "" : `<div class="mech-head"><h2>Mechanical: nothing to decide</h2>${mech.every(approved) ? "" : `<button id="approve-mech">${mech.length === 1 ? "Approve it" : `Approve all ${mech.length}`}</button>`}</div>
+    <div class="list cards">${mech.map((g) => card(g, state)).join("")}</div>`;
+
+  $("not-done").innerHTML = (state.not_done || []).map((n, i) => `<div class="row nd" id="nd-${i}"><span class="chip ${n.kind === "outside" ? "" : "unverified"}">${KIND[n.kind] || esc(n.kind)}</span><span>${esc(n.text)}</span></div>`).join("")
+    || `<div class="row">Nothing was skipped or left unverified.</div>`;
+
+  // Every changed line should be in a group. Count against the whole diff when it is attached.
+  const grouped = groups.reduce((n, g) => n + changed(g.diff), 0);
+  const total = wholeDiff ? changed(wholeDiff) : state.total_lines;
+  const asks = (jelly.attention || []).length;
+  const waiting = main.filter((g) => !approved(g)).length;
+  const done = groups.filter(approved).length;
+  const need = [waiting && `${waiting} change${waiting === 1 ? "" : "s"}`, asks && `${asks} question${asks === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
+  const acct = total == null ? `${grouped} changed lines in groups; the agent gave no total to check against`
+    : grouped === total ? `All ${total} changed lines are in a group${wholeDiff ? ", checked against the whole diff" : ""}`
+    : `${grouped} of ${total} changed lines are in a group. Open the whole diff below.`;
+  $("bar").innerHTML = `<b>${need ? `${need} need${waiting + asks === 1 ? "s" : ""} you` : "Nothing needs you"}</b><span>${done} of ${groups.length} approved${mech.length ? ` · ${mech.length} mechanical` : ""}</span>
+    <span class="acct${total != null && grouped !== total ? " off" : ""}" id="account">${acct}</span>`;
+
+  const all = groups.length > 0 && groups.every(approved);
+  $("go").className = state.applied ? "ready" : all ? "ready" : "";
+  $("go").innerHTML = state.applied ? `<span><b>Done.</b> <span class="next">${esc(state.applied.note)}</span></span>`
+    : state.go ? `<span><b>You said go.</b> <span class="next">${esc(state.next || "")}: the agent is on it.</span></span>`
+    : `<span><b>${all ? "Everything is approved." : "Next, once everything is approved:"}</b> <span class="next">${esc(state.next || "")}</span></span><button id="go-btn"${all ? "" : " disabled"}>Go</button>`;
+
+  for (const id of opened) { const d = $(id); if (d) d.open = true; }
+  if (kept) { const t = $(kept.id); if (t) { t.value = kept.value; if (kept.focus) t.focus(); } }
+  if ($("whole").open) showWhole(state);
+}
+
+function showWhole(state) {
+  $("whole-body").innerHTML = wholeDiff ? diffHtml(wholeDiff, "whole")
+    : `<p class="why">The agent did not attach the whole diff. This is every group's diff, one after the other${state.range ? `; the range is <code>${esc(state.range)}</code>` : ""}.</p>${diffHtml((state.groups || []).map((g) => g.diff).join("\n"), "whole")}`;
+}
+$("whole").addEventListener("toggle", () => $("whole").open && showWhole(jelly.state));
+
+const fail = (e) => alert(e.message);
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const group = b.closest("[data-group]")?.dataset.group;
+  if (b.id === "go-btn") return jelly.call("go").catch(fail);
+  if (b.id === "approve-mech") return jelly.call("approve", { groups: jelly.state.groups.filter((g) => g.mechanical).map((g) => g.id) }).catch(fail);
+  if (!group) return;
+  if (b.dataset.do) { composing = null; return jelly.call(b.dataset.do, { group }).catch(fail); }
+  if (b.dataset.open) {
+    composing = composing?.group === group && composing.kind === b.dataset.open ? null : { group, kind: b.dataset.open };
+    render(jelly.state);
+    $(`g-${group}-note`)?.focus();
+    return;
+  }
+  if (b.dataset.send) {
+    const note = $(`g-${group}-note`).value;
+    return jelly.call(b.dataset.send === "question" ? "question" : "push_back", { group, note }).then(() => { composing = null; render(jelly.state); }, fail);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches(".compose textarea")) { e.preventDefault(); e.target.nextElementSibling.click(); }
+});
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(render);
+jelly.onAttention?.(() => render(jelly.state));
+// The whole diff is an asset, outside state: `jelly asset review full.diff`.
+fetch("assets/full.diff").then((r) => (r.ok ? r.text() : null), () => null).then((t) => { wholeDiff = t || false; render(jelly.state); });
+</script>
+</body>
+</html>
