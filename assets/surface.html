@@ -1,0 +1,511 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>jelly</title>
+<meta name="jelly-comment" content="off">
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --dark: #0f1313; --dark-2: #161c1c; --dark-3: #1e2626; --dark-line: #232c2c;
+    --dark-ink: #dfe7e5; --dark-muted: #7d8b89; --dark-faint: #56625f;
+    --accent: #46c4b8; --accent-ink: #0f7b74; --warm: #e0a24f;
+    --page: #e9edec; --card: #fff; --ink: #18201f; --muted: #627170; --line: #dbe2e0;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink); overflow: hidden; }
+  button { font: inherit; color: inherit; }
+  .app { display: grid; grid-template-rows: 44px 1fr; grid-template-columns: 1fr 320px; height: 100%; }
+  .app.noboard { grid-template-columns: 1fr 0; }
+
+  /* top bar */
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: var(--dark); color: var(--dark-ink); border-bottom: 1px solid var(--dark-line); }
+  .top b { font-size: 15px; letter-spacing: -.01em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dark-faint); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 0 3px rgba(70,196,184,.15); }
+  .top .count { color: var(--dark-faint); font-size: 12px; }
+  .projects { display: flex; gap: 2px; margin-left: 10px; overflow-x: auto; min-width: 0; }
+  .projects a { color: var(--dark-muted); text-decoration: none; font-size: 12.5px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
+  .projects a:hover { color: var(--dark-ink); background: var(--dark-2); }
+  .projects a.on { color: var(--dark-ink); background: var(--dark-3); }
+  .projects a span { color: var(--dark-faint); margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .top .keys { margin-left: auto; color: var(--dark-faint); font-size: 11px; display: flex; gap: 10px; }
+  kbd { font: 10.5px ui-monospace, monospace; border: 1px solid var(--dark-line); border-radius: 4px; padding: 0 4px; color: var(--dark-muted); }
+
+  /* stream */
+  .streamwrap { position: relative; min-height: 0; display: grid; }
+  .stream { overflow-y: auto; min-height: 0; }
+  .col { max-width: 1040px; margin: 0 auto; padding: 24px 28px 40vh; display: flex; flex-direction: column; gap: 28px; }
+  .entry { scroll-margin-top: 16px; }
+  .entry header { display: grid; grid-template-columns: 28px 1fr auto; column-gap: 10px; align-items: start; margin-bottom: 10px; }
+  .av { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font: 600 12px -apple-system, sans-serif; background: #d5efec; color: var(--accent-ink); grid-row: span 2; }
+  .av.person { background: #f6e3c6; color: #8a5410; }
+  .who { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .who b { color: var(--ink); font-weight: 600; }
+  .who code { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); }
+  .who .last { color: var(--accent-ink); }
+  .entry h2 { grid-column: 2; font-size: 16px; line-height: 1.3; margin: 1px 0 0; font-weight: 600; letter-spacing: -.01em; }
+  .tag { font: 600 10.5px -apple-system, sans-serif; border-radius: 999px; padding: 1px 8px; background: var(--warm); color: #1b1407; }
+  .tag.soft { background: #f6e3c6; color: #8a5410; }
+  .acts { grid-row: 1 / span 2; grid-column: 3; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+  .entry:hover .acts, .entry.sel .acts, .acts:focus-within, .acts:has(.on) { opacity: 1; }
+  .btn { font-size: 12.5px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: #b4c0be; }
+  .btn.on { background: var(--warm); border-color: var(--warm); color: #1b1407; }
+  .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.quiet:hover { background: var(--card); border-color: var(--line); color: var(--ink); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .frame { position: relative; border-radius: 12px; overflow: hidden; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(16,24,23,.05), 0 12px 32px -18px rgba(16,24,23,.25); transition: box-shadow .2s, border-color .2s; }
+  .entry.sel .frame { border-color: #9fd9d2; box-shadow: 0 0 0 3px rgba(70,196,184,.18), 0 12px 32px -18px rgba(16,24,23,.25); }
+  .entry.pulse .frame { animation: pulse 1.2s ease-out; }
+  @keyframes pulse { from { box-shadow: 0 0 0 4px rgba(70,196,184,.55); } }
+  .entry.arrive { animation: arrive .45s cubic-bezier(.2,.8,.3,1); }
+  @keyframes arrive { from { opacity: 0; transform: translateY(14px); } }
+  .frame.tall { max-height: 760px; }
+  .frame .more { display: none; }
+  .frame.tall .more { display: flex; position: absolute; left: 0; right: 0; bottom: 0; height: 110px; align-items: flex-end; justify-content: center; padding-bottom: 16px; gap: 8px;
+    background: linear-gradient(rgba(255,255,255,0), #fff 70%); }
+  .frame iframe { display: block; width: 100%; height: 520px; border: 0; background: var(--card); }
+  .end { color: var(--muted); text-align: center; font-size: 12px; padding: 4px 0; }
+  .arch { margin: 12px auto 0; max-width: 720px; display: grid; gap: 4px; text-align: left; }
+  .ar { display: grid; grid-template-columns: 160px 1fr auto auto; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .ar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty code { font: 11.5px ui-monospace, monospace; background: #dfe5e3; padding: 1px 6px; border-radius: 4px; color: var(--ink); }
+  .empty { max-width: 460px; margin: 18vh auto 0; text-align: center; color: var(--muted); }
+  .empty h2 { color: var(--ink); font-size: 18px; margin: 0 0 8px; }
+  .newpill { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 5; max-width: 80%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--dark); color: var(--dark-ink); border: 0; border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; box-shadow: 0 10px 24px -8px rgba(0,0,0,.5); }
+
+  /* board */
+  aside { background: var(--dark); color: var(--dark-ink); border-left: 1px solid var(--dark-line); overflow-y: auto; min-height: 0; padding: 4px 12px 16px; }
+  .noboard aside { display: none; }
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr 0; } aside { display: none; } .top .keys { display: none; } .col { padding: 16px 14px 40vh; } }
+  .group { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--dark-faint); padding: 14px 4px 8px; display: flex; gap: 6px; }
+  .group .n { color: var(--dark-muted); }
+  .need { display: block; width: 100%; text-align: left; background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 10px; padding: 9px 11px; cursor: pointer; margin-bottom: 6px; }
+  .need:hover, .tile:hover { border-color: #3a4646; }
+  .need .t { display: flex; gap: 6px; align-items: center; font-weight: 600; }
+  .need .t .tag { margin-left: auto; }
+  .need .t span:not(.tag):not(.kind):not(.jn) { margin-left: auto; font-weight: 400; color: var(--dark-muted); font-size: 11px; }
+  .need .a { color: var(--dark-muted); margin-top: 2px; font-size: 12px; }
+  .need .q { color: var(--dark-ink); margin-top: 4px; font-weight: 500; }
+  .need .t .jn { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--dark-faint); font-weight: 400; }
+  .kind { font: 600 10px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 1px 7px; background: #3a3170; color: #cfc8ff; }
+  .kind.k-look { background: #133f3b; color: #8fe0d6; } .kind.k-reply { background: #4a3714; color: #f3cf8f; }
+  .aopts { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+  .aopt { font: 600 12px -apple-system, sans-serif; border: 1px solid #343e3e; background: #1e2626; color: var(--dark-ink); border-radius: 7px; padding: 4px 9px; cursor: pointer; }
+  .aopt:hover { border-color: #8b7cf6; }
+  .aopt.rec { border-color: #8b7cf6; background: #2a2450; }
+  .aopt.rec::after { content: " ★"; color: #b6abff; }
+  .tag.work { background: #133f3b; color: #8fe0d6; }
+  .tile { display: block; width: 100%; text-align: left; background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 10px; padding: 0; cursor: pointer; margin-bottom: 10px; overflow: hidden; }
+  .thumb { position: relative; height: 168px; overflow: hidden; background: var(--page); }
+  .thumb iframe { position: absolute; left: 0; top: 0; width: 1000px; height: 568px; border: 0; transform: scale(.296); transform-origin: 0 0; pointer-events: none; }
+  .tile .cap { padding: 8px 11px 9px; }
+  .tile .cap b { display: flex; gap: 6px; align-items: center; }
+  .tile .cap .n { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--warm); }
+  .tile .cap div { color: var(--dark-muted); font-size: 12px; margin-top: 1px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .quiet-note { color: var(--dark-faint); font-size: 12px; padding: 0 4px; }
+
+  /* full size */
+  .full { position: fixed; inset: 44px 0 0 0; z-index: 10; display: flex; flex-direction: column; background: var(--page); animation: open .18s ease-out; }
+  @keyframes open { from { opacity: 0; transform: scale(.985); } }
+  .full[hidden] { display: none; }
+  .fbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--line); min-height: 54px; }
+  .fbar .title { flex: 1; min-width: 0; }
+  .fbar h1 { font-size: 15px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .full iframe { flex: 1; width: 100%; border: 0; background: var(--card); }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="top">
+    <span class="dot" id="live"></span><b>jelly</b><nav class="projects" id="projects" aria-label="Projects"></nav>
+    <span class="keys"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span><span><kbd>b</kbd> board</span></span>
+  </div>
+  <div class="streamwrap">
+    <main class="stream" id="stream"><div class="col" id="col"></div></main>
+    <button class="newpill" id="newpill" hidden></button>
+  </div>
+  <aside id="board" aria-label="Board"></aside>
+</div>
+<section class="full" id="full" hidden>
+  <div class="fbar">
+    <button class="btn" id="back" title="Back to the stream (Esc)">← Back</button>
+    <div class="title"><h1 id="ftitle"></h1><div class="who" id="fmeta"></div></div>
+    <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
+    <button class="btn quiet" id="fundo">Undo</button>
+    <button class="btn quiet" id="fpin"></button>
+    <button class="btn quiet" id="frm">Remove</button>
+  </div>
+</section>
+<script>
+  // The stream: every unpinned jelly in the order agents made them, each with
+  // the agent's line of why. The board: what needs the person, and pinned jellies.
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const enc = encodeURIComponent;
+  let jellies = [];
+  const byName = (n) => jellies.find((j) => j.name === n);
+  const entries = new Map();   // name -> stream <article>
+  const tiles = new Map();     // name -> board tile
+  const lastEvent = new Map(); // name -> {text, by, at}
+  let sel = null, full = null, booted = false;
+  let archived = [], showArchived = false; // jellies hidden after a quiet week
+  // /p/<project> is this same page showing one project's jellies; /j/surface shows all.
+  const PROJECT = location.pathname.startsWith("/p/") ? decodeURIComponent(location.pathname.slice(3)) : null;
+  if (PROJECT) document.title = `${PROJECT} · jelly`;
+
+  function ago(ms) {
+    const s = Math.max(0, (Date.now() - ms) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+  // On a project page names show without their project; on All they show in full.
+  const short = (n) => (PROJECT && n.startsWith(PROJECT + ":") ? n.slice(PROJECT.length + 1) : n);
+  const who = (by) => (by === "person" ? "you" : by || "?");
+  let attentionItems = []; // open asks and looks across this page's jellies
+  function flags(j) {
+    const out = [];
+    if (j.working) out.push(`<span class="tag work">${esc(who(j.working.by))} is working</span>`);
+    if (j.decision === "open") out.push(`<span class="tag">ask</span>`);
+    if (j.attention) out.push(`<span class="tag">${j.attention} for you</span>`);
+    if (j.answered_comments) out.push(`<span class="tag soft">${j.answered_comments} answer${j.answered_comments > 1 ? "s" : ""}</span>`);
+    else if (j.open_comments) out.push(`<span>${j.open_comments} open comment${j.open_comments > 1 ? "s" : ""}</span>`);
+    return out.join("");
+  }
+
+  // ---- stream ---------------------------------------------------------------
+
+  // Same origin, so the stream reads each view's height and gives it all the
+  // room it needs: one scrollbar for the whole stream, none inside entries.
+  // A view that fills its window (height: 100%) keeps the default height.
+  function autosize(f) {
+    f.addEventListener("load", () => {
+      const doc = f.contentDocument;
+      if (!doc?.body) return;
+      const fit = () => {
+        const cs = getComputedStyle(doc.body);
+        // Comment popovers float outside the body's flow; make room for them too.
+        const pops = [...doc.querySelectorAll(".jf-pop")].map((p) => p.getBoundingClientRect().bottom + 12);
+        const h = Math.max(doc.body.scrollHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom), ...pops);
+        f.style.height = Math.max(140, Math.min(h, 6000)) + "px";
+        // A long jelly folds so the stream stays a stream; Show all unfolds it.
+        const frame = f.parentElement;
+        if (frame.classList.contains("frame") && !frame.dataset.open) frame.classList.toggle("tall", h > 900);
+      };
+      new ResizeObserver(fit).observe(doc.body);
+      new MutationObserver(fit).observe(doc.body, { childList: true });
+      fit();
+    });
+  }
+
+  function entryHead(j) {
+    const last = lastEvent.get(j.name);
+    return `<span class="av ${j.made_by === "person" ? "person" : ""}">${esc(who(j.made_by)[0].toUpperCase())}</span>
+      <div class="who"><b>${esc(who(j.made_by))}</b><span>${ago(j.created_ms)}</span><code>${esc(short(j.name))}</code>${flags(j)}
+        ${last ? `<span class="last">· ${esc(who(last.by))} ${esc(last.text)} ${ago(last.at)}</span>` : ""}</div>
+      <h2>${esc(j.about || j.name)}</h2>
+      <div class="acts">
+        <button class="btn" data-act="comment">Comment</button>
+        <button class="btn quiet" data-act="open" title="Open full size (↵)">Open</button>
+        <button class="btn quiet" data-act="pin" title="Keep it on the board">Pin</button>
+        <button class="btn quiet" data-act="rm">Remove</button>
+      </div>`;
+  }
+
+  function makeEntry(j) {
+    const a = document.createElement("article");
+    a.className = "entry";
+    a.dataset.name = j.name;
+    a.innerHTML = `<header></header><div class="frame"></div>`;
+    a.querySelector("header").innerHTML = entryHead(j);
+    const f = document.createElement("iframe");
+    f.src = `/j/${enc(j.name)}/`;
+    f.title = j.name;
+    autosize(f);
+    a.querySelector(".frame").appendChild(f);
+    a.querySelector(".frame").insertAdjacentHTML("beforeend", `<div class="more"><button class="btn" data-act="unfold">Show all</button><button class="btn quiet" data-act="open">Open full size</button></div>`);
+    return a;
+  }
+
+  function renderStream() {
+    const list = jellies.filter((j) => !j.pinned).sort((a, b) => a.created_ms - b.created_ms);
+    const col = $("col");
+    for (const [name, el] of entries) if (!list.some((j) => j.name === name)) { el.remove(); entries.delete(name); }
+    const fresh = [];
+    // Insert new entries where they belong without moving old ones: moving an
+    // iframe reloads it.
+    let prev = null;
+    for (const j of list) {
+      let el = entries.get(j.name);
+      if (!el) {
+        el = makeEntry(j);
+        entries.set(j.name, el);
+        if (prev) prev.after(el); else col.prepend(el);
+        if (booted) { el.classList.add("arrive"); fresh.push(el); }
+      } else {
+        const head = el.querySelector("header");
+        const on = head.querySelector(".on"); // keep comment mode across a re-render
+        head.innerHTML = entryHead(j);
+        if (on) setCommenting(head.querySelector('[data-act="comment"]'), true);
+      }
+      prev = el;
+    }
+    col.querySelector(".end")?.remove();
+    col.querySelector(".empty")?.remove();
+    col.insertAdjacentHTML("beforeend", list.length
+      ? `<div class="end">Agents add jellies here as they work. Pinned ones move to the board. Quiet ones archive after a week.${archivedNote()}</div>`
+      : (PROJECT ? `<div class="empty"><h2>Nothing in ${esc(PROJECT)} yet</h2>Agents working in that repo put their jellies here. Move one in with <code>jelly project NAME ${esc(PROJECT)}</code>.</div>` : `<div class="empty"><h2>Nothing in the stream</h2>Agents put things here as they work. Ask one to show you something, or run <code>jelly ask</code>.</div>`));
+    if (fresh.length) arrived(fresh.at(-1));
+  }
+
+  function archivedNote() {
+    if (!archived.length) return "";
+    const list = showArchived ? `<div class="arch">${archived.map((j) => `<div class="ar"><code>${esc(short(j.name))}</code><span>${esc(j.about)}</span><span>${ago(j.updated_ms)}</span><button class="btn quiet" data-restore="${esc(j.name)}">Restore</button></div>`).join("")}</div>` : "";
+    return ` <button class="btn quiet" data-toggle-arch>${showArchived ? "Hide" : "Show"} ${archived.length} archived</button>${list}`;
+  }
+
+  function arrived(el) {
+    const s = $("stream");
+    if (s.scrollHeight - s.scrollTop - s.clientHeight < 400) return select(el.dataset.name, true);
+    const pill = $("newpill");
+    pill.textContent = `↓ New: ${byName(el.dataset.name)?.about || el.dataset.name}`;
+    pill.hidden = false;
+    pill.onclick = () => { pill.hidden = true; select(el.dataset.name, true); };
+  }
+
+  // ---- board ----------------------------------------------------------------
+
+  function renderBoard() {
+    const pinned = jellies.filter((j) => j.pinned).sort((a, b) => a.name.localeCompare(b.name));
+    const board = $("board");
+    for (const [name, t] of tiles) if (!pinned.some((j) => j.name === name)) { t.remove(); tiles.delete(name); }
+    // Attention: every ask and look, plus comment threads the agent answered.
+    const replies = jellies.filter((j) => j.answered_comments > 0).map((j) => ({ jelly: j.name, kind: "reply", title: `${j.answered_comments} comment repl${j.answered_comments > 1 ? "ies" : "y"} from ${who(j.made_by)}`, about: j.about }));
+    const items = [...attentionItems, ...replies];
+    const card = (a) => {
+      const opts = a.kind === "ask" && a.options?.length
+        ? `<div class="aopts">${a.options.map((o) => `<button class="aopt ${o.id === a.recommend ? "rec" : ""}" data-answer="${esc(a.id)}" data-jelly="${esc(a.jelly)}" data-option="${esc(o.id)}" title="${esc(o.does || "")}">${esc(o.label || o.id)}</button>`).join("")}</div>` : "";
+      const seen = a.kind === "look" ? `<div class="aopts"><button class="aopt" data-answer="${esc(a.id)}" data-jelly="${esc(a.jelly)}">Seen</button></div>` : "";
+      const label = { ask: a.form ? "questions" : "ask", look: "look", reply: "reply" }[a.kind] || a.kind;
+      return `<div class="need" data-name="${esc(a.jelly)}"><div class="t"><span class="kind k-${a.kind}">${label}</span><span class="jn">${esc(short(a.jelly))}</span></div><div class="q">${esc(a.title)}</div>${a.why ? `<div class="a">${esc(a.why)}</div>` : ""}${opts}${seen}</div>`;
+    };
+    board.querySelector(".needs")?.remove();
+    board.insertAdjacentHTML("afterbegin", `<div class="needs"><div class="group">Attention<span class="n">${items.length || ""}</span></div>${items.length
+      ? items.map(card).join("")
+      : `<div class="quiet-note">Nothing is waiting on you.</div>`}</div>`);
+    let head = board.querySelector(".pinhead");
+    if (!head) { head = document.createElement("div"); head.className = "group pinhead"; board.appendChild(head); }
+    head.innerHTML = `Pinned<span class="n">${pinned.length || ""}</span>`;
+    board.querySelector(".pinnote")?.remove();
+    if (!pinned.length) head.insertAdjacentHTML("afterend", `<div class="quiet-note pinnote">Pin a jelly to keep it here.</div>`);
+    // Tiles hold live iframes: keep them and rewrite only the captions.
+    let prev = head;
+    for (const j of pinned) {
+      let t = tiles.get(j.name);
+      if (!t) {
+        t = document.createElement("button");
+        t.className = "tile";
+        t.dataset.name = j.name;
+        // A jelly's poster (assets/poster.*) stands in for the live thumbnail when it has one.
+        t.innerHTML = j.poster
+          ? `<div class="thumb"><img alt="" src="/j/${enc(j.name)}/assets/${enc(j.poster)}" style="width:100%;height:100%;object-fit:cover;object-position:top"></div><div class="cap"></div>`
+          : `<div class="thumb"><iframe tabindex="-1" src="/j/${enc(j.name)}/"></iframe></div><div class="cap"></div>`;
+        tiles.set(j.name, t);
+      }
+      t.querySelector(".cap").innerHTML = `<b>${esc(short(j.name))}<span class="n">${j.answered_comments ? "answered" : j.open_comments ? j.open_comments + " open" : ""}</span></b><div>${esc(j.about)}</div>`;
+      if (prev.nextElementSibling !== t) prev.after(t);
+      prev = t;
+    }
+  }
+
+  // ---- selection, full size -------------------------------------------------
+
+  function select(name, scroll) {
+    if (!name) return;
+    sel = name;
+    for (const [n, el] of entries) el.classList.toggle("sel", n === name);
+    if (scroll) entries.get(name)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
+  function openFull(name, fromAgent) {
+    if (!byName(name)) return;
+    if (full !== name) {
+      full = name;
+      $("full").querySelector("iframe")?.remove();
+      const f = document.createElement("iframe");
+      f.src = `/j/${enc(name)}/`;
+      f.title = name;
+      $("full").appendChild(f);
+    }
+    $("full").hidden = false;
+    renderFull();
+    setCommenting($("fcomment"), false);
+    if (!fromAgent && jelly.state.focus !== name) jelly.call("focus", { name }).catch(() => {});
+  }
+  function renderFull() {
+    const j = byName(full);
+    if (!j) return closeFull();
+    $("ftitle").textContent = j.about || j.name;
+    $("fmeta").innerHTML = `<code>${esc(short(j.name))}</code><span>by ${esc(who(j.made_by))}</span><span>v${j.version}</span><span>${ago(j.updated_ms)}</span>${flags(j)}`;
+    $("fpin").textContent = j.pinned ? "Unpin" : "Pin";
+  }
+  function closeFull(fromAgent) {
+    if (!full) return;
+    const was = full;
+    full = null;
+    $("full").hidden = true;
+    $("full").querySelector("iframe")?.remove();
+    if (entries.has(was)) select(was, true);
+    if (!fromAgent && jelly.state.focus) jelly.call("focus", { name: null }).catch(() => {});
+  }
+
+  // ---- comments -------------------------------------------------------------
+
+  function setCommenting(button, on) {
+    button.classList.toggle("on", on);
+    button.textContent = on ? "Click a part · Esc" : "Comment";
+  }
+  const frameOf = (name) => (full ? $("full").querySelector("iframe") : entries.get(name)?.querySelector("iframe"));
+  const buttonOf = (name) => (full ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
+  function toggleComment(name) {
+    const f = frameOf(name), b = buttonOf(name);
+    if (!f || !b) return;
+    const on = !b.classList.contains("on");
+    setCommenting(b, on);
+    f.contentWindow.postMessage({ type: "jelly:comment", on }, location.origin);
+    f.focus();
+  }
+  addEventListener("message", (e) => {
+    if (e.origin !== location.origin) return;
+    const d = e.data;
+    if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
+    if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
+    if (d?.type === "jelly:escape" && full) closeFull();
+  });
+
+  // ---- actions --------------------------------------------------------------
+
+  async function act(path, body, method = "POST") {
+    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: "person" }) });
+    if (!r.ok) alert((await r.json()).error);
+  }
+  const pin = (name) => act(`/api/jellies/${enc(name)}/pin`, { pinned: !byName(name).pinned });
+  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=person`, null, "DELETE"); };
+
+  $("col").addEventListener("click", (e) => {
+    const r = e.target.closest("[data-restore]");
+    if (r) return act(`/api/jellies/${enc(r.dataset.restore)}/restore`, {});
+    if (e.target.closest("[data-toggle-arch]")) { showArchived = !showArchived; return renderStream(); }
+    const name = e.target.closest(".entry")?.dataset.name;
+    if (!name) return;
+    select(name);
+    const b = e.target.closest("[data-act]");
+    if (b) ({ comment: () => toggleComment(name), open: () => openFull(name), unfold: () => { const fr = b.closest(".frame"); fr.dataset.open = 1; fr.classList.remove("tall"); }, pin: () => pin(name), rm: () => remove(name) })[b.dataset.act]();
+  });
+  $("board").addEventListener("click", (e) => {
+    const ab = e.target.closest("[data-answer]");
+    if (ab) {
+      e.stopPropagation();
+      return act(`/api/jellies/${enc(ab.dataset.jelly)}/attention/${enc(ab.dataset.answer)}/answer`, ab.dataset.option ? { option: ab.dataset.option } : {});
+    }
+    const name = e.target.closest("[data-name]")?.dataset.name;
+    if (!name) return;
+    if (entries.has(name) && !full) select(name, true); else openFull(name);
+  });
+  $("back").onclick = () => closeFull();
+  $("fcomment").onclick = () => toggleComment(full);
+  $("fundo").onclick = () => act(`/api/jellies/${enc(full)}/undo`, {});
+  $("fpin").onclick = () => pin(full);
+  $("frm").onclick = () => remove(full);
+  $("stream").addEventListener("scroll", () => {
+    const s = $("stream");
+    if (s.scrollHeight - s.scrollTop - s.clientHeight < 200) $("newpill").hidden = true;
+  });
+
+  addEventListener("keydown", (e) => {
+    if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape" && full) return closeFull();
+    if (e.key === "c") return toggleComment(full || sel);
+    if (full) return;
+    const names = [...entries.keys()].sort((a, b) => byName(a).created_ms - byName(b).created_ms);
+    const i = names.indexOf(sel);
+    if (e.key === "j" || e.key === "ArrowDown") { select(names[Math.min(names.length - 1, i + 1)], true); e.preventDefault(); }
+    if (e.key === "k" || e.key === "ArrowUp") { select(names[Math.max(0, i - 1)], true); e.preventDefault(); }
+    if (e.key === "Enter" && sel) openFull(sel);
+    if (e.key === "b") $("app").classList.toggle("noboard");
+  });
+
+  // ---- live -----------------------------------------------------------------
+
+  function describe(ev) {
+    if (ev.kind === "call") return ev.verb;
+    if (ev.kind === "comment") return "commented";
+    if (ev.kind === "reply") return "replied on a comment";
+    if (ev.kind === "reshape") return "reshaped it";
+    if (ev.kind === "working") return ev.args ? `started: ${ev.args}` : "finished";
+    if (ev.kind === "attention") return `asked: ${ev.args?.title || ""}`;
+    if (ev.kind === "answer") return "answered";
+    return ev.kind;
+  }
+
+  function renderProjects(all) {
+    const counts = {};
+    for (const j of all) if (j.project) counts[j.project] = (counts[j.project] || 0) + 1;
+    const link = (href, label, n, on) => `<a href="${href}" class="${on ? "on" : ""}">${esc(label)}<span>${n}</span></a>`;
+    $("projects").innerHTML = link("/j/surface", "All", all.length, !PROJECT)
+      + Object.keys(counts).sort().map((p) => link(`/p/${enc(p)}`, p, counts[p], p === PROJECT)).join("")
+      + (PROJECT && !counts[PROJECT] ? link(`/p/${enc(PROJECT)}`, PROJECT, 0, true) : "");
+  }
+
+  async function refresh() {
+    const all = (await (await fetch("/api/jellies")).json()).filter((j) => j.name !== "surface");
+    const live = all.filter((j) => !j.archived);
+    const scope = (list) => (PROJECT ? list.filter((j) => j.project === PROJECT) : list);
+    jellies = scope(live);
+    archived = scope(all.filter((j) => j.archived));
+    renderProjects(live);
+    attentionItems = await (await fetch(`/api/attention?project=${enc(PROJECT || "")}`)).json();
+    renderStream();
+    renderBoard();
+    if (full) renderFull();
+    if (!booted) {
+      booted = true;
+      // Open on the newest, like a conversation. Views above it settle their
+      // heights after load, so land once more when they have.
+      const last = [...entries.keys()].at(-1);
+      const land = () => last && entries.get(last).scrollIntoView({ block: "start" });
+      select(last, false);
+      land();
+      let moved = false;
+      $("stream").addEventListener("wheel", () => (moved = true), { once: true });
+      setTimeout(() => moved || land(), 900);
+      if (jelly.state.focus && byName(jelly.state.focus)) openFull(jelly.state.focus, true);
+    }
+  }
+
+  let pending = null;
+  jelly.events((ev) => {
+    $("live").classList.add("live");
+    if (ev.jelly === "surface") return;
+    if (ev.kind !== "remove") lastEvent.set(ev.jelly, { text: describe(ev), by: ev.by, at: ev.at_ms || Date.now() });
+    const el = entries.get(ev.jelly);
+    if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
+    clearTimeout(pending);
+    pending = setTimeout(refresh, 120); // one refresh per burst of changes
+  });
+  // An agent focusing the surface opens that jelly full size; null closes it.
+  jelly.onState((s, ev) => {
+    if (!ev || !booted) return;
+    if (s.focus && s.focus !== full) openFull(s.focus, true);
+    if (!s.focus && full) closeFull(true);
+  });
+  setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
+  $("live").classList.add("live");
+  refresh();
+</script>
+</body>
+</html>

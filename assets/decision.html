@@ -1,0 +1,408 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>decision</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f5f7f6; --card: #ffffff; --ink: #18201f; --muted: #627170; --line: #dfe5e3; --soft: #f0f3f2;
+    --accent: #0f7b74; --accent-soft: #e2f1ef; --warm: #b26a12; --warm-soft: #f8eedf; --bad: #b8382f; --good: #2f7d3b;
+    --stage: #121617;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  main { max-width: 1240px; margin: 0 auto; padding: 0 20px 120px; }
+  .eyebrow { font: 11px ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .status { border-radius: 999px; padding: 1px 8px; border: 1px solid currentColor; }
+  .status.open { color: var(--warm); } .status.answered { color: var(--accent); } .status.applied { color: var(--good); }
+  h1 { font-size: 24px; line-height: 1.2; margin: 6px 0 8px; max-width: 900px; text-wrap: balance; }
+  .context p { margin: 0 0 8px; max-width: 820px; color: #2b3534; }
+  .who { font: 10px ui-monospace, Menlo, monospace; color: var(--warm); margin-right: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .who.agent { color: var(--accent); }
+  .grow { flex: 1; }
+
+  /* Sticky progress bar: where you are, what is left. */
+  .bar { position: sticky; top: 0; z-index: 5; margin: 0 0 18px; padding: 10px 0; box-shadow: 0 0 0 100vmax var(--barbg), 0 1px 0 100vmax var(--barline); clip-path: inset(0 -100vmax -1px); --barline: var(--line); --barbg: rgba(245,247,246,.94); display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    background: var(--barbg); backdrop-filter: blur(8px); }
+  .bar.answered { --barbg: var(--ink); color: #eef3f2; --barline: var(--ink); }
+  .bar.applied { --barbg: var(--good); color: #fff; --barline: var(--good); }
+  .bar .count { font-weight: 600; white-space: nowrap; }
+  .bar .msg { color: inherit; opacity: .85; font-size: 13px; }
+  .meter { width: 120px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; flex: none; }
+  .meter i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
+  .bar.answered .meter, .bar.applied .meter { background: rgba(255,255,255,.2); } .bar.answered .meter i, .bar.applied .meter i { background: #fff; }
+  .dots { display: flex; gap: 4px; flex-wrap: wrap; }
+  .dots a { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; font: 600 11px ui-monospace, Menlo, monospace;
+    text-decoration: none; color: var(--muted); border: 1px solid var(--line); background: var(--card); }
+  .dots a.noted { border-color: var(--warm); color: var(--warm); }
+  .dots a.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dots a.none { background: var(--warm); border-color: var(--warm); color: #fff; }
+  .bar.answered .dots a:not(.done):not(.none), .bar.applied .dots a:not(.done):not(.none) { background: transparent; color: inherit; }
+  .bar.applied .dots a.done { background: #fff; color: var(--good); border-color: #fff; }
+
+  header.top { padding-top: 18px; margin-bottom: 18px; }
+  .single header.top { padding-top: 0; }
+
+  /* One card per question. */
+  .q { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px 10px; margin-bottom: 14px; scroll-margin-top: 64px; transition: border-color .2s; }
+  .q.done { border-color: #b9d9d5; }
+  .single .q { background: none; border: 0; padding: 0; }
+  .qh { display: grid; grid-template-columns: 28px 1fr auto; column-gap: 12px; align-items: start; }
+  .single .qh { display: none; }
+  .num { width: 28px; height: 28px; border-radius: 8px; background: var(--soft); color: var(--muted); display: grid; place-items: center; font: 700 13px ui-monospace, Menlo, monospace; }
+  .q.done .num { background: var(--accent); color: #fff; }
+  .q.none .num { background: var(--warm); color: #fff; }
+  .qh h2 { font-size: 17px; line-height: 1.3; margin: 3px 0 0; text-wrap: balance; }
+  .qh .context { grid-column: 2 / 4; margin-top: 4px; }
+  .qh .context p { margin: 0 0 4px; font-size: 13.5px; color: #3b4645; }
+  .state { font-size: 12px; color: var(--muted); white-space: nowrap; margin-top: 5px; }
+  .state b { color: var(--accent); }
+  .q.none .state b { color: var(--warm); }
+  .rec { margin: 8px 0 10px 40px; padding: 5px 12px; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; font-size: 13px; }
+  .rec b { color: var(--accent); }
+  .single .rec { margin: 0 0 16px; padding: 10px 14px; font-size: 14px; max-width: 900px; }
+
+  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; align-items: stretch; margin-left: 40px; }
+  .options:has(.stage) { align-items: start; }
+  .single .options { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; margin-left: 0; align-items: start; }
+  .opt { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; cursor: pointer;
+    transition: box-shadow .15s, border-color .15s, opacity .15s; }
+  .opt:hover { border-color: #b8c3c1; }
+  .opt.recommended { border-color: #9fcac5; }
+  .opt.picked { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); background: #fbfefd; }
+  .q.answered .opt:not(.picked) { opacity: .72; }
+  .q.answered .opt:not(.picked):hover { opacity: 1; }
+  .oh { display: flex; gap: 9px; align-items: flex-start; padding: 11px 12px 0; }
+  .oh .tt { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+  .letter { flex: none; width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+  .opt.picked .letter { background: var(--accent); }
+  .oh h3 { font-size: 14.5px; margin: 1px 0 0; line-height: 1.3; }
+  .oh .tags { display: inline-flex; gap: 5px; flex-wrap: wrap; position: relative; top: -1px; }
+  .oh .tags:empty { display: none; }
+  .tag { font: 10px ui-monospace, Menlo, monospace; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .tag.recd { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .summary { padding: 6px 12px 0; margin: 0; font-size: 13px; color: #2b3534; }
+  .tradeoffs { padding: 8px 12px 0; display: grid; gap: 6px; }
+  .opt { container-type: inline-size; }
+  @container (min-width: 440px) { .tradeoffs { grid-template-columns: 1fr 1fr; gap: 12px; } }
+  .tradeoffs h4 { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; margin: 0 0 2px; }
+  .tradeoffs ul { margin: 0; padding: 0; list-style: none; font-size: 12.5px; line-height: 1.4; }
+  .tradeoffs li { padding-left: 14px; position: relative; margin-bottom: 2px; }
+  .tradeoffs li::before { position: absolute; left: 0; font-weight: 700; }
+  .gains h4 { color: var(--good); } .gains li::before { content: "+"; color: var(--good); }
+  .costs h4 { color: var(--bad); } .costs li::before { content: "\2212"; color: var(--bad); }
+  .of { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px; margin-top: auto; }
+  .pickbtn { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 4px 10px 4px 7px; }
+  .pickbtn::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--muted); box-sizing: border-box; }
+  .opt.picked .pickbtn { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .opt.picked .pickbtn::before { border: 3.5px solid #fff; background: var(--accent); }
+  .pv { font-size: 12px; color: var(--accent); border-color: transparent; background: var(--accent-soft); padding: 4px 10px; }
+  .pv:hover { border-color: var(--accent); }
+  .pv[aria-expanded="true"] { background: none; border-color: var(--line); color: var(--muted); }
+
+  .stage { position: relative; background: var(--stage); margin: 10px 12px 0; border-radius: 9px; overflow: hidden; cursor: default; }
+  .stage iframe { display: block; width: 100%; height: 220px; border: 0; background: var(--stage); }
+  .single .stage { margin: 12px 14px 0; border-radius: 10px; }
+  .single .stage iframe { height: 260px; }
+  .stage .expand { position: absolute; right: 8px; bottom: 8px; font-size: 11px; opacity: 0; transition: opacity .15s; }
+  .stage:hover .expand, .stage .expand:focus-visible { opacity: .95; }
+
+  /* The note row sits under the options, always visible. */
+  .say { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "field btns" "hint ."; gap: 0 8px; align-items: start; margin: 10px 0 0 40px; }
+  .say textarea { grid-area: field; } .say .hint { grid-area: hint; } .say .btns { grid-area: btns; }
+  .single .say { margin: 18px 0 0; max-width: 900px; }
+  textarea { width: 100%; display: block; font: 13px/1.45 -apple-system, sans-serif; border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px;
+    background: var(--soft); color: var(--ink); resize: none; field-sizing: content; min-height: 34px; max-height: 220px; transition: background .15s, border-color .15s; }
+  textarea:hover { border-color: #c9d2d0; }
+  textarea:focus { outline: none; background: var(--card); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  textarea.saved { background: var(--warm-soft); border-color: #ecd9bb; }
+  textarea.saved:focus { background: var(--card); }
+  .hint { font-size: 11.5px; color: var(--muted); margin: 3px 2px 0; min-height: 16px; }
+  .hint.err { color: var(--bad); }
+  .say .btns { display: flex; gap: 6px; flex: none; }
+  button { font: 13px -apple-system, sans-serif; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.nonebtn.on { background: var(--warm); border-color: var(--warm); color: #fff; }
+  button.quiet { border-color: transparent; background: none; color: var(--muted); }
+  button.quiet:hover { color: var(--ink); border-color: var(--line); }
+
+  /* The person's own questions and context. */
+  .more { margin-top: 26px; background: var(--card); border: 1px dashed #c9d2d0; border-radius: 14px; padding: 16px 18px; }
+  .more h2 { font-size: 15px; margin: 0 0 2px; }
+  .more .sub { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+  .more .row { display: flex; gap: 8px; align-items: flex-start; }
+  .more .row .field { flex: 1; min-width: 0; }
+  .more ul { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+  .more li { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px 7px 12px; background: var(--warm-soft); border-radius: 9px; font-size: 13.5px; }
+  .more li .t { flex: 1; white-space: pre-wrap; padding-top: 2px; }
+  .more li button { padding: 1px 8px; font-size: 16px; line-height: 1.3; }
+
+  .history { margin-top: 26px; color: var(--muted); max-width: 900px; font-size: 13px; }
+  .history summary { cursor: pointer; }
+  .history .round { margin: 10px 0 0 12px; }
+  .history .round ul { margin: 2px 0 0; padding-left: 18px; }
+
+  .light { position: fixed; inset: 0; z-index: 50; background: rgba(10,13,13,.86); display: flex; flex-direction: column; padding: 18px; }
+  .light .lbar { display: flex; color: #fff; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .light iframe { flex: 1; width: 100%; border: 0; border-radius: 10px; background: var(--stage); }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 60; background: var(--bad); color: #fff; padding: 8px 14px; border-radius: 9px; font-size: 13px; max-width: calc(100% - 32px); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; }
+
+  @media (max-width: 720px) {
+    main { padding: 0 16px 80px; }
+    .bar { margin: 0 0 14px; padding: 8px 0; gap: 8px 12px; }
+    .bar .msg { display: none; }
+    .meter { width: 70px; }
+    .q { padding: 14px 14px 12px; }
+    .rec, .options, .say { margin-left: 0; }
+    .qh { grid-template-columns: 28px 1fr; }
+    .qh .state { grid-column: 2; margin-top: 2px; }
+    .qh .context { grid-column: 1 / 3; }
+    .say { grid-template-areas: "field field" "hint btns"; }
+    .say .btns { margin-top: 6px; } .say .hint { margin-top: 10px; }
+    .options, .single .options { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main id="root"><div class="empty">Waiting for the agent to lay out the questions…</div></main>
+<script>
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const letter = (i) => String.fromCharCode(65 + i);
+  const who = (by) => `<span class="who ${by === "person" ? "" : "agent"}">${by === "person" ? "you" : esc(by)}</span>`;
+  const paras = (t) => String(t || "").split(/\n\s*\n/).filter(Boolean).map((p) => `<p>${esc(p)}</p>`).join("");
+  const frames = new Map(); // running previews, kept alive across renders
+  const shown = new Set(); // previews the person opened
+  const drafts = new Map(); // unsaved text per field, so a render never eats typing
+  const hints = new Map(); // inline messages per question
+  const qOf = (el) => el.closest("[data-q]")?.dataset.q;
+  const findQ = (id) => jelly.state.questions.find((q) => q.id === id);
+
+  function toast(msg) {
+    document.querySelector(".toast")?.remove();
+    const t = Object.assign(document.createElement("div"), { className: "toast", textContent: msg });
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 4000);
+  }
+  const call = (verb, args) => jelly.call(verb, args).catch((e) => { toast(e.message); throw e; });
+
+  function frame(key, o) {
+    let f = frames.get(key);
+    if (!f || f.html !== o.preview) {
+      const iframe = document.createElement("iframe");
+      // Previews are untrusted agent HTML: scripts run, but they cannot reach jelly.
+      iframe.setAttribute("sandbox", "allow-scripts allow-forms");
+      iframe.title = `Preview of ${o.title}`;
+      iframe.srcdoc = o.preview + sizer(key);
+      f = { html: o.preview, iframe };
+      frames.set(key, f);
+    }
+    return f.iframe;
+  }
+
+  // Previews report how tall their content is, so each frame fits it. Pages
+  // that fill the frame (height: 100%) report the frame's own height and stay put.
+  const sizer = (id) => `<script>(() => { const send = () => { const b = document.body; if (!b) return;
+    const bottom = Math.max(0, ...[...b.children].map((e) => e.getBoundingClientRect().bottom + scrollY));
+    const cs = getComputedStyle(b); parent.postMessage({ jellyPreview: ${JSON.stringify(id)}, h: Math.ceil(bottom + parseFloat(cs.paddingBottom) + parseFloat(cs.marginBottom)) }, "*"); };
+    addEventListener("load", () => { send(); new ResizeObserver(send).observe(document.body); setInterval(send, 1500); }); })();<\/script>`;
+  addEventListener("message", (e) => {
+    const f = e.data && frames.get(e.data.jellyPreview);
+    if (!f || e.source !== f.iframe.contentWindow) return;
+    const h = Math.min(560, Math.max(200, e.data.h));
+    if (Math.abs(f.iframe.offsetHeight - h) > 3) f.iframe.style.height = h + "px";
+  });
+
+  function lightbox(o) {
+    const box = document.createElement("div");
+    box.className = "light";
+    box.innerHTML = `<div class="lbar"><b>${esc(o.title)}</b><span class="grow"></span><button>Close · Esc</button></div>`;
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts allow-forms");
+    iframe.srcdoc = o.preview;
+    box.appendChild(iframe);
+    const close = () => { box.remove(); removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    box.querySelector("button").onclick = close;
+    addEventListener("keydown", onKey);
+    document.body.appendChild(box);
+  }
+
+  function answerText(q) {
+    if (!q.answer) return q.note ? "note only" : "not answered";
+    if (q.answer.kind === "none") return "<b>None of these</b>";
+    const i = q.options.findIndex((o) => o.id === q.answer.option);
+    return `<b>${letter(i)}: ${esc(q.options[i]?.title)}</b>`;
+  }
+
+  function optionHtml(q, o, i, single) {
+    const key = `${q.id}/${o.id}`;
+    const picked = q.answer?.kind === "pick" && q.answer.option === o.id;
+    const open = o.preview && (single || shown.has(key));
+    return `<section class="opt${o.id === q.recommend ? " recommended" : ""}${picked ? " picked" : ""}" id="opt-${esc(key)}" data-option="${esc(o.id)}">
+      <div class="oh"><span class="letter">${letter(i)}</span><div class="tt"><h3>${esc(o.title)}</h3>
+        <span class="tags">${o.id === q.recommend ? `<span class="tag recd">recommended</span>` : ""}${o.effort ? `<span class="tag">effort ${esc(o.effort)}</span>` : ""}</span></div></div>
+      ${open ? `<div class="stage" data-key="${esc(key)}"><button class="expand">Expand</button></div>` : ""}
+      ${o.summary ? `<p class="summary">${esc(o.summary)}</p>` : ""}
+      ${o.gains.length || o.costs.length ? `<div class="tradeoffs">
+        ${o.gains.length ? `<div class="gains"><h4>Gains</h4><ul>${o.gains.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : ""}
+        ${o.costs.length ? `<div class="costs"><h4>Costs</h4><ul>${o.costs.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>` : ""}</div>` : ""}
+      <div class="of"><button class="pickbtn" data-v="pick" aria-pressed="${picked}">${picked ? "Picked" : "Pick " + letter(i)}</button>
+        <span class="grow"></span>${o.preview && !single ? `<button class="pv" data-v="preview" aria-expanded="${open}">${open ? "Hide preview" : "Preview"}</button>` : ""}</div>
+    </section>`;
+  }
+
+  function questionHtml(q, n, single) {
+    const recIdx = q.options.findIndex((o) => o.id === q.recommend);
+    const none = q.answer?.kind === "none";
+    const fid = `note-${q.id}`;
+    const value = drafts.has(fid) ? drafts.get(fid) : q.note?.text || "";
+    const hint = hints.get(q.id);
+    const cls = ["q", q.answer ? "done" : "", q.answer?.kind === "pick" ? "answered" : "", none ? "none" : ""].join(" ");
+    return `<article class="${cls}" id="q-${esc(q.id)}" data-q="${esc(q.id)}">
+      <div class="qh"><span class="num">${n}</span><h2>${esc(q.question)}</h2><span class="state">${answerText(q)}</span>
+        ${q.context ? `<div class="context">${paras(q.context)}</div>` : ""}</div>
+      ${recIdx >= 0 ? `<div class="rec">The agent recommends <b>${letter(recIdx)}: ${esc(q.options[recIdx].title)}</b>${q.why ? ". " + esc(q.why) : "."}</div>` : ""}
+      <div class="options">${q.options.map((o, i) => optionHtml(q, o, i, single)).join("")}</div>
+      <div class="say">
+        <textarea id="${esc(fid)}" class="note${q.note && !drafts.has(fid) ? " saved" : ""}" rows="1"
+          placeholder="Add context or a condition${none ? " (say what is missing)" : ""}" aria-label="Note on: ${esc(q.question)}">${esc(value)}</textarea>
+          <div class="hint${hint?.err ? " err" : ""}">${hint ? esc(hint.text) : q.note ? (q.note.by === "person" ? "Saved" : `${who(q.note.by)}wrote this`) : "Saves when you click away, or ⌘↵"}</div>
+        <div class="btns"><button class="nonebtn${none ? " on" : ""}" data-v="none" aria-pressed="${none}">None of these</button>
+          ${q.answer ? `<button class="quiet" data-v="clear">Clear</button>` : ""}</div>
+      </div>
+    </article>`;
+  }
+
+  function render(s) {
+    if (!s.questions) return;
+    const root = document.getElementById("root");
+    const single = s.questions.length === 1;
+    document.body.classList.toggle("single", single);
+    const done = s.questions.filter((q) => q.answer).length;
+    const total = s.questions.length;
+    const title = single ? s.questions[0].question : s.title || "Questions from the agent";
+
+    // Keep focus and caret across the re-render.
+    const act = document.activeElement;
+    const keep = act?.id && act.tagName === "TEXTAREA" ? { id: act.id, a: act.selectionStart, b: act.selectionEnd } : null;
+
+    const msg = s.status === "applied"
+      ? `${who(s.applied.by)}applied it${s.applied.note ? ": " + esc(s.applied.note) : "."}`
+      : s.status === "answered" ? "The agent has your answers. Change any of them and it hears about it."
+      : single ? "Pick an option, or say what is missing." : "Pick one option per question. Add a note wherever you have a condition.";
+    const bar = `<div class="bar ${s.status}" id="progress">
+      <span class="count">${single ? (done ? "Answered" : "Not answered yet") : `${done} of ${total} answered`}</span>
+      ${single ? "" : `<span class="meter"><i style="width:${(100 * done) / total}%"></i></span>
+      <nav class="dots">${s.questions.map((q, i) => `<a href="#q-${esc(q.id)}" title="${esc(q.question)}" class="${q.answer ? (q.answer.kind === "none" ? "none" : "done") : q.note ? "noted" : ""}">${i + 1}</a>`).join("")}</nav>`}
+      <span class="msg">${msg}</span></div>`;
+
+    const addId = "add-text";
+    const added = s.added || [];
+    root.innerHTML = `${bar}
+      <header class="top">
+        <div class="eyebrow"><span>Ask · round ${s.round || 1}</span><span class="status ${s.status}">${s.status}</span>
+          <span>${single ? `${s.questions[0].options.length} options` : `${total} questions`}</span></div>
+        <h1 id="title">${esc(title)}</h1>
+        ${s.context ? `<div class="context" id="context">${paras(s.context)}</div>` : ""}
+      </header>
+      <div id="questions">${s.questions.map((q, i) => questionHtml(q, i + 1, single)).join("")}</div>
+      <section class="more" id="added">
+        <h2>Add a question or context for the agent</h2>
+        <p class="sub">Something the agent did not ask, or something it should know. It reads these with your answers.</p>
+        <div class="row"><div class="field"><textarea id="${addId}" rows="1" placeholder="e.g. What happens to jellies when I switch machines?">${esc(drafts.get(addId) || "")}</textarea></div>
+          <button class="primary" data-v="add">Add</button></div>
+        ${added.length ? `<ul>${added.map((a) => `<li data-added="${esc(a.id)}">${who(a.by)}<span class="t">${esc(a.text)}</span><button class="quiet" data-v="drop" title="Remove" aria-label="Remove">×</button></li>`).join("")}</ul>` : ""}
+      </section>
+      ${historyHtml(s.history)}`;
+
+    root.querySelectorAll(".stage").forEach((st) => {
+      const [qid, oid] = st.dataset.key.split("/");
+      const o = s.questions.find((q) => q.id === qid).options.find((o) => o.id === oid);
+      st.prepend(frame(st.dataset.key, o));
+      st.querySelector(".expand").onclick = (e) => { e.stopPropagation(); lightbox(o); };
+    });
+    if (keep) {
+      const el = document.getElementById(keep.id);
+      if (el) { el.focus({ preventScroll: true }); el.setSelectionRange(keep.a, keep.b); }
+    }
+  }
+
+  function historyHtml(history) {
+    if (!history?.length) return "";
+    const line = (h) => {
+      // Rounds from before decisions held several questions have one at the top level.
+      const qs = h.questions || [{ question: h.question, options: h.options || [], answer: h.answer, note: h.answer?.note ? { text: h.answer.note } : null }];
+      const a = (q) => !q.answer ? "no answer" : q.answer.kind === "none" ? "none of these" : "picked " + esc((q.options.find((o) => o.id === q.answer.option) || {}).title);
+      return `<div class="round">Round ${h.round}${h.title ? ": " + esc(h.title) : ""}<ul>${qs.map((q) => `<li>${esc(q.question)} · ${a(q)}${q.note ? ` · "${esc(q.note.text)}"` : ""}</li>`).join("")}${(h.added || []).map((x) => `<li>Added: ${esc(x.text)}</li>`).join("")}</ul></div>`;
+    };
+    return `<details class="history"><summary>${history.length} earlier round${history.length > 1 ? "s" : ""}</summary>${history.map(line).join("")}</details>`;
+  }
+
+  // Notes save when the field loses focus or on Cmd/Ctrl+Enter.
+  function saveNote(ta) {
+    const qid = qOf(ta);
+    const q = findQ(qid);
+    const text = ta.value.trim();
+    if (text === (q.note?.text || "")) { drafts.delete(ta.id); return; }
+    call("note", { q: qid, text }).then(
+      () => { drafts.delete(ta.id); hints.delete(qid); render(jelly.state); },
+      (e) => { hints.set(qid, { text: e.message, err: true }); render(jelly.state); },
+    );
+  }
+  function addItem() {
+    const ta = document.getElementById("add-text");
+    if (!ta.value.trim()) return ta.focus();
+    call("add", { text: ta.value }).then(() => { drafts.delete("add-text"); ta.value = ""; render(jelly.state); }, () => {});
+  }
+
+  document.addEventListener("input", (e) => { if (e.target.tagName === "TEXTAREA") drafts.set(e.target.id, e.target.value); });
+  document.addEventListener("focusout", (e) => { if (e.target.classList?.contains("note") && drafts.has(e.target.id)) saveNote(e.target); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.target.tagName !== "TEXTAREA") return;
+    e.preventDefault();
+    if (e.target.id === "add-text") addItem(); else saveNote(e.target);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".stage, .light, a, textarea")) return;
+    const b = e.target.closest("button[data-v]");
+    const v = b?.dataset.v || (e.target.closest(".opt") ? "pick" : null);
+    if (!v) return;
+    const qid = qOf(e.target);
+    const q = qid && findQ(qid);
+    const draft = q && drafts.get(`note-${qid}`);
+    const withNote = draft !== undefined ? { note: draft } : {};
+    const after = () => { drafts.delete(`note-${qid}`); hints.delete(qid); render(jelly.state); };
+    if (v === "pick") {
+      const opt = e.target.closest(".opt").dataset.option;
+      if (q.answer?.kind === "pick" && q.answer.option === opt) return call("clear", { q: qid }).catch(() => {});
+      return call("pick", { q: qid, option: opt, ...withNote }).then(after, () => {});
+    }
+    if (v === "none") {
+      if (q.answer?.kind === "none") return call("clear", { q: qid }).catch(() => {});
+      const text = (draft ?? q.note?.text ?? "").trim();
+      if (!text) {
+        hints.set(qid, { text: "Say what is missing in the note first, then press None of these again.", err: true });
+        render(jelly.state);
+        return document.getElementById(`note-${qid}`).focus();
+      }
+      return call("pick", { q: qid, option: null, note: text }).then(after, () => {});
+    }
+    if (v === "clear") return call("clear", { q: qid }).catch(() => {});
+    if (v === "preview") {
+      const key = `${qid}/${e.target.closest(".opt").dataset.option}`;
+      shown.has(key) ? shown.delete(key) : shown.add(key);
+      return render(jelly.state);
+    }
+    if (v === "add") return addItem();
+    if (v === "drop") return call("drop", { id: b.closest("[data-added]").dataset.added }).catch(() => {});
+  });
+
+  jelly.onState(render);
+</script>
+</body>
+</html>
