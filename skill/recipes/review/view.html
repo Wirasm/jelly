@@ -159,14 +159,17 @@ let composing = null; // { group, kind }
 let wholeDiff = null; // text of assets/full.diff once loaded, false if there is none
 
 // The picture of a change: before and after. Terminal text, images, or live HTML.
+// `show` may be a list of pictures; `labels` renames the two sides, and
+// `compare: "side"` puts two images next to each other instead of under a slider.
 function hero(show, id) {
+  if (Array.isArray(show)) return show.map((s, i) => hero(s, `${id}-${i + 1}`)).join("");
   if (!show) return "";
-  const kind = show.kind || "terminal";
-  if (kind === "image" && show.before && show.after) {
+  const kind = show.kind || "terminal", [lb, la] = show.labels || ["before", "after"];
+  if (kind === "image" && show.before && show.after && show.compare !== "side") {
     return `<div class="wipe" id="${id}-show"><img src="${esc(show.after)}" alt="after"><div class="b"><img src="${esc(show.before)}" alt="before"></div>
-      <span class="tag l">before</span><span class="tag r">after</span><input type="range" min="0" max="100" value="50" aria-label="Drag to compare before and after"></div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
+      <span class="tag l">${esc(lb)}</span><span class="tag r">${esc(la)}</span><input type="range" min="0" max="100" value="50" aria-label="Drag to compare before and after"></div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
   }
-  const pane = (side, v) => v == null ? "" : `<div class="pane ${side}" id="${id}-${side}"><b>${side}</b>${
+  const pane = (side, v) => v == null ? "" : `<div class="pane ${side}" id="${id}-${side}"><b>${esc(side === "before" ? lb : la)}</b>${
     kind === "html" ? `<iframe sandbox="allow-scripts" srcdoc="${esc(v)}" title="${side}"></iframe>` : kind === "image" ? `<img src="${esc(v)}" alt="${side}">` : `<pre>${term(v)}</pre>`}</div>`;
   const both = show.before != null && show.after != null;
   return `<div class="hero${both ? "" : " one"}">${pane("before", show.before)}${pane("after", show.after)}</div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;

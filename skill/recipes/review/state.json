@@ -1,105 +1,148 @@
 {
-  "title": "Asks warn when their anchor matches nothing",
-  "ask": "When I ask about a part of the page that does not exist, tell me right away instead of saying it worked.",
-  "range": "main..ask-anchor-check",
-  "total_lines": 29,
-  "next": "Commit and push to ask-anchor-check",
-  "outcomes": [
-    {
-      "id": "warns",
-      "text": "ask warns about a dead --at",
-      "status": "seen",
-      "evidence": "$ jelly ask plan \"Which order?\" --at \"#nope\"\ndemo:plan v4: asked a2 \"Which order?\"; #nope matches nothing on the page, so it shows at the top"
-    },
-    {
-      "id": "still-asks",
-      "text": "The ask is still created",
-      "status": "tested",
-      "evidence": "$ cargo test ask_with_dead_anchor\ntest store::tests::ask_with_dead_anchor_is_kept ... ok"
-    },
-    {
-      "id": "no-browser",
-      "text": "No browser: says it was not checked",
-      "status": "unverified",
-      "evidence": "This machine has Chrome, so I could not make the no-browser case happen. The code path is in group \"reply\"."
-    }
-  ],
+  "applied": null,
+  "ask": "Issue #5: jelly ask says so when its --at matches nothing",
+  "go": null,
   "groups": [
     {
-      "id": "check",
-      "intent": "Check the anchor before replying",
-      "outcome": "warns",
-      "risk": "medium",
-      "why": "Adds a headless render to every anchored ask: about a second slower.",
-      "evidence": "Ran it against a view with #list and without #nope; both replies were right.",
+      "diff": "--- a/src/server.rs\n+++ b/src/server.rs\n@@ -488,7 +488,54 @@ struct AttendReq {\n }\n \n-async fn attend(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AttendReq>) -> Result<Json<Event>, ApiError> {\n+async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {\n     let by = r.spec[\"by\"].as_str().map(String::from);\n-    app.change(|s| s.attend(&name, r.spec, &self::by(by)?))\n+    let Json(ev) = app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?;\n+    let mut out = json!(ev);\n+    // Tell the asker where the card really shows. The item is made either way,\n+    // and the event that listeners and the log get is unchanged.\n+    let args = ev.args.unwrap_or_default();\n+    if args[\"anchor\"][\"selector\"].is_string() {\n+        match anchor_matches(&app, port_of(&headers), &name, args[\"id\"].as_str().unwrap_or(\"\"), ev.version).await {\n+            Ok(hit) => out[\"anchored\"] = json!(hit),\n+            Err(why) => out[\"anchor_unchecked\"] = json!(why),\n+        }\n+    }\n+    Ok(Json(out))\n+}\n+\n+/// How long an ask waits for a browser before it answers \"not checked\".\n+const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);\n+\n+/// Whether an open item's anchor matches something on the page, from a\n+/// snapshot of this version: one rendered now, or an open view's. `Err` says\n+/// why it could not be checked.\n+async fn anchor_matches(app: &App, port: u16, name: &str, item: &str, version: u64) -> Result<bool, String> {\n+    let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);\n+    tokio::pin!(render);\n+    // The browser often posts its snapshot and then lingers, so answer as soon\n+    // as the snapshot is in; dropping the render stops the browser.\n+    let mut rendered: Option<(Result<(), String>, std::time::Instant)> = None;\n+    loop {\n+        let snap = app.screens.lock().expect(\"screens lock\").get(name).filter(|s| s.version >= version).cloned();\n+        if let Some(s) = snap {\n+            return Ok(!s.missing.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item)));\n+        }\n+        match &rendered {\n+            // The browser is gone: give its snapshot a moment to land, then give up.\n+            Some((r, at)) if at.elapsed() > std::time::Duration::from_secs(2) => {\n+                return Err(r.clone().err().unwrap_or_else(|| \"the page rendered but sent no snapshot\".into()));\n+            }\n+            Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,\n+            None => tokio::select! {\n+                r = &mut render => rendered = Some((r, std::time::Instant::now())),\n+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}\n+            },\n+        }\n+    }\n+}\n+\n+/// The port this request came in on, for rendering our own pages.\n+fn port_of(headers: &axum::http::HeaderMap) -> u16 {\n+    headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878)\n }\n \n",
+      "evidence": "Seven asks in a row against one daemon, in ms:\n3745  730  725  720  725  775  724\n\nBefore this change: 4 ms.\n\nThe first version waited for the browser to exit and took 8 s most times: headless Chrome posts its snapshot and then lingers. Now the check answers when the snapshot is in.",
       "files": [
         "src/server.rs"
       ],
-      "diff": "--- a/src/server.rs\n+++ b/src/server.rs\n@@ -498,6 +498,14 @@ async fn attend(\n     let ev = store.attend(&name, spec)?;\n+    // Look at the page once, so the reply can say where the card really shows.\n+    let anchored = match ev.args.as_ref().and_then(|a| a[\"anchor\"][\"selector\"].as_str()) {\n+        Some(sel) => match snapshot(&app, &name).await {\n+            Ok(snap) => Some(!snap.missing.iter().any(|m| m.ends_with(sel))),\n+            Err(_) => None,\n+        },\n+        None => Some(true),\n+    };\n     Ok(Json(json!(ev)))\n",
-      "show": {
-        "kind": "terminal",
-        "before": "$ jelly ask plan \"Which order?\" --at \"#nope\"\nasked a2 \"Which order?\"; it shows on the page below #nope",
-        "after": "$ jelly ask plan \"Which order?\" --at \"#nope\"\nasked a2 \"Which order?\"; #nope matches nothing on the page, so it shows at the top",
-        "caption": "The page has no #nope. Before, the reply claimed a place the card never went."
-      }
+      "id": "check",
+      "intent": "Check the anchor when asking",
+      "outcome": [
+        "warns",
+        "created"
+      ],
+      "risk": "medium",
+      "show": [
+        {
+          "after": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\n#nope matches nothing on the page, so it shows at the top",
+          "before": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\nit shows on the page below #nope",
+          "caption": "The page has no #nope. Before, the reply named a place the card never went.",
+          "kind": "terminal"
+        },
+        {
+          "after": "assets/card-dead.png",
+          "before": "assets/card-good.png",
+          "caption": "Where the person sees the card. The page did this already; now the reply tells the agent which one happened.",
+          "compare": "side",
+          "kind": "image",
+          "labels": [
+            "--at \"#list\": there",
+            "--at \"#nope\": not there"
+          ]
+        }
+      ],
+      "why": "Every ask with --at now renders the page once: about 0.7 s instead of 4 ms."
     },
     {
+      "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -661,6 +661,5 @@ fn report(ev: Value) -> Result<(), String> {\n     let what = match ev[\"kind\"].as_str().unwrap_or(\"\") {\n         \"call\" => format!(\"{} ran\", s(&ev[\"verb\"])),\n-        \"attention\" => format!(\"asked {} {:?}; it shows on the page{}. Answers arrive in `jelly inbox`\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]),\n-            ev[\"args\"][\"anchor\"][\"selector\"].as_str().map(|a| format!(\" below {a}\")).unwrap_or_default()),\n+        \"attention\" => format!(\"asked {} {:?}; {}. Answers arrive in `jelly inbox`\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]), placement(&ev)),\n         \"set\" => if s(&ev[\"args\"][\"pointer\"]).is_empty() { \"state replaced\".into() } else { format!(\"set {}\", s(&ev[\"args\"][\"pointer\"])) },\n         \"new\" => \"made\".into(),\n@@ -673,4 +672,16 @@ fn report(ev: Value) -> Result<(), String> {\n }\n \n+/// Where an ask or look shows on the page, as the daemon found it: `anchored`\n+/// is whether its `--at` matched something, and is absent when nothing could check.\n+fn placement(ev: &Value) -> String {\n+    match (ev[\"args\"][\"anchor\"][\"selector\"].as_str(), ev[\"anchored\"].as_bool()) {\n+        (None, _) => \"it shows at the top of the page\".into(),\n+        (Some(at), Some(true)) => format!(\"it shows on the page below {at}\"),\n+        (Some(at), Some(false)) => format!(\"{at} matches nothing on the page, so it shows at the top\"),\n+        (Some(at), None) => format!(\"it shows below {at} if that matches something, else at the top: not checked ({})\",\n+            ev[\"anchor_unchecked\"].as_str().unwrap_or(\"no snapshot\")),\n+    }\n+}\n+\n /// A JSON argument: literal JSON, @FILE, or - for stdin (for data too big for a command line).\n fn json_arg(arg: &str, what: &str) -> Result<Value, String> {\n",
+      "evidence": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#list\"\ndemo:plan v2: asked a1 \"Which order?\"; it shows on the page below #list. Answers arrive in `jelly inbox`\n$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top. Answers arrive in `jelly inbox`\n$ jelly look plan \"Check the title\" --at \"#nope\"\ndemo:plan v3: asked a2 \"Check the title\"; #nope matches nothing on the page, so it shows at the top. Answers arrive in `jelly inbox`",
+      "files": [
+        "src/main.rs"
+      ],
       "id": "reply",
       "intent": "Say where the card really shows",
       "outcome": [
         "warns",
-        "no-browser"
+        "honest",
+        "unchecked"
       ],
       "risk": "low",
-      "why": "Only wording changes; the event is the same.",
-      "evidence": "Covers all three cases: matched, matched nothing, not checked.",
+      "show": {
+        "after": "it shows on the page below #list\n#nope matches nothing on the page, so it shows at the top\nit shows below #nope if that matches something, else at the top: not checked (…)\nit shows at the top of the page",
+        "before": "it shows on the page below #list\nit shows on the page below #nope\nit shows on the page below #nope\nit shows on the page",
+        "caption": "Four cases: matched, matched nothing, could not check, no --at.",
+        "kind": "terminal"
+      },
+      "why": "Wording only. The event that listeners and the log get is unchanged."
+    },
+    {
+      "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -737,2 +748,22 @@ fn encode(s: &str) -> String {\n         .collect()\n }\n+\n+#[cfg(test)]\n+mod tests {\n+    use super::placement;\n+    use serde_json::json;\n+\n+    #[test]\n+    fn an_ask_says_where_its_card_really_shows() {\n+        let at = |extra: serde_json::Value| {\n+            let mut ev = json!({\"args\": {\"anchor\": {\"selector\": \"#list\"}}});\n+            ev.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());\n+            placement(&ev)\n+        };\n+        assert_eq!(at(json!({\"anchored\": true})), \"it shows on the page below #list\");\n+        assert_eq!(at(json!({\"anchored\": false})), \"#list matches nothing on the page, so it shows at the top\");\n+        let unchecked = at(json!({\"anchor_unchecked\": \"no Chrome found\"}));\n+        assert!(unchecked.contains(\"not checked (no Chrome found)\") && !unchecked.starts_with(\"it shows on the page below\"));\n+        assert_eq!(placement(&json!({\"args\": {\"anchor\": null}})), \"it shows at the top of the page\");\n+    }\n+}\n",
+      "evidence": "",
       "files": [
         "src/main.rs"
       ],
-      "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -656,8 +656,13 @@ fn report(ev: Value) -> Result<(), String> {\n-        \"attention\" => format!(\"asked {} {:?}; it shows on the page{}. Answers arrive in `jelly inbox`\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]),\n-            ev[\"args\"][\"anchor\"][\"selector\"].as_str().map(|a| format!(\" below {a}\")).unwrap_or_default()),\n+        \"attention\" => {\n+            let at = ev[\"args\"][\"anchor\"][\"selector\"].as_str();\n+            let place = match (at, ev[\"anchored\"].as_bool()) {\n+                (Some(a), Some(true)) => format!(\"it shows below {a}\"),\n+                (Some(a), Some(false)) => format!(\"{a} matches nothing on the page, so it shows at the top\"),\n+                (Some(a), None) => format!(\"could not check {a}: no browser\"),\n+                (None, _) => \"it shows at the top\".into(),\n+            };\n+            format!(\"asked {} {:?}; {place}\", s(&ev[\"args\"][\"id\"]), s(&ev[\"args\"][\"title\"]))\n+        }\n",
-      "show": {
-        "kind": "terminal",
-        "before": "it shows on the page below #list\nit shows on the page below #nope\nit shows on the page below #nope",
-        "after": "it shows below #list\n#nope matches nothing on the page, so it shows at the top\ncould not check #nope: no browser",
-        "caption": "Three cases: matched, matched nothing, not checked."
-      }
-    },
-    {
       "id": "test",
-      "intent": "Test: a dead anchor still asks",
-      "outcome": "still-asks",
+      "intent": "Test the four replies",
+      "outcome": "honest",
       "risk": "low",
-      "why": "",
-      "evidence": "$ cargo test ask_with_dead_anchor\n1 passed",
-      "files": [
-        "src/store.rs"
-      ],
-      "diff": "--- a/src/store.rs\n+++ b/src/store.rs\n@@ -1140,3 +1140,10 @@ mod tests {\n+    #[test]\n+    fn ask_with_dead_anchor_is_kept() {\n+        let mut s = store();\n+        let ev = s.attend(\"demo:plan\", ask_at(\"#nope\")).unwrap();\n+        assert_eq!(s.get(\"demo:plan\").unwrap().attention.len(), 1);\n+        assert_eq!(ev.kind, EventKind::Attention);\n+    }\n",
       "show": {
-        "kind": "terminal",
-        "after": "$ cargo test ask_with_dead_anchor\ntest store::tests::ask_with_dead_anchor_is_kept ... ok\n\ntest result: ok. 1 passed; 0 failed"
-      }
+        "after": "$ cargo test\ntest tests::an_ask_says_where_its_card_really_shows ... ok\n\ntest result: ok. 19 passed; 0 failed",
+        "kind": "terminal"
+      },
+      "why": ""
     },
     {
-      "id": "docs",
-      "intent": "Guide matches the new reply",
-      "outcome": "warns",
-      "risk": "low",
+      "diff": "--- a/src/server.rs\n+++ b/src/server.rs\n@@ -616,7 +663,10 @@ fn chrome() -> Option<String> {\n }\n \n+/// How long `jelly see` waits for the browser.\n+const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);\n+\n /// Runs headless Chrome on a jelly at a given size. With `png`, writes a\n /// screenshot there; either way the page's runtime posts a fresh snapshot.\n-async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>) -> Result<(), String> {\n+async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {\n     let bin = chrome().ok_or(\"no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary\")?;\n     // Headless Chrome will not make a window narrower than 500px, so phone\n@@ -644,8 +694,8 @@ async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std\n     }\n     let run = cmd.arg(url).status();\n-    match tokio::time::timeout(std::time::Duration::from_secs(20), run).await {\n+    match tokio::time::timeout(limit, run).await {\n         Ok(Ok(_)) => Ok(()),\n         Ok(Err(e)) => Err(format!(\"could not run the browser: {e}\")),\n-        Err(_) => Err(\"the browser took longer than 20 s\".into()),\n+        Err(_) => Err(format!(\"the browser took longer than {} s\", limit.as_secs())),\n     }\n }\n@@ -669,5 +719,5 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer\n         (store.get(&name)?.clone(), store.home().to_path_buf())\n     };\n-    let port = req_headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878);\n+    let port = port_of(&req_headers);\n     let width = q.width.unwrap_or(1280);\n     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });\n@@ -680,5 +730,5 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer\n     if snap.is_none() {\n         let asked = now_ms();\n-        match render(port, &name, width, height, None).await {\n+        match render(port, &name, width, height, None, RENDER_LIMIT).await {\n             Ok(()) => {\n                 for _ in 0..30 {\n@@ -700,5 +750,5 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer\n         // The full page: as tall as the page said it was, within reason.\n         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };\n-        match render(port, &name, width, h, Some(&path)).await {\n+        match render(port, &name, width, h, Some(&path), RENDER_LIMIT).await {\n             Ok(()) => Some(path),\n             Err(e) => { notes.push(format!(\"No screenshot: {e}\")); None }\n",
+      "evidence": "",
+      "files": [
+        "src/server.rs"
+      ],
+      "id": "limit",
+      "intent": "Rendering takes a time limit",
       "mechanical": true,
-      "why": "One sentence in the guide; no behaviour.",
+      "outcome": "unchecked",
+      "risk": "low",
+      "why": "jelly see keeps its 20 s. The ask check gives up after 8 s."
+    },
+    {
+      "diff": "--- a/skill/SKILL.md\n+++ b/skill/SKILL.md\n@@ -80,5 +80,6 @@ jelly focus plan               # open it full size on their screen\n Always look before you show: run `jelly see`, and fix what is off before you focus\n the jelly or ask about it. `see` lists the errors your page threw (`error` lines)\n-and questions whose `--at` matches nothing (`!` lines): fix both. Clear your own\n+and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and\n+`jelly look` also say so in their reply when `--at` matches nothing. Clear your own\n test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on\n its own, and the jelly page uses it as the thumbnail.\n",
       "evidence": "",
       "files": [
         "skill/SKILL.md"
       ],
-      "diff": "--- a/skill/SKILL.md\n+++ b/skill/SKILL.md\n@@ -68,3 +68,3 @@\n-and questions whose `--at` matches nothing (`!` lines): fix both.\n+and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` says so too.\n"
+      "id": "docs",
+      "intent": "The guide mentions the new reply",
+      "mechanical": true,
+      "outcome": "warns",
+      "risk": "low",
+      "why": ""
     }
   ],
+  "next": "Open a pull request that closes #5",
   "not_done": [
     {
+      "kind": "unverified",
+      "text": "A machine with no browser at all, and a jelly open in a person's browser."
+    },
+    {
       "kind": "skipped",
-      "text": "jelly look has the same gap."
+      "text": "jelly see still waits out a lingering browser (issue #6)."
+    },
+    {
+      "kind": "skipped",
+      "text": "jelly ask --spec: its questions live on their own ask page."
     }
   ],
-  "go": null,
-  "applied": null
+  "outcomes": [
+    {
+      "evidence": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top. Answers arrive in `jelly inbox`",
+      "id": "warns",
+      "status": "seen",
+      "text": "The reply warns about a dead --at"
+    },
+    {
+      "evidence": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top. Answers arrive in `jelly inbox`\n\n$ jelly look plan \"Check the title\" --at \"#nope\"\ndemo:plan v3: asked a2 \"Check the title\"; #nope matches nothing on the page, so it shows at the top. Answers arrive in `jelly inbox`",
+      "id": "honest",
+      "status": "seen",
+      "text": "Never “below #x” for a miss"
+    },
+    {
+      "evidence": "Daemon started with JELLY_CHROME=/bin/false, a browser that cannot render:\n\n$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; it shows below #nope if that matches something, else at the top: not checked (the page rendered but sent no snapshot). Answers arrive in `jelly inbox`",
+      "id": "unchecked",
+      "status": "seen",
+      "text": "No snapshot: says “not checked”"
+    },
+    {
+      "evidence": "$ jelly see plan\nwaits    a1 ask \"Which order?\" [a/b] at #nope\nwaits    a2 look \"Check the title\" at #nope",
+      "id": "created",
+      "status": "seen",
+      "text": "The ask is still created"
+    }
+  ],
+  "range": "commit ef60c62 on claude/gifted-clarke-y4tq7e",
+  "title": "Asks say so when their anchor matches nothing"
 }

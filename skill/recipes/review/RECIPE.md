@@ -12,6 +12,9 @@ jelly see review                              # fix every `!` and `error` line f
 jelly focus review
 ```
 
+The example `state.json` and `assets/` are a real review: the change that made
+`jelly ask` say so when its `--at` matches nothing. Replace both with your own.
+
 The view and verbs are a starting point. Change them when the review needs
 something else: before/after screenshots, a rendered preview, a table of rows.
 
@@ -26,7 +29,7 @@ something else: before/after screenshots, a rendered preview, a table of rows.
 | `next` | What you do when they say go: "Commit and push to x". |
 | `outcomes[]` | `id`, `text`, `status` (`seen`, `tested` or `unverified`), `evidence`. One per thing they asked for. |
 | `groups[]` | `id`, `intent` (a few words: it is a label on the map), `outcome` (an outcome id, or a list of them), `risk` (`low`, `medium`, `high`), `why`, `show`, `evidence`, `files[]`, `diff`, and `mechanical: true` when there is nothing to decide. |
-| `groups[].show` | The picture of the change: `{"kind", "before", "after", "caption"}`. `terminal` (the default) takes command output, `image` takes two assets (`assets/before.png`) and gives a slider, `html` takes two pages and runs them live. Leave `before` out when there was nothing before. |
+| `groups[].show` | The picture of the change: `{"kind", "before", "after", "caption"}`. `terminal` (the default) takes command output, `image` takes two assets (`assets/before.png`) and gives a slider, `html` takes two pages and runs them live. Leave `before` out when there was nothing before. `labels` renames the two sides, `compare: "side"` puts two images next to each other, and a list of these shows several pictures. |
 | `not_done[]` | `kind` (`skipped`, `unverified` or `outside`) and `text`. |
 
 ## Rules that make it worth their time
