@@ -21,6 +21,7 @@
     name: boot.name,
     about: boot.about,
     get state() { return boot.state; },
+    comments: [],
     feedback: [],
     onState(fn) { fn(boot.state, null); },
     events() { return () => {}; },
@@ -30,6 +31,7 @@
     comment: readOnly,
     reply: readOnly,
     resolve: readOnly,
+    focus() { note(); },
     show() { note(); },
   };
 })();

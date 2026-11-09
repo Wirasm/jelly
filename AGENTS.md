@@ -15,7 +15,7 @@ verbs), **jelly page** (the internal jelly, id `surface`, that lays out the othe
 - Browsers get events over one WebSocket per page (`/api/ws`). Do not give views
   `EventSource`s: each one holds an HTTP connection, and a page with a few jellies
   hits the browser's six-per-host limit and stalls every request.
-- Comments (`feedback`) live beside state, not in it. Undo does not touch them.
+- Comments (`comments`) and attention items live beside state, not in it. Undo does not touch them.
 - A jelly's id is `project:name`; the project is the part before the colon. Short
   names resolve in the CLI (current project) and the runtime (the view's project).
 - Assets live in `~/.jelly/assets/<id>/`, outside state and undo. Views are served at

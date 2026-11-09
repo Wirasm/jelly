@@ -27,9 +27,8 @@ const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
 struct App {
     store: Mutex<Store>,
     events: broadcast::Sender<Event>,
-    /// The latest agent snapshot of each jelly as rendered in some browser:
-    /// `{text, width, height, version, at_ms}`. Kept in memory only.
-    snapshots: Mutex<std::collections::HashMap<String, Value>>,
+    /// What some browser last showed of each jelly, as text. Memory only.
+    screens: Mutex<std::collections::HashMap<String, Screen>>,
 }
 type Shared = Arc<App>;
 
@@ -52,7 +51,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, snapshots: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -86,12 +85,12 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/reshape", post(reshape))
         .route("/api/jellies/{name}/undo", post(undo))
         .route("/api/jellies/{name}/pin", post(pin))
-        .route("/api/jellies/{name}/project", post(project))
+        .route("/api/jellies/{name}/move", post(move_project))
         .route("/api/jellies/{name}/restore", post(restore))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
-        .route("/api/jellies/{name}/snapshot", get(snapshot))
+        .route("/api/jellies/{name}/share", get(share))
         .route("/api/inbox", get(inbox))
-        .route("/api/jellies/{name}/snapshot", post(put_snapshot))
+        .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
         .route("/see-frame/{name}", get(see_frame))
@@ -148,9 +147,8 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
             "pinned": j.pinned, "made_by": j.made_by, "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
-            "open_comments": j.feedback.iter().filter(|f| !f.resolved).count(),
-            // Threads where the agent answered and the person has not: the agent may be asking.
-            "answered_comments": j.feedback.iter().filter(|f| !f.resolved && f.replies.last().is_some_and(|r| r.by != PERSON)).count(),
+            "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
+            "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
             "decision": is_decision(&j.state).then(|| j.state.get("status").cloned()).flatten(),
             "attention": j.attention.iter().filter(|a| a.is_open()).count(),
             "working": j.working,
@@ -281,7 +279,7 @@ struct ProjectReq {
     by: Option<String>,
 }
 
-async fn project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
+async fn move_project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
     app.change(|s| s.set_project(&name, &r.project, &by(r.by)?))
 }
 
@@ -341,7 +339,7 @@ async fn pump(mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
 async fn view(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
     let store = app.store.lock().expect("store lock");
     let j = store.get(&name)?;
-    let boot = json!({"name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "feedback": j.feedback, "attention": j.attention, "working": j.working});
+    let boot = json!({"name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
     // `</` cannot appear inside the script, or state text could close the tag.
     let boot = boot.to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script src=\"/runtime.js\"></script>");
@@ -404,7 +402,7 @@ async fn asset(State(app): State<Shared>, Path((name, file)): Path<(String, Stri
 
 /// One file you can send anyone: the view with its state baked in, assets
 /// inlined, and a read-only `jelly` in place of the live runtime.
-async fn snapshot(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
+async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
     use base64::Engine as _;
     let (j, dir, files) = {
         let store = app.store.lock().expect("store lock");
@@ -533,9 +531,20 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
 
 // ---- the agent view -------------------------------------------------------
 
-async fn put_snapshot(State(app): State<Shared>, Path(name): Path<String>, Json(mut v): Json<Value>) -> StatusCode {
-    v["at_ms"] = json!(now_ms());
-    app.snapshots.lock().expect("snapshots lock").insert(name, v);
+/// What a browser shows of a jelly, as text, posted by the runtime for `jelly see`.
+#[derive(Deserialize, Clone)]
+struct Screen {
+    text: String,
+    width: u32,
+    height: u32,
+    version: u64,
+    #[serde(default)]
+    at_ms: u64,
+}
+
+async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> StatusCode {
+    sc.at_ms = now_ms();
+    app.screens.lock().expect("screens lock").insert(name, sc);
     StatusCode::NO_CONTENT
 }
 
@@ -620,8 +629,9 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
     // Use a snapshot from an open view if it is current and the right width; otherwise render one.
-    let fresh = |app: &App| app.snapshots.lock().expect("snapshots lock").get(&name).cloned()
-        .filter(|s| s["version"].as_u64() == Some(j.version) && (q.width.is_none() || s["width"].as_u64() == Some(width as u64)));
+    // An open view's screen counts if it shows this version at the width asked for (1280 by default).
+    let fresh = |app: &App| app.screens.lock().expect("screens lock").get(&name).cloned()
+        .filter(|s| s.version == j.version && s.width == width);
     let mut notes: Vec<String> = Vec::new();
     let mut snap = fresh(&app);
     if snap.is_none() {
@@ -629,7 +639,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         match render(port, &name, width, height, None).await {
             Ok(()) => {
                 for _ in 0..30 {
-                    if let Some(s) = app.snapshots.lock().expect("snapshots lock").get(&name).filter(|s| s["at_ms"].as_u64().unwrap_or(0) >= asked) {
+                    if let Some(s) = app.screens.lock().expect("screens lock").get(&name).filter(|s| s.at_ms >= asked) {
                         snap = Some(s.clone());
                         break;
                     }
@@ -671,7 +681,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
         line(&mut out, format!("answered {} {:?} → {pick}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }));
     }
-    for f in j.feedback.iter().filter(|f| !f.resolved) {
+    for f in j.comments.iter().filter(|f| !f.resolved) {
         line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
     if let Ok(text) = std::fs::read_to_string(home.join("events.jsonl")) {
@@ -687,8 +697,8 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(s) = snap {
-        line(&mut out, format!("\non screen at {}×{} (v{}):", s["width"], s["height"], s["version"]));
-        out.push_str(s["text"].as_str().unwrap_or(""));
+        line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
+        out.push_str(&s.text);
     }
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }

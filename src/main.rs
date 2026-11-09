@@ -90,7 +90,8 @@ enum Cmd {
     /// Print the full jelly: view, verbs, state.
     Show { name: String },
     /// Stream events as JSON lines, for one jelly or all.
-    Watch {
+    #[command(alias = "watch")]
+    Events {
         name: Option<String>,
         /// Include the full state in each event.
         #[arg(long)]
@@ -129,9 +130,9 @@ enum Cmd {
         /// The element it is about, as a CSS selector.
         #[arg(long)]
         at: Option<String>,
-        /// More context, shown under the question.
-        #[arg(long, default_value = "")]
-        detail: String,
+        /// More to read before answering, shown under the question.
+        #[arg(long, alias = "detail", default_value = "")]
+        context: String,
     },
     /// Ask the person to look at something: it lands in their attention queue,
     /// and they answer "seen" or with a word back.
@@ -140,8 +141,8 @@ enum Cmd {
         what: String,
         #[arg(long)]
         at: Option<String>,
-        #[arg(long, default_value = "")]
-        detail: String,
+        #[arg(long, alias = "detail", default_value = "")]
+        context: String,
     },
     /// Everything waiting on the person in this project (or everywhere with --all).
     Attention {
@@ -203,8 +204,9 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// Move a jelly to a project ("" for none).
-    Project { name: String, project: String },
+    /// Move a jelly to another project ("" for none). Its name becomes project:name.
+    #[command(alias = "project")]
+    Move { name: String, project: String },
     /// Mark a comment as dealt with.
     Resolve { name: String, id: String },
     /// Bring an archived jelly back to the jelly page.
@@ -323,7 +325,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Cmd::Unpin { name } => print(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": false})).map(summary)?),
         Cmd::Rm { name } => print(send("DELETE", &api(&format!("/{}?by={}", id(&name), encode(&by))), Value::Null).map(summary)?),
         Cmd::Show { name } => print(get(&api(&format!("/{}", id(&name))))?),
-        Cmd::Watch { name, state } => {
+        Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n));
             let q = name.map(|n| format!("?jelly={}", encode(&n))).unwrap_or_default();
             let resp = ureq::get(&format!("{}/api/events{q}", cli.url)).call().map_err(describe)?;
@@ -339,19 +341,19 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Ask { name, question: Some(q), options, recommend, why, at, detail, .. } => {
+        Cmd::Ask { name, question: Some(q), options, recommend, why, at, context, .. } => {
             let options: Vec<Value> = options.iter().map(|o| {
                 let (id, rest) = o.split_once('=').ok_or_else(|| format!("--option {o:?}: use id=label"))?;
                 let (label, does) = rest.split_once('|').unwrap_or((rest, ""));
                 Ok(json!({"id": id.trim(), "label": label.trim(), "does": does.trim()}))
             }).collect::<Result<_, String>>()?;
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
-            let body = json!({"kind": "ask", "title": q, "options": options, "recommend": recommend, "why": why, "anchor": anchor, "detail": detail, "by": by});
+            let body = json!({"kind": "ask", "title": q, "options": options, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
             print(send("POST", &api(&format!("/{}/attention", id(&name))), body).map(summary)?)
         }
-        Cmd::Look { name, what, at, detail } => {
+        Cmd::Look { name, what, at, context } => {
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
-            let body = json!({"kind": "look", "title": what, "anchor": anchor, "detail": detail, "by": by});
+            let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             print(send("POST", &api(&format!("/{}/attention", id(&name))), body).map(summary)?)
         }
         Cmd::Attention { all } => {
@@ -440,7 +442,7 @@ fn run(cli: Cli) -> Result<(), String> {
             print(json!(list))
         }
         Cmd::Reply { name, id: cid, text, resolve } => print(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by})).map(summary)?),
-        Cmd::Project { name, project } => print(send("POST", &api(&format!("/{}/project", id(&name))), json!({"project": project, "by": by})).map(summary)?),
+        Cmd::Move { name, project } => print(send("POST", &api(&format!("/{}/move", id(&name))), json!({"project": project, "by": by})).map(summary)?),
         Cmd::See { name, width, png } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
@@ -527,7 +529,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Share { name, out } => {
             let name = id(&name);
-            let resp = ureq::get(&api(&format!("/{name}/snapshot"))).call().map_err(describe)?;
+            let resp = ureq::get(&api(&format!("/{name}/share"))).call().map_err(describe)?;
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);

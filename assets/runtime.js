@@ -7,7 +7,7 @@
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
 //   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
 //
-// Feedback anywhere: hold Option (Alt) and click any element, or press the
+// Comments anywhere: hold Option (Alt) and click any element, or press the
 // Comment button, to pin a comment to it. The agent gets a `comment` event that
 // names the element. Give elements an `id` so comments survive a reshape.
 // Agents answer on the pin (`jelly reply`); the thread shows when you click it.
@@ -18,7 +18,7 @@
   const boot = window.__JELLY__;
   let state = boot.state;
   let version = boot.version;
-  let feedback = boot.feedback || [];
+  let comments = boot.comments || boot.feedback || [];
   let attention = boot.attention || [];
   let working = boot.working || null;
   const subs = [];
@@ -42,7 +42,7 @@
   for (const type of ["pointerdown", "keydown"]) {
     addEventListener(type, (e) => {
       const el = e.target?.closest?.("button, a, input, select, textarea, [data-verb], [role=button], label") || e.target;
-      if (el?.nodeType === 1 && !el.closest(".jf-pop, .jf-pin, .jf-att")) lastUsed = { el, at: Date.now() };
+      if (el?.nodeType === 1 && !el.closest(".jf-pop, .jf-marker, .jf-att")) lastUsed = { el, at: Date.now() };
     }, true);
   }
   function source() {
@@ -88,8 +88,8 @@
       return;
     }
     if (ev.view_rev !== boot.viewRev) { location.reload(); return; }
-    if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshFeedback();
-    if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshFeedback();
+    if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads();
+    if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads();
     if (ev.kind === "working") { working = ev.args ? { what: ev.args, by: ev.by } : null; drawWorking(); }
     apply(ev);
   });
@@ -100,7 +100,9 @@
     get state() { return state; },
     /** Every event from every jelly. Returns a function that stops listening. */
     events(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-    get feedback() { return feedback; },
+    /** Comment threads on this jelly. */
+    get comments() { return comments; },
+    get feedback() { return comments; }, // old name
     onState(fn) { subs.push(fn); fn(state, null); },
     async call(verb, args = {}) {
       const ev = await post(`${api}/call`, { verb, args, source: source() });
@@ -122,11 +124,12 @@
     },
     comment: (anchor, text) => post(`${api}/comment`, { anchor, text }),
     /** Put another jelly on screen: on the jelly page it opens full size, alone it navigates. */
-    show(name) {
+    focus(name) {
       name = full(name);
       if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
       else location.href = `/j/${enc(name)}/`;
     },
+    show(name) { return this.focus(name); }, // old name
     resolve: (id) => post(`${api}/resolve`, { id }),
     /** Open asks and looks the agent put on this jelly. */
     get attention() { return attention.filter((a) => !a.answer && !a.withdrawn); },
@@ -136,17 +139,17 @@
     reply: (id, text) => post(`${api}/reply`, { id, text }),
   };
 
-  // ---- feedback layer -------------------------------------------------------
+  // ---- comments: markers on the elements they are about ------------------------
 
   const css = `
     .jf-btn { position: fixed; right: 10px; bottom: 10px; z-index: 2147483000; font: 12px -apple-system, sans-serif;
       background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
     .jf-btn.on { background: #e0a24f; color: #1b2221; border-color: #e0a24f; opacity: 1; }
     .jf-hover { outline: 2px dashed #e0a24f !important; outline-offset: 2px; cursor: crosshair !important; }
-    .jf-pin { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
+    .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
       font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
-    .jf-pin.agent { background: #46c4b8; }
-    .jf-pin.done { opacity: .55; }
+    .jf-marker.agent { background: #46c4b8; }
+    .jf-marker.done { opacity: .55; }
     .jf-pop { color-scheme: light; position: absolute; z-index: 2147483001; width: 260px; background: #fff; color: #1b2221; border: 1px solid #e2e7e5; border-radius: 10px;
       box-shadow: 0 14px 34px -10px rgba(0,0,0,.45); padding: 8px; font: 12px -apple-system, sans-serif; }
     .jf-pop .jf-on { font: 10px ui-monospace, Menlo, monospace; color: #66726f; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -228,7 +231,7 @@
     }
     return parts.join(" > ") || "body";
   }
-  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-pin, .jf-att, .jf-chip, .jf-work");
+  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-marker, .jf-att, .jf-chip, .jf-work");
 
   // On the jelly page, the page's header owns the Comment button.
   const embedded = window.parent !== window;
@@ -268,11 +271,11 @@
     ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") { p.remove(); pop = null; } };
   }
 
-  let pinEls = [];
+  let markerEls = [];
   const DAY = 86400000;
   const lastAt = (f) => Math.max(f.at_ms, ...(f.replies || []).map((r) => r.at_ms));
   // Open threads, plus resolved ones from the last day so the person sees the answer.
-  const visible = () => feedback.filter((f) => !f.resolved || Date.now() - lastAt(f) < DAY);
+  const visible = () => comments.filter((f) => !f.resolved || Date.now() - lastAt(f) < DAY);
   const who = (by) => (by === "person" ? "you" : by);
 
   function thread(f, x, y) {
@@ -301,10 +304,10 @@
     ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") close(); };
   }
 
-  function drawPins() {
+  function drawMarkers() {
     drawAttention();
-    pinEls.forEach((p) => p.remove());
-    pinEls = [];
+    markerEls.forEach((p) => p.remove());
+    markerEls = [];
     visible().forEach((f, i) => {
       let el = null;
       try { el = document.querySelector(f.anchor?.selector || "body"); } catch {}
@@ -313,7 +316,7 @@
       const last = f.replies?.at(-1);
       const pin = document.createElement("div");
       // Amber: waiting on the agent. Teal: the agent answered. Faded: resolved.
-      pin.className = "jf-pin" + (last && last.by !== "person" ? " agent" : "") + (f.resolved ? " done" : "");
+      pin.className = "jf-marker" + (last && last.by !== "person" ? " agent" : "") + (f.resolved ? " done" : "");
       pin.textContent = f.resolved ? "✓" : i + 1;
       pin.title = last ? `${who(last.by)}: ${last.text}` : f.text;
       // In the margin left of the element, pointing at it.
@@ -321,7 +324,7 @@
       pin.style.top = r.top + Math.min(r.height, 40) / 2 - 10 + scrollY + "px";
       pin.onclick = (e) => { e.stopPropagation(); thread(f, r.left, r.bottom); };
       document.body.appendChild(pin);
-      pinEls.push(pin);
+      markerEls.push(pin);
     });
   }
   // ---- attention: asks and looks the agent put here ------------------------
@@ -442,7 +445,7 @@
   }
 
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
-  const SKIP = ".jf-btn, .jf-pop, .jf-pin, .jf-att, .jf-chip, .jf-work";
+  const SKIP = ".jf-btn, .jf-pop, .jf-marker, .jf-att, .jf-chip, .jf-work";
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   function agentSnapshot() {
@@ -475,16 +478,16 @@
   function postSnapshot() {
     clearTimeout(snapT);
     snapT = setTimeout(() => {
-      fetch(`${api}/snapshot`, { method: "POST", headers: { "content-type": "application/json" },
+      fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
 
-  async function refreshFeedback() {
+  async function refreshThreads() {
     const r = await fetch(api);
-    if (r.ok) { const j = await r.json(); feedback = j.feedback || []; attention = j.attention || []; working = j.working || null; drawPins(); drawWorking(); }
+    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; drawMarkers(); drawWorking(); }
   }
 
   addEventListener("DOMContentLoaded", () => {
@@ -494,11 +497,11 @@
     // A view that draws its own comment control opts out with <meta name="jelly-comment" content="off">.
     const optOut = document.querySelector('meta[name="jelly-comment"]')?.content === "off";
     if (!embedded && !optOut) document.body.appendChild(btn);
-    drawPins();
+    drawMarkers();
     drawWorking();
-    new ResizeObserver(drawPins).observe(document.body);
+    new ResizeObserver(drawMarkers).observe(document.body);
   });
-  subs.push(() => setTimeout(drawPins, 0));
+  subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
   addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

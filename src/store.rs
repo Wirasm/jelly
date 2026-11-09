@@ -42,7 +42,8 @@ pub struct Jelly {
     /// Comments pinned to elements of the view. Kept apart from state: they are
     /// about the jelly, not part of it, and undo does not touch them.
     #[serde(default)]
-    pub feedback: Vec<Feedback>,
+    #[serde(alias = "feedback")]
+    pub comments: Vec<Comment>,
     /// What the agent put in front of the person: asks to answer, things to
     /// look at. Beside state like comments; undo does not touch them.
     #[serde(default)]
@@ -85,6 +86,13 @@ pub struct Attention {
     pub answer: Option<Answer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<Stamp>,
+}
+
+impl Comment {
+    /// The agent replied last on an open thread: the person has something to read.
+    pub fn awaiting_person(&self) -> bool {
+        !self.resolved && self.replies.last().is_some_and(|r| r.by != PERSON)
+    }
 }
 
 impl Attention {
@@ -182,7 +190,7 @@ impl From<AttentionOnDisk> for Attention {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Feedback {
+pub struct Comment {
     pub id: String,
     /// Where in the view: `{"selector": "#opt-b .preview", "quote": "first words"}`.
     pub anchor: Value,
@@ -403,7 +411,7 @@ impl Store {
             created_ms: now_ms(),
             about: about.trim().into(),
             archived: false,
-            feedback: Vec::new(),
+            comments: Vec::new(),
             attention: Vec::new(),
             working: None,
             notes: Vec::new(),
@@ -477,15 +485,15 @@ impl Store {
             return Err(Error::Invalid("empty comment".into()));
         }
         let entry = self.entry(name)?;
-        let id = format!("f{}", entry.jelly.feedback.len() + 1);
-        entry.jelly.feedback.push(Feedback { id: id.clone(), anchor: anchor.clone(), text: text.into(), by: by.into(), at_ms: now_ms(), resolved: false, replies: Vec::new() });
+        let id = format!("c{}", entry.jelly.comments.len() + 1);
+        entry.jelly.comments.push(Comment { id: id.clone(), anchor: anchor.clone(), text: text.into(), by: by.into(), at_ms: now_ms(), resolved: false, replies: Vec::new() });
         let args = serde_json::json!({"id": id, "anchor": anchor, "text": text});
         self.commit(name, EventKind::Comment, by, None, Some(args), Vec::new())
     }
 
     pub fn resolve(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
         let entry = self.entry(name)?;
-        let f = entry.jelly.feedback.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
+        let f = entry.jelly.comments.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
         f.resolved = true;
         self.commit(name, EventKind::Resolve, by, None, Some(Value::String(id.into())), Vec::new())
     }
@@ -499,7 +507,7 @@ impl Store {
             return Err(Error::Invalid("empty reply".into()));
         }
         let entry = self.entry(name)?;
-        let f = entry.jelly.feedback.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
+        let f = entry.jelly.comments.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
         f.replies.push(Reply { text: text.into(), by: by.into(), at_ms: now_ms() });
         f.resolved = resolve;
         let args = serde_json::json!({"id": id, "text": text, "resolved": resolve, "anchor": f.anchor, "comment": f.text});
@@ -535,7 +543,7 @@ impl Store {
         let stale: Vec<String> = self.list()
             .filter(|j| !j.pinned && !j.archived && j.name != "surface" && j.updated_ms < cutoff)
             .filter(|j| !(j.state.get("questions").or_else(|| j.state.get("options")).is_some() && j.state.get("status") == Some(&Value::from("open"))))
-            .filter(|j| j.feedback.iter().all(|f| f.resolved))
+            .filter(|j| j.comments.iter().all(|f| f.resolved))
             .filter(|j| j.attention.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
             .collect();
@@ -890,13 +898,13 @@ mod tests {
         s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         s.call("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
         let ev = s.comment("j", json!({"selector": "#a"}), "too small", "person").unwrap();
-        assert_eq!((ev.kind, ev.args.clone().unwrap()["id"].clone()), (EventKind::Comment, json!("f1")));
+        assert_eq!((ev.kind, ev.args.clone().unwrap()["id"].clone()), (EventKind::Comment, json!("c1")));
         s.undo("j", "person").unwrap();
         let j = s.get("j").unwrap();
         assert_eq!(j.state, json!({"labels": {}}));
-        assert_eq!(j.feedback.len(), 1, "undo is about state, not comments");
-        s.resolve("j", "f1", "agent").unwrap();
-        assert!(s.get("j").unwrap().feedback[0].resolved);
+        assert_eq!(j.comments.len(), 1, "undo is about state, not comments");
+        s.resolve("j", "c1", "agent").unwrap();
+        assert!(s.get("j").unwrap().comments[0].resolved);
         assert!(s.comment("j", json!({}), "  ", "person").is_err());
     }
 
@@ -976,13 +984,13 @@ mod tests {
         let (_d, mut s) = store();
         s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         s.comment("j", json!({"selector": "#a"}), "split this", "person").unwrap();
-        s.reply("j", "f1", "Done, reshaped v2", "claude", true).unwrap();
-        assert!(s.get("j").unwrap().feedback[0].resolved);
-        s.reply("j", "f1", "not quite", "person", false).unwrap();
-        let f = &s.get("j").unwrap().feedback[0];
+        s.reply("j", "c1", "Done, reshaped v2", "claude", true).unwrap();
+        assert!(s.get("j").unwrap().comments[0].resolved);
+        s.reply("j", "c1", "not quite", "person", false).unwrap();
+        let f = &s.get("j").unwrap().comments[0];
         assert!(!f.resolved, "a follow-up opens the thread again");
         assert_eq!(f.replies.iter().map(|r| r.by.as_str()).collect::<Vec<_>>(), ["claude", "person"]);
-        assert!(s.reply("j", "f9", "x", "claude", false).is_err());
+        assert!(s.reply("j", "c9", "x", "claude", false).is_err());
     }
 
     #[test]
