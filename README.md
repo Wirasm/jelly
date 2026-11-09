@@ -24,8 +24,8 @@ prose, and whenever you need them to choose.
   gains, costs and your recommendation. They pick, add a note, or add their own question.
 - **See what you made.** `jelly see NAME` prints the page as text, with everything
   waiting on them and what they did lately. `--png` when layout matters.
-- **Keep working on it together.** Reshape while it runs and state stays. Undo
-  the last state change. Notes for the next agent. One page per project. Share as one file.
+- **Keep working on it together.** Reshape while it runs and state stays. Write
+  state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
 jelly ls                                         # is the daemon up? (the person runs `jelly serve`)

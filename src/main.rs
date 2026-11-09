@@ -38,8 +38,15 @@ enum Cmd {
         #[arg(long)]
         home: Option<PathBuf>,
     },
-    /// List jellies.
-    Ls,
+    /// List this project's jellies, one per line (all projects outside a repo).
+    Ls {
+        /// Every project, archived jellies included.
+        #[arg(long)]
+        all: bool,
+        /// Print the full JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
     New {
         name: String,
@@ -61,9 +68,22 @@ enum Cmd {
     Call {
         name: String,
         verb: String,
-        /// Arguments as JSON.
+        /// Arguments as JSON, @FILE to read a file, or - for stdin.
         #[arg(default_value = "{}")]
         args: String,
+    },
+    /// Write state directly, without a verb: fix your own content or start over.
+    /// Undoable. `jelly set plan '{"items":[]}'` replaces the whole state.
+    Set {
+        name: String,
+        /// JSON, @FILE to read a file, or - for stdin. Leave out with --rm.
+        value: Option<String>,
+        /// Where in the state, as a JSON pointer: /title, /items/0, /items/- (append).
+        #[arg(long, default_value = "")]
+        at: String,
+        /// Remove what is at --at instead.
+        #[arg(long)]
+        rm: bool,
     },
     /// Print state, or the part at a JSON pointer such as /labels.
     State { name: String, pointer: Option<String> },
@@ -159,6 +179,9 @@ enum Cmd {
         /// Also save a screenshot and print its path.
         #[arg(long)]
         png: bool,
+        /// Screenshot the whole page, not just the first screen (implies --png).
+        #[arg(long)]
+        full: bool,
     },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
@@ -298,7 +321,29 @@ fn run(cli: Cli) -> Result<(), String> {
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
             rt.block_on(server::serve(store, port)).map_err(|e| e.to_string())
         }
-        Cmd::Ls => print(get(&api(""))?),
+        Cmd::Ls { all, json } => {
+            let p = if all { String::new() } else { project() };
+            let list: Vec<Value> = get(&api(""))?.as_array().cloned().unwrap_or_default().into_iter()
+                .filter(|j| all || !j["archived"].as_bool().unwrap_or(false))
+                .filter(|j| p.is_empty() || j["project"].as_str() == Some(p.as_str()))
+                .collect();
+            if json {
+                return print(json!(list));
+            }
+            if list.is_empty() {
+                println!("No jellies{}. The daemon is up.", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") });
+            }
+            for j in &list {
+                let mut tags = vec![format!("v{}", j["version"])];
+                let n = |k: &str| j[k].as_u64().unwrap_or(0);
+                if n("attention") > 0 { tags.push(format!("{} waiting on the person", n("attention"))); }
+                if n("open_comments") > 0 { tags.push(format!("{} open comments", n("open_comments"))); }
+                if j["pinned"].as_bool() == Some(true) { tags.push("pinned".into()); }
+                if j["archived"].as_bool() == Some(true) { tags.push("archived".into()); }
+                println!("{}  {}  ({})", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), tags.join(", "));
+            }
+            Ok(())
+        }
         Cmd::New { name, view, verbs, state, replace, about } => {
             sync_design(&cli.url, &project());
             let state: Value = match state {
@@ -306,11 +351,19 @@ fn run(cli: Cli) -> Result<(), String> {
                 None => json!({}),
             };
             let body = json!({"name": name, "view": read(&view)?, "verbs": read(&verbs)?, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
-            print(send("POST", &api(""), body).map(summary)?)
+            report(send("POST", &api(""), body)?)
         }
         Cmd::Call { name, verb, args } => {
-            let args: Value = serde_json::from_str(&args).map_err(|e| format!("args are not JSON: {e}"))?;
-            print(send("POST", &api(&format!("/{}/call", id(&name))), json!({"verb": verb, "args": args, "by": by})).map(summary)?)
+            let args = json_arg(&args, "args")?;
+            report(send("POST", &api(&format!("/{}/call", id(&name))), json!({"verb": verb, "args": args, "by": by}))?)
+        }
+        Cmd::Set { name, value, at, rm } => {
+            let value = match (rm, value) {
+                (true, _) => Value::Null,
+                (false, Some(v)) => json_arg(&v, "value")?,
+                (false, None) => return Err("give a value, or --rm".into()),
+            };
+            report(send("POST", &api(&format!("/{}/set", id(&name))), json!({"pointer": at, "value": value, "remove": rm, "by": by}))?)
         }
         Cmd::State { name, pointer } => {
             let p = pointer.map(|p| format!("?pointer={}", encode(&p))).unwrap_or_default();
@@ -318,12 +371,12 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Reshape { name, view, verbs, about } => {
             let body = json!({"view": view.map(|p| read(&p)).transpose()?, "verbs": verbs.map(|p| read(&p)).transpose()?, "about": about, "by": by});
-            print(send("POST", &api(&format!("/{}/reshape", id(&name))), body).map(summary)?)
+            report(send("POST", &api(&format!("/{}/reshape", id(&name))), body)?)
         }
-        Cmd::Undo { name } => print(send("POST", &api(&format!("/{}/undo", id(&name))), json!({"by": by})).map(summary)?),
-        Cmd::Pin { name } => print(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": true})).map(summary)?),
-        Cmd::Unpin { name } => print(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": false})).map(summary)?),
-        Cmd::Rm { name } => print(send("DELETE", &api(&format!("/{}?by={}", id(&name), encode(&by))), Value::Null).map(summary)?),
+        Cmd::Undo { name } => report(send("POST", &api(&format!("/{}/undo", id(&name))), json!({"by": by}))?),
+        Cmd::Pin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": true}))?),
+        Cmd::Unpin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": false}))?),
+        Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name), encode(&by))), Value::Null)?),
         Cmd::Show { name } => print(get(&api(&format!("/{}", id(&name))))?),
         Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n));
@@ -349,21 +402,21 @@ fn run(cli: Cli) -> Result<(), String> {
             }).collect::<Result<_, String>>()?;
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "ask", "title": q, "options": options, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
-            print(send("POST", &api(&format!("/{}/attention", id(&name))), body).map(summary)?)
+            report(send("POST", &api(&format!("/{}/attention", id(&name))), body)?)
         }
         Cmd::Look { name, what, at, context } => {
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
-            print(send("POST", &api(&format!("/{}/attention", id(&name))), body).map(summary)?)
+            report(send("POST", &api(&format!("/{}/attention", id(&name))), body)?)
         }
         Cmd::Attention { all } => {
             let p = if all { String::new() } else { project() };
             print(get(&format!("{}/api/attention?project={}", cli.url, encode(&p)))?)
         }
-        Cmd::Withdraw { name, id: aid } => print(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name), encode(&aid))), json!({"by": by})).map(summary)?),
-        Cmd::Focus { name } => print(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)), "by": by})).map(summary)?),
-        Cmd::Working { name, what } => print(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": what, "by": by})).map(summary)?),
-        Cmd::Done { name } => print(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": null, "by": by})).map(summary)?),
+        Cmd::Withdraw { name, id: aid } => report(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name), encode(&aid))), json!({"by": by}))?),
+        Cmd::Focus { name } => report(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)), "by": by}))?),
+        Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": what, "by": by}))?),
+        Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": null, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
         Cmd::Ask { name, spec: Some(spec), .. } => {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
@@ -423,18 +476,19 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             print(json!(list))
         }
-        Cmd::Reply { name, id: cid, text, resolve } => print(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by})).map(summary)?),
-        Cmd::Move { name, project } => print(send("POST", &api(&format!("/{}/move", id(&name))), json!({"project": project, "by": by})).map(summary)?),
-        Cmd::See { name, width, png } => {
+        Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
+        Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name))), json!({"project": project, "by": by}))?),
+        Cmd::See { name, width, png, full } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
-            if png { q.push("png=true".into()); }
+            if png || full { q.push("png=true".into()); }
+            if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name), q.join("&")));
             let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
             print!("{}", resp.into_string().map_err(|e| e.to_string())?);
             Ok(())
         }
-        Cmd::Note { name, text } => print(send("POST", &api(&format!("/{}/note", id(&name))), json!({"text": text, "by": by})).map(summary)?),
+        Cmd::Note { name, text } => report(send("POST", &api(&format!("/{}/note", id(&name))), json!({"text": text, "by": by}))?),
         Cmd::Pull { name, dir } => {
             let name = id(&name);
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
@@ -495,8 +549,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 None => { print!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?); Ok(()) }
             }
         }
-        Cmd::Archive { name } => print(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by})).map(summary)?),
-        Cmd::Restore { name } => print(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by})).map(summary)?),
+        Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by}))?),
+        Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by}))?),
         Cmd::Asset { name, files } => {
             let name = id(&name);
             for f in files {
@@ -522,7 +576,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Cmd::Inbox { hook } => inbox(&cli.url, &project(), hook),
-        Cmd::Resolve { name, id: cid } => print(send("POST", &api(&format!("/{}/resolve", id(&name))), json!({"id": cid, "by": by})).map(summary)?),
+        Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name))), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
                 (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)),
@@ -596,10 +650,27 @@ fn detect_project(given: Option<String>) -> String {
     name.trim_matches('-').chars().take(64).collect()
 }
 
-/// Events echo the whole state; the CLI prints the change, not the payload.
-fn summary(mut ev: Value) -> Value {
-    ev.as_object_mut().map(|o| o.remove("state"));
-    ev
+/// One line on what a write did. The full event is in `jelly events`.
+fn report(ev: Value) -> Result<(), String> {
+    let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+    let what = match ev["kind"].as_str().unwrap_or("") {
+        "call" => format!("{} ran", s(&ev["verb"])),
+        "attention" => format!("asked {} {:?}; it shows on the page{}. Answers arrive in `jelly inbox`", s(&ev["args"]["id"]), s(&ev["args"]["title"]),
+            ev["args"]["anchor"]["selector"].as_str().map(|a| format!(" below {a}")).unwrap_or_default()),
+        "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
+        "new" => "made".into(),
+        k => k.to_string(),
+    };
+    let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
+    let changed = match changed.len() { 0 => String::new(), 1..=6 => format!(" · changed {}", changed.join(" ")), n => format!(" · changed {n} places") };
+    println!("{} v{}: {what}{changed}", s(&ev["jelly"]), ev["version"]);
+    Ok(())
+}
+
+/// A JSON argument: literal JSON, @FILE, or - for stdin (for data too big for a command line).
+fn json_arg(arg: &str, what: &str) -> Result<Value, String> {
+    let text = if arg == "-" { read(&PathBuf::from("-"))? } else if let Some(f) = arg.strip_prefix('@') { read(&PathBuf::from(f))? } else { arg.to_string() };
+    serde_json::from_str(&text).map_err(|e| format!("{what} are not JSON: {e}").replace("value are", "value is"))
 }
 
 fn read(p: &PathBuf) -> Result<String, String> {

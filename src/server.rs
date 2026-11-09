@@ -94,6 +94,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/state", get(state))
         .route("/api/jellies/{name}/call", post(call))
         .route("/api/jellies/{name}/reshape", post(reshape))
+        .route("/api/jellies/{name}/set", post(set_state))
         .route("/api/jellies/{name}/undo", post(undo))
         .route("/api/jellies/{name}/pin", post(pin))
         .route("/api/jellies/{name}/move", post(move_project))
@@ -221,6 +222,26 @@ struct CallReq {
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
     app.change(|s| s.call_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
+}
+
+#[derive(Deserialize)]
+struct SetReq {
+    #[serde(default)]
+    pointer: String,
+    #[serde(default)]
+    value: Option<Value>,
+    #[serde(default)]
+    remove: bool,
+    by: Option<String>,
+}
+
+async fn set_state(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<SetReq>) -> Result<Json<Event>, ApiError> {
+    let value = match (r.remove, r.value) {
+        (true, _) => None,
+        (false, Some(v)) => Some(v),
+        (false, None) => return Err(Error::Invalid("give a value, or remove: true".into()).into()),
+    };
+    app.change(|s| s.set_state(&name, &r.pointer, value, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -549,6 +570,14 @@ struct Screen {
     version: u64,
     #[serde(default)]
     at_ms: u64,
+    /// Errors the page threw or logged.
+    #[serde(default)]
+    errors: Vec<String>,
+    /// Open questions whose anchor matches nothing: "a2 #f2".
+    #[serde(default)]
+    missing: Vec<String>,
+    #[serde(default)]
+    page_height: u32,
 }
 
 async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> StatusCode {
@@ -597,6 +626,8 @@ async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std
     } else {
         format!("http://127.0.0.1:{port}/j/{name}/?agent=1")
     };
+    // The phone frame is scaled up to 500px wide, so the window grows with it.
+    let height = if width < 500 { (height as f64 * 500.0 / width.max(1) as f64).ceil() as u32 } else { height };
     let width = width.max(500);
     let profile = std::env::temp_dir().join("jelly-chrome");
     let mut cmd = tokio::process::Command::new(bin);
@@ -625,6 +656,9 @@ struct SeeQ {
     height: Option<u32>,
     #[serde(default)]
     png: bool,
+    /// The whole page, not just the first screen.
+    #[serde(default)]
+    full: bool,
 }
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
@@ -663,7 +697,9 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let dir = home.join("see");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{}-{width}.png", name.replace(':', "_")));
-        match render(port, &name, width, height, Some(&path)).await {
+        // The full page: as tall as the page said it was, within reason.
+        let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
+        match render(port, &name, width, h, Some(&path)).await {
             Ok(()) => Some(path),
             Err(e) => { notes.push(format!("No screenshot: {e}")); None }
         }
@@ -671,7 +707,10 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
 
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
-    line(&mut out, format!("{} · {} · v{} · by {}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
+    let history: Vec<Event> = std::fs::read_to_string(home.join("events.jsonl")).unwrap_or_default().lines()
+        .filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let last = history.last().map(|e| format!(" · last change {} by {}", ago(e.at_ms), e.by)).unwrap_or_default();
+    line(&mut out, format!("{} · {} · v{} · made by {}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
         if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
     for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
@@ -693,21 +732,28 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     for f in j.comments.iter().filter(|f| !f.resolved) {
         line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
-    if let Ok(text) = std::fs::read_to_string(home.join("events.jsonl")) {
-        let mine: Vec<Event> = text.lines().filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).filter(|e: &Event| e.by == PERSON).collect();
-        for e in mine.iter().rev().take(8).rev() {
-            line(&mut out, format!("person   {} {}", ago(e.at_ms), e.describe()));
-        }
+    let mine: Vec<&Event> = history.iter().filter(|e| e.by == PERSON).collect();
+    for e in mine.iter().rev().take(8).rev() {
+        line(&mut out, format!("person   {} {}", ago(e.at_ms), e.describe()));
     }
     let project = j.project();
     if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
         line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
     }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
+    if let Some(sc) = &snap {
+        for e in &sc.errors { line(&mut out, format!("error    {e}")); }
+        for m in &sc.missing {
+            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
+            line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; it shows at the top instead"));
+        }
+        if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
+    }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(s) = snap {
         line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
         out.push_str(&s.text);
+        out.push('\n');
     }
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }
@@ -796,7 +842,9 @@ struct FrameQ {
 }
 
 async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
-    Html(format!("<!doctype html><body style=\"margin:0;background:#2b3133\"><iframe src=\"/j/{name}/?agent=1\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff\"></iframe></body>", w = q.w, h = q.h))
+    // Scaled up to fill the 500px window, so the screenshot is the phone layout and nothing else.
+    let k = 500.0 / q.w.max(1) as f64;
+    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
 }
 
 #[derive(Deserialize)]

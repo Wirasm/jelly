@@ -15,7 +15,7 @@ of it. You hear all of it.
 thinking: lay out the options, what each gains and costs, what each looks like,
 and which you recommend. Their job is to react, not to write your spec.
 
-Check the daemon first: `jelly ls`. If it cannot be reached, ask the person to run
+Check the daemon first: `jelly ls` (this project's jellies; `--all` for every project). If it cannot be reached, ask the person to run
 `jelly serve`; do not start it yourself unless they asked.
 
 ## Make a jelly
@@ -32,7 +32,9 @@ Write three files in a scratch folder, never in the person's repo:
 ```bash
 jelly new plan --view view.html --verbs verbs.js --state state.json --about "One line: why this exists"
 jelly reshape plan --view v2.html    # new view or verbs, same state; open pages reload
-jelly call plan add '{"title":"…"}'  # run a verb yourself
+jelly call plan add '{"title":"…"}'  # run a verb yourself; '@args.json' or - for big args
+jelly set plan --at /title '"Better title"'   # write state yourself, no verb needed
+jelly set plan --at /draft --rm      # remove a key; `jelly set plan @state.json` replaces it all
 jelly undo plan                      # undo the last change to view, verbs or state
 jelly pin plan                       # keep it; unpinned jellies archive after a quiet week
 jelly rm plan
@@ -46,6 +48,7 @@ jelly.call("add", { title });                   // runs a verb; rejects with its
 jelly.read("other"); jelly.watch("other", fn);  // another jelly's state
 jelly.focus("other");                           // open another jelly
 jelly.asset("shot.png");                        // URL of a file added with jelly asset
+jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a question about #thumbs
 ```
 
 Keep data in state, not in page variables or localStorage, so you and the person
@@ -58,11 +61,14 @@ jelly working plan "rebuilding the header"   # the person sees it and waits
 jelly done plan
 jelly see plan                 # check your work: the page as text, plus what waits on the person
 jelly see plan --width 390     # at phone width; add --png when layout matters
+jelly see plan --full          # screenshot the whole page, not just the first screen
 jelly focus plan               # open it full size on their screen
 ```
 
 Always look before you show: run `jelly see`, and fix what is off before you focus
-the jelly or ask about it. Add `assets/poster.png`, a frame that tells the story on
+the jelly or ask about it. `see` lists the errors your page threw (`error` lines)
+and questions whose `--at` matches nothing (`!` lines): fix both. Clear your own
+test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
 ## Ask the person: attention

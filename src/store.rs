@@ -271,6 +271,7 @@ pub enum EventKind {
     Attention,
     Answer,
     Withdraw,
+    Set,
 }
 
 impl EventKind {
@@ -308,6 +309,7 @@ impl Event {
             EventKind::Undo => "undid the last state change".into(),
             EventKind::Attention => format!("asked {:?}", s(&a["title"])),
             EventKind::Withdraw => format!("withdrew {}", s(&a)),
+            EventKind::Set => match s(&a["pointer"]).as_str() { "" => "set the whole state".into(), p => format!("set {p}") },
             EventKind::Working => match a.as_str() { Some(w) => format!("started working: {w}"), None => "finished working".into() },
             EventKind::Note => format!("left a note: {}", clip(s(&a))),
             EventKind::Move => format!("moved here from {}", s(&a["from"])),
@@ -460,6 +462,20 @@ impl Store {
             entry.jelly.view_rev += 1;
         }
         self.commit(name, EventKind::Reshape, by, None, None, Vec::new())
+    }
+
+    /// Writes state directly, outside the verbs: an agent fixing its own
+    /// content or starting over. An empty pointer means the whole state;
+    /// `value: None` removes what is at the pointer. Undoable like a verb call.
+    pub fn set_state(&mut self, name: &str, pointer: &str, value: Option<Value>, by: &str) -> Result<Event, Error> {
+        let entry = self.entry(name)?;
+        let mut next = entry.jelly.state.clone();
+        set_at(&mut next, pointer, value).map_err(Error::Invalid)?;
+        let mut changed = Vec::new();
+        diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
+        snapshot(entry);
+        entry.jelly.state = next;
+        self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed)
     }
 
     pub fn undo(&mut self, name: &str, by: &str) -> Result<Event, Error> {
@@ -775,6 +791,34 @@ fn snapshot(entry: &mut Entry) {
     }
 }
 
+/// Puts `value` at a JSON pointer (adding an object key or appending to an
+/// array is fine), or removes what is there when `value` is None.
+fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), String> {
+    if pointer.is_empty() {
+        *root = value.unwrap_or_else(|| Value::Object(Default::default()));
+        return Ok(());
+    }
+    let (parent, last) = pointer.rsplit_once('/').ok_or_else(|| format!("{pointer:?} is not a JSON pointer; start it with /"))?;
+    let key = last.replace("~1", "/").replace("~0", "~");
+    match root.pointer_mut(parent).ok_or_else(|| format!("nothing at {}", if parent.is_empty() { "/" } else { parent }))? {
+        Value::Object(m) => match value {
+            Some(v) => { m.insert(key, v); }
+            None => { m.remove(&key).ok_or_else(|| format!("nothing at {pointer}"))?; }
+        },
+        Value::Array(a) => {
+            let i = if key == "-" { a.len() } else { key.parse::<usize>().map_err(|_| format!("{key:?} is not an array index"))? };
+            match value {
+                Some(v) if i < a.len() => a[i] = v,
+                Some(v) if i == a.len() => a.push(v),
+                None if i < a.len() => { a.remove(i); }
+                _ => return Err(format!("{pointer} is past the end of the array")),
+            }
+        }
+        _ => return Err(format!("{parent} is neither an object nor an array")),
+    }
+    Ok(())
+}
+
 /// Names become file names and URL segments.
 /// Builds an attention item from an agent's spec, checking it.
 fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error> {
@@ -907,6 +951,23 @@ mod tests {
             &mut out,
         );
         assert_eq!(out, vec!["/a/x", "/gone", "/k~1v", "/list", "/new"]);
+    }
+
+    #[test]
+    fn agents_set_state_directly_and_can_undo_it() {
+        let (_d, mut s) = store();
+        s.create("doc", "".into(), "const verbs = {};".into(), json!({"title": "Old", "items": [1, 2], "stale": true}), "agent", false, "", "").unwrap();
+        let ev = s.set_state("doc", "/title", Some(json!("New")), "agent").unwrap();
+        assert_eq!((ev.kind, ev.changed.clone()), (EventKind::Set, vec!["/title".to_string()]));
+        s.set_state("doc", "/stale", None, "agent").unwrap();
+        s.set_state("doc", "/items/-", Some(json!(3)), "agent").unwrap();
+        s.set_state("doc", "/items/0", None, "agent").unwrap();
+        assert_eq!(s.get("doc").unwrap().state, json!({"title": "New", "items": [2, 3]}));
+        assert!(s.set_state("doc", "/nope/x", Some(json!(1)), "agent").is_err(), "a missing parent is an error, not a silent create");
+        s.set_state("doc", "", Some(json!({"fresh": 1})), "agent").unwrap();
+        assert_eq!(s.get("doc").unwrap().state, json!({"fresh": 1}));
+        s.undo("doc", "agent").unwrap();
+        assert_eq!(s.get("doc").unwrap().state, json!({"title": "New", "items": [2, 3]}));
     }
 
     #[test]

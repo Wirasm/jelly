@@ -30,7 +30,7 @@ pub fn run(src: &str, verb: &str, state: &Value, args: &Value, by: &str, at_ms: 
          if (typeof f !== 'function') return JSON.stringify({{error: 'no verb ' + {verb_lit} + '; this jelly has: ' + Object.keys(__v).join(', ')}});
          var state = {state}, args = {args}, ctx = {ctx};
          try {{ var r = f(state, args, ctx); return JSON.stringify({{ok: r === undefined ? state : r}}); }}
-         catch (e) {{ return JSON.stringify({{error: String(e) + (e && e.stack ? '\\n' + e.stack : '')}}); }}",
+         catch (e) {{ return JSON.stringify({{error: e instanceof Error && e.name === 'Error' ? e.message : String(e)}}); }}",
     );
     eval(&script(src, &body))
 }
@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn errors_name_the_problem() {
         let s = json!({});
-        assert!(run(VERBS, "boom", &s, &json!({}), "agent", 0).unwrap_err().contains("nope"));
+        // A refusal reads as its message alone; a real bug keeps its type.
+        assert_eq!(run(VERBS, "boom", &s, &json!({}), "agent", 0).unwrap_err(), "nope");
+        let bug = "const verbs = { b(s) { s.x.y = 1; } };";
+        assert!(run(bug, "b", &s, &json!({}), "agent", 0).unwrap_err().starts_with("TypeError"));
         assert!(run(VERBS, "missing", &s, &json!({}), "agent", 0).unwrap_err().contains("this jelly has: label"));
         assert!(run(VERBS, "toString", &s, &json!({}), "agent", 0).unwrap_err().contains("no verb"));
         assert!(check("const nope = 1;").unwrap_err().contains("const verbs"));

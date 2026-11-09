@@ -6,6 +6,7 @@
 //   jelly.read(name)            another jelly's state ("plan" means plan in this project)
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
 //   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
+//   jelly.itemsAt("#thumbs")    questions asked about that element; .answer.option is the pick
 //
 // Comments anywhere: hold Option (Alt) and click any element, or press the
 // Comment button, to pin a comment to it. The agent gets a `comment` event that
@@ -16,6 +17,15 @@
 // the daemon, so nothing is lost.
 (() => {
   const boot = window.__JELLY__;
+  // Errors the page hits, so `jelly see` can tell the agent its page is broken.
+  const errors = [];
+  let snapT = null;
+  const agentMode = new URLSearchParams(location.search).has("agent");
+  const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
+  addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
+  addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
+  const consoleError = console.error.bind(console);
+  console.error = (...a) => { noteError(a.map((x) => x?.stack || x?.message || String(x)).join(" ")); consoleError(...a); };
   let state = boot.state;
   let version = boot.version;
   let comments = boot.comments || boot.feedback || [];
@@ -136,6 +146,8 @@
     get attention() { return attention.filter((a) => !a.answer && !a.withdrawn); },
     /** Every attention item, answered and withdrawn ones too. */
     get items() { return attention; },
+    /** The items asked about one element (`--at "#thumbs"`), newest first: item.answer.option is the pick. */
+    itemsAt: (selector) => attention.filter((a) => a.anchor?.selector === selector && !a.withdrawn).reverse(),
     /** fn() now and whenever attention items or comments change. */
     onAttention(fn) { attentionSubs.push(fn); fn(); },
     /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
@@ -328,7 +340,9 @@
       const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
       if (m && (m.length < 4 || +m[3] > 0.5)) return (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) < 128;
     }
-    return matchMedia("(prefers-color-scheme: dark)").matches;
+    // No background anywhere: the browser paints white unless the page opts into dark.
+    const scheme = getComputedStyle(document.documentElement).colorScheme + " " + (document.querySelector('meta[name="color-scheme"]')?.content || "");
+    return /dark/.test(scheme) && matchMedia("(prefers-color-scheme: dark)").matches;
   }
   // Where a card goes: after its anchor, lifted out of grids, flex rows, lists and
   // tables so it gets a full row; at the top when the anchor is missing or floats.
@@ -417,8 +431,12 @@
       const after = placeAfter(a);
       if (after) { if (after.nextElementSibling !== host) after.after(host); }
       else {
-        if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; topStack.style.cssText = "max-width:880px;margin:14px auto;padding:0 16px"; }
+        if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
         if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
+        // Line up with the page's own content column.
+        const first = [...document.body.children].find((c) => !c.classList.contains("jf-ask") && c.getBoundingClientRect().width > 0);
+        const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
+        topStack.style.cssText = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
         if (host.parentElement !== topStack) topStack.appendChild(host);
       }
     }
@@ -478,6 +496,7 @@
         else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
         else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
         else if (LEAF.has(tag)) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); walk(c, depth + 1); continue; }
         else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else walk(c, depth);
@@ -485,17 +504,24 @@
     })(document.body, 0);
     return lines.join("\n");
   }
-  let snapT = null;
-  const agentMode = new URLSearchParams(location.search).has("agent");
+  // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {
-    clearTimeout(snapT);
+    if (snapT) return;
     snapT = setTimeout(() => {
+      snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version }) }).catch(() => {});
+        body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
+          page_height: document.documentElement.scrollHeight, missing: deadAnchors() }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
+  }
+  // Questions whose --at matches nothing on the page (they fall back to the top).
+  function deadAnchors() {
+    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => { try { return !document.querySelector(a.anchor.selector); } catch { return true; } }).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
+  // Text a page fills in later (fetches, timers) counts too.
+  new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   async function refreshThreads() {
     const r = await fetch(api);
