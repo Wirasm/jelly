@@ -48,7 +48,10 @@
   function source() {
     if (!lastUsed || Date.now() - lastUsed.at > 2000) return undefined;
     const el = lastUsed.el;
-    return { selector: selectorFor(el), text: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 80) };
+    // For a field, name the field, not what was typed in it (that is in the args).
+    const field = el.matches("input, textarea, select");
+    const text = field ? el.getAttribute("aria-label") || el.placeholder || el.name || "a field" : el.innerText || el.getAttribute("aria-label") || "";
+    return { selector: selectorFor(el), text: text.trim().replace(/\s+/g, " ").slice(0, 80) };
   }
 
   async function post(path, body) {
@@ -364,6 +367,47 @@
     workEl.querySelector("span").textContent = `${working.by} is working on this${working.what ? ": " + working.what : ""}`;
     document.body.appendChild(workEl);
   }
+
+  // ---- agent view: what is on screen, as text, for `jelly see` ----------------
+  const SKIP = ".jf-btn, .jf-pop, .jf-pin, .jf-att, .jf-chip, .jf-work";
+  const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
+  const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
+  function agentSnapshot() {
+    const lines = [];
+    const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
+    const shown = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0"; };
+    const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
+    (function walk(el, depth) {
+      for (const c of el.children) {
+        if (lines.length > 400 || c.matches(SKIP) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
+        const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
+        if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
+        else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
+        else if (tag === "a") add(depth, `link "${label(c)}"`, c);
+        else if (tag === "input" && (c.type === "checkbox" || c.type === "radio")) add(depth, `${c.type} "${label(c.closest("label") || c)}" ${c.checked ? "checked" : "unchecked"}`, c);
+        else if (tag === "input" || tag === "textarea") add(depth, `${tag === "textarea" || !c.type || c.type === "text" ? "textbox" : c.type}${c.placeholder ? ` "${c.placeholder}"` : ""} = "${String(c.value).slice(0, 80)}"`, c);
+        else if (tag === "select") add(depth, `select = "${c.options[c.selectedIndex]?.text || ""}"`, c);
+        else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
+        else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
+        else if (LEAF.has(tag)) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); walk(c, depth + 1); continue; }
+        else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else walk(c, depth);
+      }
+    })(document.body, 0);
+    return lines.join("\n");
+  }
+  let snapT = null;
+  const agentMode = new URLSearchParams(location.search).has("agent");
+  function postSnapshot() {
+    clearTimeout(snapT);
+    snapT = setTimeout(() => {
+      fetch(`${api}/snapshot`, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version }) }).catch(() => {});
+    }, agentMode ? 400 : 1200);
+  }
+  addEventListener("load", postSnapshot);
+  subs.push(() => postSnapshot());
 
   async function refreshFeedback() {
     const r = await fetch(api);

@@ -95,6 +95,41 @@ check it, ideally with a reviewer that sees only the screenshots, before you
 focus it or ask about it. Add `assets/poster.png`, a frame that tells the story
 on its own, and the jelly page uses it as the thumbnail.
 
+## See a jelly the way you need to
+
+```bash
+jelly see plan                 # what it is, verbs, state shape, what waits on the person,
+                               # what they did lately, and what is on screen as text
+jelly see plan --width 390     # rendered at phone width
+jelly see plan --png           # also a screenshot path, when layout matters
+jelly note plan "Cards move next→doing→done; Rasmus decides what moves to doing."
+```
+
+Start every session on an existing jelly with `jelly see`. Check your own work
+with it before you focus a jelly or ask about it. Leave a `jelly note` for the next
+agent when you learn something about the jelly that is not in its view.
+
+## Work from files
+
+```bash
+jelly pull plan ./plan         # view.html, verbs.js, state.json, assets/
+jelly dev plan ./plan          # reshapes on every save; open views reload
+```
+
+The jelly stays the source of truth, so scratch folders can come and go.
+
+## Use the project's design
+
+If the repo has a DESIGN.md (github.com/google-labs-code/design.md), jelly picks
+it up when you run `jelly new` there. `jelly design` prints it; its tokens are CSS
+variables at `/p/<project>/design.css` (`--color-primary`, `--rounded-md`, …):
+
+```html
+<link rel="stylesheet" href="/p/archon/design.css">
+```
+
+Use it when it helps the jelly feel like the product; ignore it when it doesn't.
+
 ## Make any other jelly
 
 Write three files in a scratch directory, never in the person's repo.

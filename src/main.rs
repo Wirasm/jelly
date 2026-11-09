@@ -1,5 +1,6 @@
 //! `jelly`: the daemon and the CLI agents use to make and shape jellies.
 
+mod design;
 mod server;
 mod store;
 mod verbs;
@@ -144,6 +145,36 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
+    /// See a jelly as an agent: what it is, its verbs and state, what waits on
+    /// the person, what they did lately, and what is on screen as text.
+    See {
+        name: String,
+        /// Render at this width (390 for a phone). Default: an open view, else 1280.
+        #[arg(long)]
+        width: Option<u32>,
+        /// Also save a screenshot and print its path.
+        #[arg(long)]
+        png: bool,
+    },
+    /// Leave a note for the next agent who picks this jelly up.
+    Note { name: String, text: String },
+    /// Write a jelly's view, verbs, state and assets into a folder to edit.
+    Pull {
+        name: String,
+        /// Default: ./<name>
+        dir: Option<PathBuf>,
+    },
+    /// Watch a pulled folder and reshape the jelly on every save.
+    Dev {
+        name: String,
+        dir: Option<PathBuf>,
+    },
+    /// Print this project's DESIGN.md, or set it with --set FILE. Views can use
+    /// its tokens as CSS variables: <link rel="stylesheet" href="/p/PROJECT/design.css">.
+    Design {
+        #[arg(long)]
+        set: Option<PathBuf>,
+    },
     /// Take back an ask or look that no longer applies.
     Withdraw { name: String, id: String },
     /// Open a jelly full size on the person's screen. No name closes it.
@@ -264,6 +295,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Ls => print(get(&api(""))?),
         Cmd::New { name, view, verbs, state, replace, about } => {
+            sync_design(&cli.url, &project());
             let state: Value = match state {
                 Some(p) => serde_json::from_str(&read(&p)?).map_err(|e| format!("{}: {e}", p.display()))?,
                 None => json!({}),
@@ -406,6 +438,76 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Reply { name, id: cid, text, resolve } => print(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by})).map(summary)?),
         Cmd::Project { name, project } => print(send("POST", &api(&format!("/{}/project", id(&name))), json!({"project": project, "by": by})).map(summary)?),
+        Cmd::See { name, width, png } => {
+            let mut q = vec![];
+            if let Some(w) = width { q.push(format!("width={w}")); }
+            if png { q.push("png=true".into()); }
+            let url = api(&format!("/{}/see?{}", id(&name), q.join("&")));
+            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
+            print!("{}", resp.into_string().map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        Cmd::Note { name, text } => print(send("POST", &api(&format!("/{}/note", id(&name))), json!({"text": text, "by": by})).map(summary)?),
+        Cmd::Pull { name, dir } => {
+            let name = id(&name);
+            let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
+            let dir = dir.unwrap_or_else(|| PathBuf::from(&short));
+            let j = get(&api(&format!("/{name}")))?;
+            std::fs::create_dir_all(dir.join("assets")).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("view.html"), j["view"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("verbs.js"), j["verbs"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("state.json"), serde_json::to_string_pretty(&j["state"]).unwrap_or_default()).map_err(|e| e.to_string())?;
+            let assets_dir = format!("{}/j/{}/assets", cli.url, name);
+            let list = std::fs::read_dir(std::env::var_os("JELLY_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".jelly")).join("assets").join(&name));
+            let mut n = 0;
+            for f in list.into_iter().flatten().flatten() {
+                let file = f.file_name().to_string_lossy().to_string();
+                if let Ok(r) = ureq::get(&format!("{assets_dir}/{}", encode(&file))).call() {
+                    let mut bytes = Vec::new();
+                    r.into_reader().read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                    std::fs::write(dir.join("assets").join(&file), bytes).map_err(|e| e.to_string())?;
+                    n += 1;
+                }
+            }
+            println!("{}/  view.html  verbs.js  state.json  assets/ ({n})\nEdit, then: jelly dev {name} {}", dir.display(), dir.display());
+            Ok(())
+        }
+        Cmd::Dev { name, dir } => {
+            let name = id(&name);
+            let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
+            let dir = dir.unwrap_or_else(|| PathBuf::from(&short));
+            let stamp = |f: &str| std::fs::metadata(dir.join(f)).and_then(|m| m.modified()).ok();
+            let (mut v, mut b) = (stamp("view.html"), stamp("verbs.js"));
+            if v.is_none() && b.is_none() {
+                return Err(format!("nothing to watch in {}: run jelly pull {name} first", dir.display()));
+            }
+            println!("watching {} for {name} (Ctrl-C to stop)", dir.display());
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                let (nv, nb) = (stamp("view.html"), stamp("verbs.js"));
+                if nv == v && nb == b { continue; }
+                let view = (nv != v).then(|| std::fs::read_to_string(dir.join("view.html"))).transpose().map_err(|e| e.to_string())?;
+                let verbs = (nb != b).then(|| std::fs::read_to_string(dir.join("verbs.js"))).transpose().map_err(|e| e.to_string())?;
+                (v, b) = (nv, nb);
+                match send("POST", &api(&format!("/{name}/reshape")), json!({"view": view, "verbs": verbs, "by": by})) {
+                    Ok(ev) => println!("reshaped v{} ({})", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")),
+                    Err(e) => eprintln!("not reshaped: {e}"),
+                }
+            }
+        }
+        Cmd::Design { set } => {
+            let p = project();
+            if p.is_empty() { return Err("not in a project: run from a git repo or pass --project".into()); }
+            let url = format!("{}/api/projects/{}/design", cli.url, encode(&p));
+            match set {
+                Some(f) => {
+                    ureq::put(&url).send_string(&read(&f)?).map_err(describe)?;
+                    println!("{p}: DESIGN.md set. Views use it with <link rel=\"stylesheet\" href=\"/p/{p}/design.css\">");
+                    Ok(())
+                }
+                None => { print!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?); Ok(()) }
+            }
+        }
         Cmd::Restore { name } => print(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by})).map(summary)?),
         Cmd::Asset { name, files } => {
             let name = id(&name);
@@ -446,6 +548,16 @@ fn run(cli: Cli) -> Result<(), String> {
     }
 }
 
+/// If the repo has a DESIGN.md, give it to the project so views can use it.
+fn sync_design(url: &str, project: &str) {
+    if project.is_empty() { return; }
+    let Ok(out) = std::process::Command::new("git").args(["rev-parse", "--show-toplevel"]).output() else { return };
+    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if let Ok(md) = std::fs::read_to_string(Path::new(&top).join("DESIGN.md")) {
+        let _ = ureq::put(&format!("{url}/api/projects/{}/design", encode(project))).send_string(&md);
+    }
+}
+
 /// Prints what the person did since the last call, then moves the cursor.
 fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
     if hook && project.is_empty() {
@@ -482,7 +594,7 @@ fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
         let a = &e["args"];
         let what = match e["kind"].as_str().unwrap_or("") {
             "call" => {
-                let from = e["source"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" (clicked \"{}\")", clip(t))).unwrap_or_default();
+                let from = e["source"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" (via \"{}\")", clip(t))).unwrap_or_default();
                 format!("{} {}{from}", e["verb"].as_str().unwrap_or("?"), clip(&a.to_string()))
             }
             "answer" => {

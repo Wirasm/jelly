@@ -50,6 +50,10 @@ pub struct Jelly {
     /// Set while an agent says it is changing this jelly, so the person waits.
     #[serde(default)]
     pub working: Option<Value>,
+    /// Notes agents leave for the next agent: what this jelly is for, how its
+    /// verbs are meant to be used, what the person said. `jelly see` shows them.
+    #[serde(default)]
+    pub notes: Vec<Value>,
 }
 
 /// One item for the person's attention. `ask` wants an answer (an option, or
@@ -229,6 +233,7 @@ impl Store {
             feedback: Vec::new(),
             attention: Vec::new(),
             working: None,
+            notes: Vec::new(),
         };
         self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
         self.commit(name, "new", by, None, None, vec![String::new()])
@@ -368,6 +373,25 @@ impl Store {
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
         self.entry(name)?.jelly.archived = archived;
         self.commit(name, if archived { "archive" } else { "restore" }, by, None, None, Vec::new())
+    }
+
+    /// An agent's note for the next agent.
+    pub fn note(&mut self, name: &str, text: &str, by: &str) -> Result<Event, Error> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(Error::Invalid("empty note".into()));
+        }
+        self.entry(name)?.jelly.notes.push(serde_json::json!({"text": text, "by": by, "at_ms": now_ms()}));
+        self.commit(name, "note", by, None, Some(Value::String(text.into())), Vec::new())
+    }
+
+    /// Where a project keeps its DESIGN.md.
+    pub fn project_dir(&self, project: &str) -> PathBuf {
+        self.dir.join("projects").join(project)
+    }
+
+    pub fn home(&self) -> &Path {
+        &self.dir
     }
 
     pub fn asset_dir(&self, name: &str) -> PathBuf {

@@ -27,6 +27,9 @@ const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
 struct App {
     store: Mutex<Store>,
     events: broadcast::Sender<Event>,
+    /// The latest agent snapshot of each jelly as rendered in some browser:
+    /// `{text, width, height, version, at_ms}`. Kept in memory only.
+    snapshots: Mutex<std::collections::HashMap<String, Value>>,
 }
 type Shared = Arc<App>;
 
@@ -49,7 +52,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, snapshots: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // surface, restorable, and back on their own as soon as anything changes them.
@@ -87,6 +90,13 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/snapshot", get(snapshot))
         .route("/api/inbox", get(inbox))
+        .route("/api/jellies/{name}/snapshot", post(put_snapshot))
+        .route("/api/jellies/{name}/note", post(note))
+        .route("/api/jellies/{name}/see", get(see))
+        .route("/see-frame/{name}", get(see_frame))
+        .route("/api/projects/{project}/design", get(get_design).put(put_design))
+        .route("/p/{project}/DESIGN.md", get(get_design))
+        .route("/p/{project}/design.css", get(design_css))
         .route("/api/attention", get(attention_list))
         .route("/api/focus", post(focus))
         .route("/api/jellies/{name}/attention", post(attend))
@@ -512,4 +522,257 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
     }
     items.sort_by_key(|i| std::cmp::Reverse(i["at_ms"].as_u64().unwrap_or(0)));
     Json(json!(items))
+}
+
+// ---- the agent view -------------------------------------------------------
+
+async fn put_snapshot(State(app): State<Shared>, Path(name): Path<String>, Json(mut v): Json<Value>) -> StatusCode {
+    v["at_ms"] = json!(now_ms());
+    app.snapshots.lock().expect("snapshots lock").insert(name, v);
+    StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct NoteReq {
+    text: String,
+    by: Option<String>,
+}
+
+async fn note(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<NoteReq>) -> Result<Json<Event>, ApiError> {
+    app.change(|s| s.note(&name, &r.text, &by(r.by)))
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// A browser the daemon can drive headless: JELLY_CHROME, or the usual installs.
+fn chrome() -> Option<String> {
+    let candidates = [
+        std::env::var("JELLY_CHROME").unwrap_or_default(),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into(),
+        "/Applications/Chromium.app/Contents/MacOS/Chromium".into(),
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge".into(),
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser".into(),
+        "/usr/bin/google-chrome".into(),
+        "/usr/bin/chromium".into(),
+        "/usr/bin/chromium-browser".into(),
+    ];
+    candidates.into_iter().find(|c| !c.is_empty() && std::path::Path::new(c).exists())
+}
+
+/// Runs headless Chrome on a jelly at a given size. With `png`, writes a
+/// screenshot there; either way the page's runtime posts a fresh snapshot.
+async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>) -> Result<(), String> {
+    let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
+    // Headless Chrome will not make a window narrower than 500px, so phone
+    // widths render the jelly in an iframe of exactly that size.
+    let url = if width < 500 {
+        format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}")
+    } else {
+        format!("http://127.0.0.1:{port}/j/{name}/?agent=1")
+    };
+    let width = width.max(500);
+    let profile = std::env::temp_dir().join("jelly-chrome");
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg(format!("--window-size={width},{height}"))
+        .arg("--virtual-time-budget=2500")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match png {
+        Some(p) => { cmd.arg(format!("--screenshot={}", p.display())); }
+        None => { cmd.arg("--dump-dom"); }
+    }
+    let run = cmd.arg(url).status();
+    match tokio::time::timeout(std::time::Duration::from_secs(20), run).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
+        Err(_) => Err("the browser took longer than 20 s".into()),
+    }
+}
+
+#[derive(Deserialize)]
+struct SeeQ {
+    width: Option<u32>,
+    height: Option<u32>,
+    #[serde(default)]
+    png: bool,
+}
+
+/// Everything an agent needs to pick up a jelly, as plain text: what it is,
+/// what the person did, what waits on them, and what is on screen.
+async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+    let (j, home) = {
+        let store = app.store.lock().expect("store lock");
+        (store.get(&name)?.clone(), store.home().to_path_buf())
+    };
+    let port = req_headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878);
+    let width = q.width.unwrap_or(1280);
+    let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
+    // Use a snapshot from an open view if it is current and the right width; otherwise render one.
+    let fresh = |app: &App| app.snapshots.lock().expect("snapshots lock").get(&name).cloned()
+        .filter(|s| s["version"].as_u64() == Some(j.version) && (q.width.is_none() || s["width"].as_u64() == Some(width as u64)));
+    let mut notes: Vec<String> = Vec::new();
+    let mut snap = fresh(&app);
+    if snap.is_none() {
+        let asked = now_ms();
+        match render(port, &name, width, height, None).await {
+            Ok(()) => {
+                for _ in 0..30 {
+                    if let Some(s) = app.snapshots.lock().expect("snapshots lock").get(&name).filter(|s| s["at_ms"].as_u64().unwrap_or(0) >= asked) {
+                        snap = Some(s.clone());
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                if snap.is_none() { notes.push("The page rendered but sent no snapshot.".into()); }
+            }
+            Err(e) => notes.push(format!("No snapshot: {e}")),
+        }
+    }
+    let png = if q.png {
+        let dir = home.join("see");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{}-{width}.png", name.replace(':', "_")));
+        match render(port, &name, width, height, Some(&path)).await {
+            Ok(()) => Some(path),
+            Err(e) => { notes.push(format!("No screenshot: {e}")); None }
+        }
+    } else { None };
+
+    let mut out = String::new();
+    let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
+    line(&mut out, format!("{} · {} · v{} · by {}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
+        if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
+    if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
+    for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
+    let verbs = crate::verbs::check(&j.verbs).unwrap_or_default();
+    line(&mut out, format!("verbs    {}", if verbs.is_empty() { "none (read-only)".to_string() } else { verbs.iter().map(|v| verb_sig(&j.verbs, v)).collect::<Vec<_>>().join(" · ") }));
+    line(&mut out, format!("state    {}", shape(&j.state)));
+    let assets = app.store.lock().expect("store lock").assets(&name);
+    if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
+    let waiting: Vec<&crate::store::Attention> = j.attention.iter().filter(|a| a.answer.is_none()).collect();
+    for a in &waiting {
+        let opts = a.options.iter().map(|o| format!("{}{}", o["id"].as_str().unwrap_or("?"), if a.recommend.as_deref() == o["id"].as_str() { "★" } else { "" })).collect::<Vec<_>>().join("/");
+        line(&mut out, format!("waits    {} {} {:?}{}{}", a.id, a.kind, a.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, a.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default()));
+    }
+    for a in j.attention.iter().filter(|a| a.answer.as_ref().is_some_and(|x| x.get("withdrawn").is_none())).rev().take(5) {
+        let ans = a.answer.as_ref().expect("filtered");
+        line(&mut out, format!("answered {} {:?} → {}{}", a.id, a.title, ans["option"].as_str().unwrap_or(if a.kind == "look" { "seen" } else { "" }),
+            ans["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" \"{t}\"")).unwrap_or_default()));
+    }
+    for f in j.feedback.iter().filter(|f| !f.resolved) {
+        line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
+    }
+    if let Ok(text) = std::fs::read_to_string(home.join("events.jsonl")) {
+        let mine: Vec<Value> = text.lines().filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).filter(|e: &Value| e["by"] == "person").collect();
+        for e in mine.iter().rev().take(8).rev() {
+            let what = match e["kind"].as_str().unwrap_or("") {
+                "call" => format!("{} {}{}", e["verb"].as_str().unwrap_or("?"), clip(&e["args"].to_string(), 100), e["source"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" (via {t:?})")).unwrap_or_default()),
+                k => format!("{k} {}", clip(&e["args"].to_string(), 100)),
+            };
+            line(&mut out, format!("person   {} {what}", ago(e["at_ms"].as_u64().unwrap_or(0))));
+        }
+    }
+    let project = j.project();
+    if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
+        line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
+    }
+    if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
+    for n in notes { line(&mut out, format!("!        {n}")); }
+    if let Some(s) = snap {
+        line(&mut out, format!("\non screen at {}×{} (v{}):", s["width"], s["height"], s["version"]));
+        out.push_str(s["text"].as_str().unwrap_or(""));
+    }
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
+}
+
+fn ago(ms: u64) -> String {
+    let s = now_ms().saturating_sub(ms) / 1000;
+    match s { 0..=59 => "just now".into(), 60..=3599 => format!("{}m ago", s / 60), 3600..=86399 => format!("{}h ago", s / 3600), _ => format!("{}d ago", s / 86400) }
+}
+
+/// `pick({id, value})`: the verb's name and its second parameter, which holds
+/// the args (destructured keys, or the parameter's name).
+fn verb_sig(src: &str, name: &str) -> String {
+    let Some(at) = src.find(&format!("{name}(")) else { return name.into() };
+    let rest = &src[at + name.len() + 1..];
+    // Split the parameter list on top-level commas.
+    let (mut depth, mut params, mut cur) = (0i32, Vec::new(), String::new());
+    for c in rest.chars() {
+        match c {
+            '(' | '{' | '[' => depth += 1,
+            ')' if depth == 0 => break,
+            ')' | '}' | ']' => depth -= 1,
+            ',' if depth == 0 => { params.push(std::mem::take(&mut cur)); continue; }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    params.push(cur);
+    let Some(args) = params.get(1).map(|p| p.trim()) else { return name.into() };
+    match args.strip_prefix('{').and_then(|a| a.rsplit_once('}')).map(|(k, _)| k) {
+        Some(keys) => {
+            let keys: Vec<&str> = keys.split(',').map(|x| x.split([':', '=']).next().unwrap_or("").trim()).filter(|x| !x.is_empty()).collect();
+            format!("{name}({{{}}})", keys.join(", "))
+        }
+        None if !args.is_empty() => format!("{name}({args})"),
+        None => name.into(),
+    }
+}
+
+/// A one-line sketch of state: top-level keys with their kind and size.
+fn shape(v: &Value) -> String {
+    match v {
+        Value::Object(m) if m.is_empty() => "{}".into(),
+        Value::Object(m) => m.iter().take(12).map(|(k, v)| format!("{k}: {}", match v {
+            Value::Array(a) => format!("[{}]", a.len()),
+            Value::Object(o) => format!("{{{} keys}}", o.len()),
+            Value::String(s) => format!("{:?}", clip(s, 30)),
+            other => clip(&other.to_string(), 30),
+        })).collect::<Vec<_>>().join(" · "),
+        other => clip(&other.to_string(), 80),
+    }
+}
+
+// ---- DESIGN.md per project --------------------------------------------------
+
+async fn put_design(State(app): State<Shared>, Path(project): Path<String>, body: String) -> Result<StatusCode, ApiError> {
+    let dir = app.store.lock().expect("store lock").project_dir(&project);
+    std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("DESIGN.md"), body)).map_err(|e| Error::Invalid(format!("could not save DESIGN.md: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_design(State(app): State<Shared>, Path(project): Path<String>) -> Response {
+    let path = app.store.lock().expect("store lock").project_dir(&project).join("DESIGN.md");
+    match std::fs::read_to_string(path) {
+        Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, format!("project {project} has no DESIGN.md")).into_response(),
+    }
+}
+
+/// The DESIGN.md tokens as CSS variables: `--color-primary`, `--rounded-md`,
+/// `--spacing-sm`, `--typography-h1-font-size`, …
+async fn design_css(State(app): State<Shared>, Path(project): Path<String>) -> Response {
+    let path = app.store.lock().expect("store lock").project_dir(&project).join("DESIGN.md");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let css = format!(":root {{\n{}}}\n", crate::design::css_vars(&text));
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], css).into_response()
+}
+
+#[derive(Deserialize)]
+struct FrameQ {
+    w: u32,
+    h: u32,
+}
+
+async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
+    Html(format!("<!doctype html><body style=\"margin:0;background:#2b3133\"><iframe src=\"/j/{name}/?agent=1\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff\"></iframe></body>", w = q.w, h = q.h))
 }
