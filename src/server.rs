@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{Error, Event, Store};
+use crate::store::{AttentionKind, Error, Event, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -45,10 +45,10 @@ impl App {
 
 pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     let mut store = store;
-    if store.get("surface").is_err() {
+    if store.get(PAGE).is_err() {
         store
-            .create("surface", SURFACE_VIEW.into(), SURFACE_VERBS.into(), json!({}), "jelly", false, "The jelly page", "")
-            .and_then(|_| store.pin("surface", true, "jelly"))
+            .create(PAGE, SURFACE_VIEW.into(), SURFACE_VERBS.into(), json!({}), "jelly", false, "The jelly page", "")
+            .and_then(|_| store.pin(PAGE, true, "jelly"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
@@ -69,14 +69,14 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
 
     let router = Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
-        .route("/", get(|st: State<Shared>| async move { view(st, Path("surface".into())).await }))
+        .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
         // Views live at /j/<name>/ so a view can use relative `assets/<file>` paths.
         .route("/j/{name}", get(|Path(name): Path<String>| async move { Redirect::permanent(&format!("/j/{name}/")) }))
         .route("/j/{name}/", get(view))
         .route("/j/{name}/assets/{file}", get(asset))
         // A project's page is the same page, showing only that project's jellies.
-        .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path("surface".into())).await }))
+        .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
         .route("/api/events", get(events))
         .route("/api/ws", get(ws))
         .route("/api/jellies", get(list).post(create))
@@ -132,8 +132,10 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn by(by: Option<String>) -> String {
-    by.unwrap_or_else(|| "person".into())
+/// Every change says who made it. Nothing defaults to the person, so a script
+/// that forgets cannot answer on their behalf.
+fn by(by: Option<String>) -> Result<String, Error> {
+    by.filter(|b| !b.trim().is_empty()).ok_or_else(|| Error::Invalid("say who is making this change: by".into()))
 }
 
 async fn list(State(app): State<Shared>) -> Json<Value> {
@@ -141,16 +143,16 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
     // The page that shows the jellies is internal; it is not one of yours.
     Json(json!(store
         .list()
-        .filter(|j| j.name != "surface")
+        .filter(|j| j.name != PAGE)
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
             "pinned": j.pinned, "made_by": j.made_by, "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
             "open_comments": j.feedback.iter().filter(|f| !f.resolved).count(),
             // Threads where the agent answered and the person has not: the agent may be asking.
-            "answered_comments": j.feedback.iter().filter(|f| !f.resolved && f.replies.last().is_some_and(|r| r.by != "person")).count(),
+            "answered_comments": j.feedback.iter().filter(|f| !f.resolved && f.replies.last().is_some_and(|r| r.by != PERSON)).count(),
             "decision": is_decision(&j.state).then(|| j.state.get("status").cloned()).flatten(),
-            "attention": j.attention.iter().filter(|a| a.answer.is_none()).count(),
+            "attention": j.attention.iter().filter(|a| a.is_open()).count(),
             "working": j.working,
             "poster": store.assets(&j.name).into_iter().find(|f| f.starts_with("poster.")),
         }))
@@ -193,7 +195,7 @@ struct CreateReq {
 
 async fn create(State(app): State<Shared>, Json(r): Json<CreateReq>) -> Result<Json<Event>, ApiError> {
     let state = if r.state.is_null() { json!({}) } else { r.state };
-    app.change(|s| s.create(&r.name, r.view, r.verbs, state, &by(r.by), r.replace, &r.about, &r.project))
+    app.change(|s| s.create(&r.name, r.view, r.verbs, state, &by(r.by)?, r.replace, &r.about, &r.project))
 }
 
 #[derive(Deserialize)]
@@ -208,7 +210,7 @@ struct CallReq {
 }
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.call_from(&name, &r.verb, r.args, &by(r.by), r.source))
+    app.change(|s| s.call_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
 }
 
 #[derive(Deserialize)]
@@ -220,7 +222,7 @@ struct ReshapeReq {
 }
 
 async fn reshape(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReshapeReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.reshape(&name, r.view, r.verbs, r.about, &by(r.by)))
+    app.change(|s| s.reshape(&name, r.view, r.verbs, r.about, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -231,11 +233,11 @@ struct ByReq {
 }
 
 async fn undo(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.undo(&name, &by(r.by)))
+    app.change(|s| s.undo(&name, &by(r.by)?))
 }
 
 async fn pin(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.pin(&name, r.pinned.unwrap_or(true), &by(r.by)))
+    app.change(|s| s.pin(&name, r.pinned.unwrap_or(true), &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -247,7 +249,7 @@ struct CommentReq {
 }
 
 async fn comment(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CommentReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.comment(&name, r.anchor, &r.text, &by(r.by)))
+    app.change(|s| s.comment(&name, r.anchor, &r.text, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -257,7 +259,7 @@ struct ResolveReq {
 }
 
 async fn resolve(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ResolveReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.resolve(&name, &r.id, &by(r.by)))
+    app.change(|s| s.resolve(&name, &r.id, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -270,7 +272,7 @@ struct ReplyReq {
 }
 
 async fn reply(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReplyReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.reply(&name, &r.id, &r.text, &by(r.by), r.resolve))
+    app.change(|s| s.reply(&name, &r.id, &r.text, &by(r.by)?, r.resolve))
 }
 
 #[derive(Deserialize)]
@@ -280,14 +282,14 @@ struct ProjectReq {
 }
 
 async fn project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.set_project(&name, &r.project, &by(r.by)))
+    app.change(|s| s.set_project(&name, &r.project, &by(r.by)?))
 }
 
 async fn remove(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ByQ>) -> Result<Json<Event>, ApiError> {
-    if name == "surface" {
+    if name == PAGE {
         return Err(Error::Invalid("the jelly page cannot be removed; reshape or undo it instead".into()).into());
     }
-    app.change(|s| s.remove(&name, &by(q.by)))
+    app.change(|s| s.remove(&name, &by(q.by)?))
 }
 
 #[derive(Deserialize)]
@@ -356,7 +358,7 @@ fn inject_head(html: &str, inject: &str) -> String {
 }
 
 async fn restore(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.set_archived(&name, false, &by(r.by)))
+    app.change(|s| s.set_archived(&name, false, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -365,7 +367,7 @@ struct AssetQ {
 }
 
 async fn put_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>, body: Bytes) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.put_asset(&name, &file, &body, &by(q.by)))
+    app.change(|s| s.put_asset(&name, &file, &body, &by(q.by)?))
 }
 
 fn content_type(file: &str) -> &'static str {
@@ -428,17 +430,17 @@ struct InboxQ {
 }
 
 /// What the person did since `since`, for jellies in `project`: the events an
-/// agent should hear about at the start of its next turn.
+/// agent should hear about at the start of its next turn, each with a line of text.
 async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value> {
     let path = app.store.lock().expect("store lock").events_path();
     let since = q.since.unwrap_or(0);
     let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
     let prefix = q.project.filter(|p| !p.is_empty()).map(|p| format!("{p}:"));
     let items: Vec<Value> = text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|e| e["at_ms"].as_u64().unwrap_or(0) > since && e["by"] == "person" && e["jelly"] != "surface")
-        .filter(|e| prefix.as_deref().is_none_or(|p| e["jelly"].as_str().unwrap_or("").starts_with(p)))
-        .filter(|e| matches!(e["kind"].as_str(), Some("call" | "comment" | "reply" | "resolve" | "undo" | "answer")))
+        .filter_map(|l| serde_json::from_str::<Event>(l).ok())
+        .filter(|e| e.at_ms > since && e.by == PERSON && e.jelly != PAGE && e.kind.is_for_agent())
+        .filter(|e| prefix.as_deref().is_none_or(|p| e.jelly.starts_with(p)))
+        .map(|e| { let text = e.describe(); let mut v = json!(e); v["text"] = json!(text); v })
         .collect();
     Json(json!(items))
 }
@@ -456,7 +458,7 @@ struct AttendReq {
 
 async fn attend(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AttendReq>) -> Result<Json<Event>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
-    app.change(|s| s.attend(&name, r.spec, &self::by(by)))
+    app.change(|s| s.attend(&name, r.spec, &self::by(by)?))
 }
 
 #[derive(Deserialize)]
@@ -468,11 +470,11 @@ struct AnswerReq {
 }
 
 async fn answer(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<AnswerReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.answer(&name, &id, r.option.as_deref(), &r.text, &by(r.by)))
+    app.change(|s| s.answer(&name, &id, r.option.as_deref(), &r.text, &by(r.by)?))
 }
 
 async fn withdraw(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.withdraw(&name, &id, &by(r.by)))
+    app.change(|s| s.withdraw(&name, &id, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -482,7 +484,7 @@ struct WorkingReq {
 }
 
 async fn working(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<WorkingReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.set_working(&name, r.what.as_deref().filter(|w| !w.trim().is_empty()), &by(r.by)))
+    app.change(|s| s.set_working(&name, r.what.as_deref().filter(|w| !w.trim().is_empty()), &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -496,7 +498,7 @@ async fn focus(State(app): State<Shared>, Json(r): Json<FocusReq>) -> Result<Jso
     if let Some(n) = &r.name {
         app.store.lock().expect("store lock").get(n)?;
     }
-    app.change(|s| s.call("surface", "focus", json!({"name": r.name}), &by(r.by)))
+    app.change(|s| s.call(PAGE, "focus", json!({"name": r.name}), &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -510,8 +512,8 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
     let mut items: Vec<Value> = Vec::new();
-    for j in store.list().filter(|j| j.name != "surface" && project.as_deref().is_none_or(|p| j.project() == p)) {
-        for a in j.attention.iter().filter(|a| a.answer.is_none()) {
+    for j in store.list().filter(|j| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)) {
+        for a in j.attention.iter().filter(|a| a.is_open()) {
             let mut v = serde_json::to_value(a).expect("serializes");
             v["jelly"] = json!(j.name);
             v["about"] = json!(j.about);
@@ -544,7 +546,7 @@ struct NoteReq {
 }
 
 async fn note(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<NoteReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.note(&name, &r.text, &by(r.by)))
+    app.change(|s| s.note(&name, &r.text, &by(r.by)?))
 }
 
 fn now_ms() -> u64 {
@@ -659,27 +661,23 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     line(&mut out, format!("state    {}", shape(&j.state)));
     let assets = app.store.lock().expect("store lock").assets(&name);
     if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
-    let waiting: Vec<&crate::store::Attention> = j.attention.iter().filter(|a| a.answer.is_none()).collect();
-    for a in &waiting {
-        let opts = a.options.iter().map(|o| format!("{}{}", o["id"].as_str().unwrap_or("?"), if a.recommend.as_deref() == o["id"].as_str() { "★" } else { "" })).collect::<Vec<_>>().join("/");
-        line(&mut out, format!("waits    {} {} {:?}{}{}", a.id, a.kind, a.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, a.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default()));
+    for a in j.attention.iter().filter(|a| a.is_open()) {
+        let opts = a.options.iter().map(|o| format!("{}{}", o.id, if a.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
+        let kind = if a.kind == AttentionKind::Look { "look" } else { "ask" };
+        line(&mut out, format!("waits    {} {kind} {:?}{}{}", a.id, a.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, a.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default()));
     }
-    for a in j.attention.iter().filter(|a| a.answer.as_ref().is_some_and(|x| x.get("withdrawn").is_none())).rev().take(5) {
+    for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
         let ans = a.answer.as_ref().expect("filtered");
-        line(&mut out, format!("answered {} {:?} → {}{}", a.id, a.title, ans["option"].as_str().unwrap_or(if a.kind == "look" { "seen" } else { "" }),
-            ans["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" \"{t}\"")).unwrap_or_default()));
+        let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
+        line(&mut out, format!("answered {} {:?} → {pick}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }));
     }
     for f in j.feedback.iter().filter(|f| !f.resolved) {
         line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
     if let Ok(text) = std::fs::read_to_string(home.join("events.jsonl")) {
-        let mine: Vec<Value> = text.lines().filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).filter(|e: &Value| e["by"] == "person").collect();
+        let mine: Vec<Event> = text.lines().filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).filter(|e: &Event| e.by == PERSON).collect();
         for e in mine.iter().rev().take(8).rev() {
-            let what = match e["kind"].as_str().unwrap_or("") {
-                "call" => format!("{} {}{}", e["verb"].as_str().unwrap_or("?"), clip(&e["args"].to_string(), 100), e["source"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" (via {t:?})")).unwrap_or_default()),
-                k => format!("{k} {}", clip(&e["args"].to_string(), 100)),
-            };
-            line(&mut out, format!("person   {} {what}", ago(e["at_ms"].as_u64().unwrap_or(0))));
+            line(&mut out, format!("person   {} {}", ago(e.at_ms), e.describe()));
         }
     }
     let project = j.project();

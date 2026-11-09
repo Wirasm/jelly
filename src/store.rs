@@ -56,30 +56,129 @@ pub struct Jelly {
     pub notes: Vec<Value>,
 }
 
-/// One item for the person's attention. `ask` wants an answer (an option, or
-/// text); `look` wants a glance (seen, or a word back).
+/// One item for the person's attention: an ask wants an answer (an option, or
+/// text), a look wants a glance (seen, or a word back). Items asked together,
+/// as one `jelly ask --spec` round, share a group.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(from = "AttentionOnDisk")]
 pub struct Attention {
     pub id: String,
-    pub kind: String,
+    pub kind: AttentionKind,
     pub title: String,
+    /// More to read before answering.
     #[serde(default)]
-    pub detail: String,
-    /// Optional element it is about: `{"selector": "#hero", "quote": "…"}`.
+    pub context: String,
+    /// The element it is about: `{"selector": "#hero", "quote": "…"}`, or null.
     #[serde(default)]
     pub anchor: Value,
-    /// For asks: `[{"id": "a", "label": "…", "does": "what picking it does"}]`.
     #[serde(default)]
-    pub options: Vec<Value>,
+    pub options: Vec<AskOption>,
     #[serde(default)]
     pub recommend: Option<String>,
     #[serde(default)]
     pub why: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub by: String,
     pub at_ms: u64,
-    /// `{"option"?, "text"?, "by", "at_ms"}` once answered; `{"withdrawn": true, …}` if the agent took it back.
     #[serde(default)]
-    pub answer: Option<Value>,
+    pub answer: Option<Answer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawn: Option<Stamp>,
+}
+
+impl Attention {
+    pub fn is_open(&self) -> bool {
+        self.answer.is_none() && self.withdrawn.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AttentionKind {
+    Ask,
+    Look,
+}
+
+/// One choice in an ask. Only `id` and `label` are needed; the rest is there
+/// when the agent lays out tradeoffs.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AskOption {
+    pub id: String,
+    #[serde(default, alias = "title")]
+    pub label: String,
+    /// What picking it does, in a sentence.
+    #[serde(default, alias = "summary", skip_serializing_if = "String::is_empty")]
+    pub does: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub costs: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effort: String,
+    /// Any HTML, shown live in a sandbox.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview: String,
+}
+
+/// The person's answer: an option, words, or both. A look answered with
+/// neither means "seen".
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Answer {
+    #[serde(default)]
+    pub option: Option<String>,
+    #[serde(default)]
+    pub text: String,
+    pub by: String,
+    pub at_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Stamp {
+    pub by: String,
+    pub at_ms: u64,
+}
+
+/// Reads items saved before withdrawals had their own field
+/// (`answer: {"withdrawn": true, …}`) and before `detail` became `context`.
+#[derive(Deserialize)]
+struct AttentionOnDisk {
+    id: String,
+    kind: AttentionKind,
+    title: String,
+    #[serde(default, alias = "detail")]
+    context: String,
+    #[serde(default)]
+    anchor: Value,
+    #[serde(default)]
+    options: Vec<AskOption>,
+    #[serde(default)]
+    recommend: Option<String>,
+    #[serde(default)]
+    why: String,
+    #[serde(default)]
+    group: Option<String>,
+    by: String,
+    at_ms: u64,
+    #[serde(default)]
+    answer: Option<Value>,
+    #[serde(default)]
+    withdrawn: Option<Stamp>,
+}
+
+impl From<AttentionOnDisk> for Attention {
+    fn from(d: AttentionOnDisk) -> Self {
+        let mut withdrawn = d.withdrawn;
+        let answer = match d.answer {
+            Some(v) if v.get("withdrawn").is_some() => {
+                withdrawn = Some(Stamp { by: v["by"].as_str().unwrap_or("agent").into(), at_ms: v["at_ms"].as_u64().unwrap_or(0) });
+                None
+            }
+            Some(v) => serde_json::from_value(v).ok(),
+            None => None,
+        };
+        Attention { id: d.id, kind: d.kind, title: d.title, context: d.context, anchor: d.anchor, options: d.options, recommend: d.recommend, why: d.why, group: d.group, by: d.by, at_ms: d.at_ms, answer, withdrawn }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -117,19 +216,19 @@ struct Entry {
     undo: Vec<Snapshot>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Event {
     pub seq: u64,
     pub at_ms: u64,
     pub jelly: String,
-    /// new | call | reshape | undo | pin | project | remove | comment | resolve | reply
-    pub kind: String,
+    pub kind: EventKind,
     pub by: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub verb: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub args: Option<Value>,
     /// JSON pointers into the state that this change touched.
+    #[serde(default)]
     pub changed: Vec<String>,
     /// For a person's verb call: the element they used, `{"selector", "text"}`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -137,8 +236,82 @@ pub struct Event {
     pub version: u64,
     pub view_rev: u64,
     /// Sent to live listeners, never written to the log.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub state: Option<Value>,
+}
+
+/// Every kind of change. Adding one means adding it here and to `describe`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EventKind {
+    New,
+    Call,
+    Reshape,
+    Undo,
+    Pin,
+    #[serde(alias = "project")]
+    Move,
+    Remove,
+    Archive,
+    Restore,
+    Asset,
+    Note,
+    Working,
+    Comment,
+    Reply,
+    Resolve,
+    Attention,
+    Answer,
+    Withdraw,
+}
+
+impl EventKind {
+    /// Things the person did that an agent should hear about.
+    pub fn is_for_agent(self) -> bool {
+        matches!(self, EventKind::Call | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer)
+    }
+}
+
+/// The person, as recorded in `by`. Agents use their own names.
+pub const PERSON: &str = "person";
+/// The internal jelly that is the jelly page.
+pub const PAGE: &str = "surface";
+
+impl Event {
+    /// One line on what happened, for agents: the inbox and `jelly see` both use it.
+    pub fn describe(&self) -> String {
+        let a = self.args.clone().unwrap_or(Value::Null);
+        let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+        let clip = |t: String| if t.chars().count() > 200 { format!("{}…", t.chars().take(200).collect::<String>()) } else { t };
+        match self.kind {
+            EventKind::Call => {
+                let via = self.source.as_ref().and_then(|x| x["text"].as_str()).filter(|t| !t.is_empty()).map(|t| format!(" (via {t:?})")).unwrap_or_default();
+                format!("{} {}{via}", self.verb.as_deref().unwrap_or("?"), clip(a.to_string()))
+            }
+            EventKind::Answer => {
+                let pick = a["option"].as_str().map(|o| format!(" → {o}")).unwrap_or_default();
+                let text = a["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(": {:?}", clip(t.into()))).unwrap_or_default();
+                let seen = if pick.is_empty() && text.is_empty() { " → seen" } else { "" };
+                format!("answered {} {:?}{pick}{seen}{text}", s(&a["id"]), s(&a["title"]))
+            }
+            EventKind::Comment => format!("commented on {:?}: {}", s(&a["anchor"]["quote"]), clip(s(&a["text"]))),
+            EventKind::Reply => format!("replied on comment {}: {}", s(&a["id"]), clip(s(&a["text"]))),
+            EventKind::Resolve => format!("resolved comment {}", s(&a)),
+            EventKind::Undo => "undid the last state change".into(),
+            EventKind::Attention => format!("asked {:?}", s(&a["title"])),
+            EventKind::Withdraw => format!("withdrew {}", s(&a)),
+            EventKind::Working => match a.as_str() { Some(w) => format!("started working: {w}"), None => "finished working".into() },
+            EventKind::Note => format!("left a note: {}", clip(s(&a))),
+            EventKind::Move => format!("moved here from {}", s(&a["from"])),
+            EventKind::Pin => if a == Value::Bool(true) { "pinned it".into() } else { "unpinned it".into() },
+            EventKind::Asset => format!("added {}", s(&a["file"])),
+            EventKind::New => "made it".into(),
+            EventKind::Reshape => "reshaped it".into(),
+            EventKind::Remove => "removed it".into(),
+            EventKind::Archive => "archived it".into(),
+            EventKind::Restore => "restored it".into(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -236,7 +409,7 @@ impl Store {
             notes: Vec::new(),
         };
         self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
-        self.commit(name, "new", by, None, None, vec![String::new()])
+        self.commit(name, EventKind::New, by, None, None, vec![String::new()])
     }
 
     pub fn call(&mut self, name: &str, verb: &str, args: Value, by: &str) -> Result<Event, Error> {
@@ -252,7 +425,7 @@ impl Store {
         snapshot(entry);
         entry.jelly.state = next;
         self.source = source;
-        self.commit(name, "call", by, Some(verb.into()), Some(args), changed)
+        self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed)
     }
 
     /// Replaces the view and/or verbs while keeping state. `about` alone only
@@ -278,7 +451,7 @@ impl Store {
             }
             entry.jelly.view_rev += 1;
         }
-        self.commit(name, "reshape", by, None, None, Vec::new())
+        self.commit(name, EventKind::Reshape, by, None, None, Vec::new())
     }
 
     pub fn undo(&mut self, name: &str, by: &str) -> Result<Event, Error> {
@@ -294,7 +467,7 @@ impl Store {
             // version must notice and reload.
             entry.jelly.view_rev += 1;
         }
-        self.commit(name, "undo", by, None, None, changed)
+        self.commit(name, EventKind::Undo, by, None, None, changed)
     }
 
     /// Pins a comment to part of the view.
@@ -307,14 +480,14 @@ impl Store {
         let id = format!("f{}", entry.jelly.feedback.len() + 1);
         entry.jelly.feedback.push(Feedback { id: id.clone(), anchor: anchor.clone(), text: text.into(), by: by.into(), at_ms: now_ms(), resolved: false, replies: Vec::new() });
         let args = serde_json::json!({"id": id, "anchor": anchor, "text": text});
-        self.commit(name, "comment", by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Comment, by, None, Some(args), Vec::new())
     }
 
     pub fn resolve(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
         let entry = self.entry(name)?;
         let f = entry.jelly.feedback.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
         f.resolved = true;
-        self.commit(name, "resolve", by, None, Some(Value::String(id.into())), Vec::new())
+        self.commit(name, EventKind::Resolve, by, None, Some(Value::String(id.into())), Vec::new())
     }
 
     /// Answers on a comment's thread. A reply leaves the thread resolved only
@@ -330,7 +503,7 @@ impl Store {
         f.replies.push(Reply { text: text.into(), by: by.into(), at_ms: now_ms() });
         f.resolved = resolve;
         let args = serde_json::json!({"id": id, "text": text, "resolved": resolve, "anchor": f.anchor, "comment": f.text});
-        self.commit(name, "reply", by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Reply, by, None, Some(args), Vec::new())
     }
 
     /// Moves a jelly to another project ("" for none). Its id changes from
@@ -352,7 +525,7 @@ impl Store {
         if self.asset_dir(name).exists() {
             let _ = fs::rename(self.asset_dir(name), self.asset_dir(&id));
         }
-        self.commit(&id, "project", by, None, Some(serde_json::json!({"from": name})), Vec::new())
+        self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new())
     }
 
     /// Archives unpinned jellies nobody touched for `idle_ms`, unless they still
@@ -363,7 +536,7 @@ impl Store {
             .filter(|j| !j.pinned && !j.archived && j.name != "surface" && j.updated_ms < cutoff)
             .filter(|j| !(j.state.get("questions").or_else(|| j.state.get("options")).is_some() && j.state.get("status") == Some(&Value::from("open"))))
             .filter(|j| j.feedback.iter().all(|f| f.resolved))
-            .filter(|j| j.attention.iter().all(|a| a.answer.is_some()))
+            .filter(|j| j.attention.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
             .collect();
         stale.iter().filter_map(|n| self.set_archived(n, true, "jelly").ok()).collect()
@@ -371,7 +544,7 @@ impl Store {
 
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
         self.entry(name)?.jelly.archived = archived;
-        self.commit(name, if archived { "archive" } else { "restore" }, by, None, None, Vec::new())
+        self.commit(name, if archived { EventKind::Archive } else { EventKind::Restore }, by, None, None, Vec::new())
     }
 
     /// An agent's note for the next agent.
@@ -381,7 +554,7 @@ impl Store {
             return Err(Error::Invalid("empty note".into()));
         }
         self.entry(name)?.jelly.notes.push(serde_json::json!({"text": text, "by": by, "at_ms": now_ms()}));
-        self.commit(name, "note", by, None, Some(Value::String(text.into())), Vec::new())
+        self.commit(name, EventKind::Note, by, None, Some(Value::String(text.into())), Vec::new())
     }
 
     /// Where a project keeps its DESIGN.md.
@@ -403,7 +576,7 @@ impl Store {
         let dir = self.asset_dir(name);
         self.entry(name)?;
         fs::create_dir_all(&dir).and_then(|_| write_atomic(&dir.join(file), bytes)).map_err(|e| Error::Invalid(format!("could not save {file}: {e}")))?;
-        self.commit(name, "asset", by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new())
+        self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new())
     }
 
     pub fn assets(&self, name: &str) -> Vec<String> {
@@ -413,94 +586,104 @@ impl Store {
         out
     }
 
-    /// Puts something in front of the person: `{"kind": "ask"|"look", "title", "detail"?,
-    /// "anchor"?, "options"?, "recommend"?, "why"?}`.
+    /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
+    /// "context"?, "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
     pub fn attend(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
-        let kind = spec["kind"].as_str().unwrap_or("ask");
-        if kind != "ask" && kind != "look" {
-            return Err(Error::Invalid(format!("attention kind must be ask or look, not {kind:?}")));
-        }
+        let kind = match spec["kind"].as_str().unwrap_or("ask") {
+            "ask" => AttentionKind::Ask,
+            "look" => AttentionKind::Look,
+            k => return Err(Error::Invalid(format!("attention kind must be ask or look, not {k:?}"))),
+        };
         let title = spec["title"].as_str().unwrap_or("").trim().to_string();
         if title.is_empty() {
             return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
         }
-        let options: Vec<Value> = spec["options"].as_array().cloned().unwrap_or_default();
+        let options: Vec<AskOption> = serde_json::from_value(spec.get("options").cloned().unwrap_or(Value::Array(vec![])))
+            .map_err(|e| Error::Invalid(format!("options: {e}")))?;
         let mut ids = std::collections::HashSet::new();
         for o in &options {
-            let id = o["id"].as_str().filter(|i| !i.is_empty()).ok_or_else(|| Error::Invalid("every option needs an id".into()))?;
-            if !ids.insert(id.to_string()) {
-                return Err(Error::Invalid(format!("option id {id:?} appears twice")));
+            if o.id.is_empty() {
+                return Err(Error::Invalid("every option needs an id".into()));
+            }
+            if !ids.insert(o.id.as_str()) {
+                return Err(Error::Invalid(format!("option id {:?} appears twice", o.id)));
             }
         }
         let recommend = spec["recommend"].as_str().map(String::from);
         if let Some(r) = &recommend {
-            if !ids.contains(r) {
+            if !ids.contains(r.as_str()) {
                 return Err(Error::Invalid(format!("recommend {r:?} is not one of the options")));
             }
         }
+        let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
         let entry = self.entry(name)?;
         let id = format!("a{}", entry.jelly.attention.len() + 1);
         let item = Attention {
-            id: id.clone(),
-            kind: kind.into(),
+            id,
+            kind,
             title,
-            detail: spec["detail"].as_str().unwrap_or("").into(),
+            context: if spec.get("context").is_some() { text("context") } else { text("detail") },
             anchor: spec.get("anchor").cloned().unwrap_or(Value::Null),
             options,
             recommend,
-            why: spec["why"].as_str().unwrap_or("").into(),
+            why: text("why"),
+            group: spec["group"].as_str().map(String::from),
             by: by.into(),
             at_ms: now_ms(),
             answer: None,
+            withdrawn: None,
         };
         let args = serde_json::to_value(&item).expect("serializes");
         entry.jelly.attention.push(item);
-        self.commit(name, "attention", by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Attention, by, None, Some(args), Vec::new())
     }
 
-    /// The person answers an item: an option id, text, or both. A look can be
-    /// answered with nothing, meaning "seen".
+    /// The person answers an item, or changes their answer: an option id,
+    /// text, or both. A look can be answered with nothing, meaning "seen".
     pub fn answer(&mut self, name: &str, id: &str, option: Option<&str>, text: &str, by: &str) -> Result<Event, Error> {
         let entry = self.entry(name)?;
         let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
+        if item.withdrawn.is_some() {
+            return Err(Error::Invalid(format!("{id} was withdrawn")));
+        }
         if let Some(o) = option {
-            if !item.options.iter().any(|x| x["id"] == o) {
+            if !item.options.iter().any(|x| x.id == o) {
                 return Err(Error::Invalid(format!("{o:?} is not an option of {id}")));
             }
         }
         let text = text.trim();
-        if item.kind == "ask" && option.is_none() && text.is_empty() {
+        if item.kind == AttentionKind::Ask && option.is_none() && text.is_empty() {
             return Err(Error::Invalid("an ask needs an option or some text".into()));
         }
-        item.answer = Some(serde_json::json!({"option": option, "text": text, "by": by, "at_ms": now_ms()}));
-        let args = serde_json::json!({"id": id, "kind": item.kind, "title": item.title, "option": option, "text": text});
-        self.commit(name, "answer", by, None, Some(args), Vec::new())
+        item.answer = Some(Answer { option: option.map(String::from), text: text.into(), by: by.into(), at_ms: now_ms() });
+        let args = serde_json::json!({"id": id, "kind": item.kind, "title": item.title, "option": option, "text": text, "group": item.group});
+        self.commit(name, EventKind::Answer, by, None, Some(args), Vec::new())
     }
 
     /// The agent takes an item back, for example because it no longer applies.
     pub fn withdraw(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
         let entry = self.entry(name)?;
         let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
-        item.answer = Some(serde_json::json!({"withdrawn": true, "by": by, "at_ms": now_ms()}));
-        self.commit(name, "withdraw", by, None, Some(Value::String(id.into())), Vec::new())
+        item.withdrawn = Some(Stamp { by: by.into(), at_ms: now_ms() });
+        self.commit(name, EventKind::Withdraw, by, None, Some(Value::String(id.into())), Vec::new())
     }
 
     /// `Some("rebuilding the header")` while an agent works on the jelly, `None` when done.
     pub fn set_working(&mut self, name: &str, what: Option<&str>, by: &str) -> Result<Event, Error> {
         self.entry(name)?.jelly.working = what.map(|w| serde_json::json!({"what": w, "by": by, "at_ms": now_ms()}));
-        self.commit(name, "working", by, None, what.map(|w| Value::String(w.into())), Vec::new())
+        self.commit(name, EventKind::Working, by, None, what.map(|w| Value::String(w.into())), Vec::new())
     }
 
     pub fn pin(&mut self, name: &str, pinned: bool, by: &str) -> Result<Event, Error> {
         self.entry(name)?.jelly.pinned = pinned;
-        self.commit(name, "pin", by, None, Some(Value::Bool(pinned)), Vec::new())
+        self.commit(name, EventKind::Pin, by, None, Some(Value::Bool(pinned)), Vec::new())
     }
 
     pub fn remove(&mut self, name: &str, by: &str) -> Result<Event, Error> {
         let entry = self.jellies.remove(name).ok_or_else(|| Error::NotFound(name.into()))?;
         let _ = fs::remove_file(self.path(name));
         let _ = fs::remove_dir_all(self.asset_dir(name));
-        let ev = self.event(&entry.jelly, "remove", by, None, None, Vec::new());
+        let ev = self.event(&entry.jelly, EventKind::Remove, by, None, None, Vec::new());
         self.log(&ev);
         Ok(ev)
     }
@@ -513,18 +696,18 @@ impl Store {
     fn commit(
         &mut self,
         name: &str,
-        kind: &str,
+        kind: EventKind,
         by: &str,
         verb: Option<String>,
         args: Option<Value>,
         changed: Vec<String>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
-        if kind != "new" {
+        if kind != EventKind::New {
             entry.jelly.version += 1;
         }
         entry.jelly.updated_ms = now_ms();
-        if kind != "archive" {
+        if kind != EventKind::Archive {
             entry.jelly.archived = false;
         }
         let bytes = serde_json::to_vec(entry).expect("a jelly serializes");
@@ -536,13 +719,13 @@ impl Store {
         Ok(ev)
     }
 
-    fn event(&mut self, j: &Jelly, kind: &str, by: &str, verb: Option<String>, args: Option<Value>, changed: Vec<String>) -> Event {
+    fn event(&mut self, j: &Jelly, kind: EventKind, by: &str, verb: Option<String>, args: Option<Value>, changed: Vec<String>) -> Event {
         self.seq += 1;
         Event {
             seq: self.seq,
             at_ms: now_ms(),
             jelly: j.name.clone(),
-            kind: kind.into(),
+            kind,
             by: by.into(),
             verb,
             args,
@@ -707,7 +890,7 @@ mod tests {
         s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         s.call("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
         let ev = s.comment("j", json!({"selector": "#a"}), "too small", "person").unwrap();
-        assert_eq!((ev.kind.as_str(), ev.args.clone().unwrap()["id"].clone()), ("comment", json!("f1")));
+        assert_eq!((ev.kind, ev.args.clone().unwrap()["id"].clone()), (EventKind::Comment, json!("f1")));
         s.undo("j", "person").unwrap();
         let j = s.get("j").unwrap();
         assert_eq!(j.state, json!({"labels": {}}));
@@ -741,14 +924,22 @@ mod tests {
         s.attend("j", spec, "claude").unwrap();
         s.attend("j", json!({"kind": "look", "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "z"}), "claude").is_err());
+        assert!(s.attend("j", json!({"kind": "poll", "title": "x"}), "claude").is_err());
         assert!(s.answer("j", "a1", Some("c"), "", "person").is_err(), "not an option");
         assert!(s.answer("j", "a1", None, " ", "person").is_err(), "an ask needs something");
         let ev = s.answer("j", "a1", Some("b"), "but larger", "person").unwrap();
         assert_eq!(ev.args.unwrap()["option"], "b");
+        assert_eq!(s.get("j").unwrap().attention[0].answer.as_ref().unwrap().text, "but larger");
         s.answer("j", "a2", None, "", "person").unwrap();
-        assert!(s.sweep(0).is_empty() || s.get("j").unwrap().attention.iter().all(|a| a.answer.is_some()));
+        assert!(s.get("j").unwrap().attention.iter().all(|a| !a.is_open()));
+        s.attend("j", json!({"title": "Still needed?"}), "claude").unwrap();
+        s.withdraw("j", "a3", "claude").unwrap();
+        assert!(!s.get("j").unwrap().attention[2].is_open());
+        assert!(s.answer("j", "a3", None, "yes", "person").is_err(), "withdrawn items can't be answered");
         s.undo("j", "person").ok();
         assert!(s.get("j").unwrap().attention[0].answer.is_some(), "undo leaves answers alone");
+        let old: Attention = serde_json::from_value(json!({"id": "a9", "kind": "ask", "title": "t", "detail": "d", "by": "x", "at_ms": 1, "answer": {"withdrawn": true, "by": "x", "at_ms": 2}})).unwrap();
+        assert!(old.withdrawn.is_some() && old.answer.is_none() && old.context == "d", "old files still load");
     }
 
     #[test]

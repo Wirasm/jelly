@@ -129,7 +129,7 @@
     },
     resolve: (id) => post(`${api}/resolve`, { id }),
     /** Open asks and looks the agent put on this jelly. */
-    get attention() { return attention.filter((a) => !a.answer); },
+    get attention() { return attention.filter((a) => !a.answer && !a.withdrawn); },
     /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
     answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
     asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
@@ -329,7 +329,8 @@
   // The answer sheet: everything the agent put in front of the person, one at a
   // time, with room to read. Fixed colours so it reads the same on any jelly.
   let sheet = null, sheetAt = null, hl = null;
-  function openItems() { return attention.filter((a) => !a.answer); }
+  const isOpen = (a) => !a.answer && !a.withdrawn;
+  function openItems() { return attention.filter(isOpen); }
   function highlight(a) {
     hl?.classList.remove("jf-hl");
     hl = null;
@@ -359,7 +360,7 @@
       <div class="jf-sh-foot"><button class="jf-sh-later">Later</button><button class="jf-sh-go" ${isAsk && a.options?.length ? "disabled" : ""}>${isAsk ? "Answer" : "Seen"}</button></div>`;
     sheet.querySelector(".jf-sh-who").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
     sheet.querySelector(".jf-sh-q").textContent = a.title;
-    sheet.querySelector(".jf-sh-d").textContent = a.detail || "";
+    sheet.querySelector(".jf-sh-d").textContent = a.context || "";
     if (rec) {
       sheet.querySelector(".jf-sh-rec b").textContent = `${a.by} recommends ${rec.label || rec.id}`;
       sheet.querySelector(".jf-sh-rec span").textContent = a.why || "";
@@ -401,7 +402,7 @@
     if (sheet && !openItems().some((x) => x.id === sheetAt)) { const n = openItems()[0]; n ? openSheet(n.id) : closeSheet(); }
     attEls.forEach((e) => e.remove());
     attEls = [];
-    const open = attention.filter((a) => !a.answer);
+    const open = openItems();
     const loose = [];
     for (const a of open) {
       let el = null;

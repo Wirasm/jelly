@@ -264,7 +264,7 @@ fn run(cli: Cli) -> Result<(), String> {
     // Names are unique per project: a short name means this project's jelly
     // when there is one, and `project:name` always means exactly that jelly.
     let id = |name: &str| -> String {
-        if name.contains(':') || name == "surface" {
+        if name.contains(':') || name == store::PAGE {
             return name.into();
         }
         let p = project();
@@ -410,7 +410,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 };
                 let Some(data) = line.strip_prefix("data:") else { continue };
                 let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
-                if ev["by"] != by.as_str() && (name.is_some() || ev["jelly"] != "surface") {
+                if ev["by"] != by.as_str() && (name.is_some() || ev["jelly"] != store::PAGE) {
                     return print(ev);
                 }
             }
@@ -589,30 +589,10 @@ fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
         }
         return Ok(());
     }
-    let clip = |s: &str| if s.chars().count() > 240 { format!("{}…", s.chars().take(240).collect::<String>()) } else { s.to_string() };
     let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
     println!("The person acted on your jellies{scope} since you last checked:");
     for e in &items {
-        let j = e["jelly"].as_str().unwrap_or("?");
-        let a = &e["args"];
-        let what = match e["kind"].as_str().unwrap_or("") {
-            "call" => {
-                let from = e["source"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(" (via \"{}\")", clip(t))).unwrap_or_default();
-                format!("{} {}{from}", e["verb"].as_str().unwrap_or("?"), clip(&a.to_string()))
-            }
-            "answer" => {
-                let pick = a["option"].as_str().map(|o| format!(" → {o}")).unwrap_or_default();
-                let text = a["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!(": \"{}\"", clip(t))).unwrap_or_default();
-                let seen = if pick.is_empty() && text.is_empty() { " → seen" } else { "" };
-                format!("answered {} \"{}\"{pick}{seen}{text}", a["id"].as_str().unwrap_or("?"), a["title"].as_str().unwrap_or(""))
-            }
-            "comment" => format!("commented on \"{}\": {}", a["anchor"]["quote"].as_str().unwrap_or(""), clip(a["text"].as_str().unwrap_or(""))),
-            "reply" => format!("replied on comment {}: {}", a["id"].as_str().unwrap_or("?"), clip(a["text"].as_str().unwrap_or(""))),
-            "resolve" => format!("resolved comment {}", a.as_str().unwrap_or("?")),
-            "undo" => "undid the last state change".to_string(),
-            k => k.to_string(),
-        };
-        println!("- {j}: {what}");
+        println!("- {}: {}", e["jelly"].as_str().unwrap_or("?"), e["text"].as_str().unwrap_or(""));
     }
     println!("Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.");
     Ok(())
