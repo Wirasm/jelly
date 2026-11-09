@@ -43,7 +43,7 @@
   for (const type of ["pointerdown", "keydown"]) {
     addEventListener(type, (e) => {
       const el = e.target?.closest?.("button, a, input, select, textarea, [data-verb], [role=button], label") || e.target;
-      if (el?.nodeType === 1 && !el.closest(".jf-pop, .jf-marker, .jf-att")) lastUsed = { el, at: Date.now() };
+      if (el?.nodeType === 1 && !el.closest(".jf-pop, .jf-marker, .jf-ask")) lastUsed = { el, at: Date.now() };
     }, true);
   }
   function source() {
@@ -169,57 +169,9 @@
     .jf-pop .jf-msg.agent .jf-by { color: #0f7b74; }
     .jf-pop .jf-text { white-space: pre-wrap; margin-top: 1px; }
     .jf-pop .jf-done { font-size: 11px; color: #66726f; }
-    .jf-att { position: absolute; z-index: 2147482999; height: 24px; min-width: 24px; padding: 0 8px; border-radius: 12px; background: #e8336f; color: #fff;
-      font: 700 12px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(232,51,111,.45); animation: jf-pulse 2s infinite; }
-    .jf-att.look { background: #0f7b74; box-shadow: 0 2px 8px rgba(15,123,116,.45); }
-    @keyframes jf-pulse { 50% { box-shadow: 0 0 0 7px rgba(232,51,111,.15); } }
-    .jf-chip { position: fixed; right: 12px; top: 12px; z-index: 2147483000; background: #e8336f; color: #fff; border: 0; border-radius: 999px; padding: 8px 14px; font: 600 13px -apple-system, sans-serif; cursor: pointer; box-shadow: 0 8px 22px -8px rgba(216,27,96,.6); }
-    .jf-pop .jf-q { font-weight: 600; font-size: 13px; margin: 2px 0 4px; }
-    .jf-pop .jf-why { font-size: 11.5px; color: #4b3cc4; background: #f0eefe; border-radius: 6px; padding: 5px 7px; margin: 4px 0 6px; }
-    .jf-pop .jf-opts { display: grid; gap: 4px; margin: 6px 0; }
-    .jf-pop .jf-opt { text-align: left; border: 1px solid #e2e7e5; background: #fff; border-radius: 8px; padding: 6px 8px; cursor: pointer; }
-    .jf-pop .jf-opt b { display: block; font-size: 12.5px; } .jf-pop .jf-opt span { font-size: 11.5px; color: #66726f; }
-    .jf-pop .jf-opt.rec { border-color: #6d5ce8; background: #f6f5ff; } .jf-pop .jf-opt.rec b::after { content: " · recommended"; color: #6d5ce8; font-weight: 600; font-size: 11px; }
-    .jf-pop .jf-opt.on { border: 2px solid #6d5ce8; padding: 5px 7px; }
-    .jf-pop .jf-list { display: grid; gap: 6px; } .jf-pop .jf-li { border: 1px solid #e2e7e5; border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 12.5px; }
     .jf-work { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2147483000; background: #141a19; color: #e8eeec; border-radius: 999px; padding: 6px 14px 6px 12px; font: 12.5px -apple-system, sans-serif; display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); }
     .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: #46c4b8; animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }
-    .jf-hl { outline: 3px solid #e8336f !important; outline-offset: 4px; border-radius: 6px; transition: outline-color .3s; }
-    .jf-sheet { color-scheme: light; position: fixed; z-index: 2147483002; top: 12px; right: 12px; bottom: 12px; width: min(400px, calc(100vw - 24px)); overflow-y: auto;
-      background: #fff; color: #2a1620; border: 1px solid #f0dfe5; border-radius: 18px; box-shadow: 0 30px 70px -20px rgba(42,22,32,.45);
-      padding: 18px 20px 16px; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; animation: jf-in .3s cubic-bezier(.3,1.4,.5,1); }
-    @keyframes jf-in { from { opacity: 0; transform: translateX(24px); } }
-    .jf-sheet.jf-sh-done { animation: jf-out .45s ease-in forwards; } @keyframes jf-out { to { opacity: 0; transform: translateX(30px) scale(.98); } }
-    .jf-sheet * { box-sizing: border-box; font-family: inherit; letter-spacing: normal; text-transform: none; }
-    .jf-sh-top { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-    .jf-sh-who { font: 600 12px ui-monospace, Menlo, monospace; color: #c8255d; flex: 1; }
-    .jf-sh-n { font-size: 12px; color: #8a6b78; }
-    .jf-sh-nav, .jf-sh-x { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: #4a3340; font-size: 16px; }
-    .jf-sh-nav:hover, .jf-sh-x:hover { background: #fdf0f4; } .jf-sh-nav[disabled] { opacity: .3; cursor: default; background: none; }
-    .jf-sh-q { margin: 0; font-size: 20px; line-height: 1.3; font-weight: 700; color: #2a1620; letter-spacing: -.01em; }
-    .jf-sh-d { margin: 8px 0 0; color: #4a3340; } .jf-sh-d:empty { display: none; }
-    .jf-sh-about { margin-top: 10px; font-size: 12.5px; color: #c8255d; display: flex; gap: 6px; align-items: center; }
-    .jf-sh-about::before { content: ""; width: 14px; height: 10px; border: 2px solid #e8336f; border-radius: 3px; }
-    .jf-sh-rec { margin-top: 14px; background: #fdf0f4; border-radius: 12px; padding: 10px 12px; }
-    .jf-sh-rec b { display: block; color: #a3134c; font-size: 13.5px; } .jf-sh-rec span { display: block; color: #4a3340; font-size: 13.5px; margin-top: 2px; }
-    .jf-sh-opts { display: grid; gap: 8px; margin-top: 14px; }
-    .jf-sh-o { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; padding: 12px 14px; border: 1.5px solid #f0dfe5; border-radius: 12px; background: #fff; color: #2a1620; }
-    .jf-sh-o:hover { border-color: #e2c6d1; background: #fffafc; }
-    .jf-sh-o i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #d9bcc8; margin-top: 2px; }
-    .jf-sh-o b { display: block; font-size: 15px; font-weight: 650; color: #2a1620; }
-    .jf-sh-o em { display: block; font-style: normal; font-size: 13px; color: #6b5260; margin-top: 2px; } .jf-sh-o em:empty { display: none; }
-    .jf-sh-o.rec b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: #e8336f; border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
-    .jf-sh-o.on { border-color: #e8336f; background: #fff5f8; box-shadow: 0 0 0 3px rgba(232,51,111,.14); }
-    .jf-sh-o.on i { border-color: #e8336f; background: radial-gradient(#e8336f 45%, #fff 50%); }
-    .jf-sh-l { display: block; margin-top: 14px; font-size: 12.5px; color: #6b5260; }
-    .jf-sh-t { width: 100%; margin-top: 6px; font: inherit; font-size: 14px; color: #2a1620; background: #fff; border: 1.5px solid #f0dfe5; border-radius: 10px; padding: 8px 10px; resize: vertical; }
-    .jf-sh-t:focus { outline: none; border-color: #e8336f; }
-    .jf-sh-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-    .jf-sh-later, .jf-sh-go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; }
-    .jf-sh-later { color: #6b5260; } .jf-sh-later:hover { background: #fdf0f4; }
-    .jf-sh-go { background: #e8336f; color: #fff; } .jf-sh-go:hover { background: #c8255d; }
-    .jf-sh-go[disabled] { background: #f0dfe5; color: #b39aa5; cursor: default; }
-    .jf-att { cursor: pointer; }`;
+    `;
   let commenting = false, hovered = null, pop = null;
   const btn = document.createElement("button");
   btn.className = "jf-btn";
@@ -236,7 +188,7 @@
     }
     return parts.join(" > ") || "body";
   }
-  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-marker, .jf-att, .jf-chip, .jf-work");
+  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work");
 
   // On the jelly page, the page's header owns the Comment button.
   const embedded = window.parent !== window;
@@ -273,7 +225,7 @@
     const send = () => jelly.comment(anchor, ta.value).then(() => { p.remove(); pop = null; }, (e) => alert(e.message));
     p.querySelector(".jf-send").onclick = send;
     p.querySelector(".jf-cancel").onclick = () => { p.remove(); pop = null; };
-    ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") { p.remove(); pop = null; } };
+    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } if (e.key === "Escape") { p.remove(); pop = null; } };
   }
 
   let markerEls = [];
@@ -306,7 +258,7 @@
     p.querySelector(".jf-send").onclick = send;
     const r = p.querySelector(".jf-resolve");
     if (r) r.onclick = () => jelly.resolve(f.id).then(close);
-    ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); if (e.key === "Escape") close(); };
+    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } if (e.key === "Escape") close(); };
   }
 
   function drawMarkers() {
@@ -332,115 +284,166 @@
       markerEls.push(pin);
     });
   }
-  // ---- attention: asks and looks the agent put here ------------------------
-  let attEls = [];
-  // The answer sheet: everything the agent put in front of the person, one at a
-  // time, with room to read. Fixed colours so it reads the same on any jelly.
-  let sheet = null, sheetAt = null, hl = null;
+  // ---- attention: questions sit on the page, right below what they are about ----
+  // Each question is a card in the page flow, after its anchor element (or at the
+  // top when it has none). It lives in a shadow root so the page's CSS and ours
+  // never touch. Answered questions shrink to one line for a day, with Change.
+  const DAY_MS = 86400000;
+  const cards = new Map(); // item id -> host element, reused so drafts survive redraws
   const isOpen = (a) => !a.answer && !a.withdrawn;
-  function openItems() { return attention.filter(isOpen); }
-  function highlight(a) {
-    hl?.classList.remove("jf-hl");
-    hl = null;
-    try { hl = a?.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
-    if (hl) { hl.classList.add("jf-hl"); hl.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  const shownItems = () => attention.filter((a) => !a.withdrawn && (!a.answer || Date.now() - a.answer.at_ms < DAY_MS));
+  const editing = new Set(); // answered items the person reopened with Change
+  const CARD_CSS = `
+    :host { all: initial; display: block; margin: 14px 0; --bg:#fff; --ink:#2a1620; --soft:#6b5260; --line:#f0dfe5; --tint:#fdf0f4; --accent:#e8336f; --accent-ink:#a3134c; }
+    :host([dark]) { --bg:#25162c; --ink:#f6e8f2; --soft:#c3a9bd; --line:#43294d; --tint:#33203b; --accent:#ff5c95; --accent-ink:#ff8fb6; }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: normal; text-transform: none; }
+    .c { background: var(--bg); color: var(--ink); border: 1.5px solid var(--line); border-left: 4px solid var(--accent); border-radius: 14px; padding: 16px 18px; font-size: 14px; line-height: 1.5; text-align: left; }
+    .c.flash { animation: flash 1.2s ease-out; } @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--accent); } 40% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent); } }
+    .who { font: 600 12px ui-monospace, Menlo, monospace; color: var(--accent-ink); }
+    h3 { margin: 4px 0 0; font-size: 18px; line-height: 1.3; font-weight: 700; }
+    .ctx { margin: 6px 0 0; color: var(--soft); white-space: pre-wrap; } .ctx:empty { display: none; }
+    .rec { margin-top: 10px; background: var(--tint); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; }
+    .rec b { color: var(--accent-ink); }
+    .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
+    .o { all: unset; box-sizing: border-box; cursor: pointer; padding: 11px 13px; border: 1.5px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); }
+    .o:hover { border-color: var(--accent); }
+    .o b { display: block; font-size: 15px; font-weight: 650; }
+    .o span { display: block; font-size: 13px; color: var(--soft); margin-top: 2px; } .o span:empty { display: none; }
+    .o.rec-o b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
+    .o.on { border-color: var(--accent); background: var(--tint); }
+    .row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+    textarea { flex: 1; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent); color: #fff; white-space: nowrap; }
+    .go[disabled] { opacity: .4; cursor: default; }
+    .hint { font-size: 12px; color: var(--soft); margin-top: 6px; }
+    .done { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .done .q { color: var(--soft); } .done .a { font-weight: 650; } .done .n { color: var(--soft); white-space: pre-wrap; }
+    .chg { all: unset; cursor: pointer; color: var(--accent-ink); font-size: 13px; font-weight: 600; margin-left: auto; }
+    .c.answered { border-left-color: #3aa57a; padding: 10px 14px; }`;
+
+  // Light or dark from the page's own background, so the card belongs to the page.
+  function pageIsDark() {
+    for (const el of [document.body, document.documentElement]) {
+      const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+      if (m && (m.length < 4 || +m[3] > 0.5)) return (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) < 128;
+    }
+    return matchMedia("(prefers-color-scheme: dark)").matches;
   }
-  function closeSheet() { sheet?.remove(); sheet = null; sheetAt = null; highlight(null); }
-  function openSheet(id) {
-    const items = openItems();
-    if (!items.length) return closeSheet();
-    const i = Math.max(0, items.findIndex((x) => x.id === id));
-    const a = items[i];
-    sheetAt = a.id;
-    sheet?.remove();
-    sheet = document.createElement("aside");
-    sheet.className = "jf-sheet";
+  // Where a card goes: after its anchor, lifted out of grids, flex rows, lists and
+  // tables so it gets a full row; at the top when the anchor is missing or floats.
+  function placeAfter(a) {
+    let el = null;
+    try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
+    if (!el || el === document.body) return null;
+    if (el.closest(".jf-ask")) return null;
+    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return null;
+    while (el.parentElement && el.parentElement !== document.body) {
+      const p = el.parentElement, d = getComputedStyle(p).display;
+      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
+      else break;
+    }
+    return el;
+  }
+  function renderCard(host, a) {
+    const root = host.shadowRoot;
     const isAsk = a.kind === "ask";
-    const rec = a.options?.find((o) => o.id === a.recommend);
-    sheet.innerHTML = `<div class="jf-sh-top"><span class="jf-sh-who"></span><span class="jf-sh-n">${i + 1} of ${items.length}</span>
-        <button class="jf-sh-nav" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="Previous">‹</button><button class="jf-sh-nav" data-d="1" ${i === items.length - 1 ? "disabled" : ""} aria-label="Next">›</button><button class="jf-sh-x" aria-label="Close">✕</button></div>
-      <h2 class="jf-sh-q"></h2><p class="jf-sh-d"></p>
-      ${a.anchor?.selector ? '<div class="jf-sh-about">About the highlighted part of the page</div>' : ""}
-      ${rec ? '<div class="jf-sh-rec"><b></b><span></span></div>' : ""}
-      <div class="jf-sh-opts"></div>
-      <label class="jf-sh-l">${isAsk ? (a.options?.length ? "Add context or a condition (optional)" : "Your answer") : "Anything to say? (optional)"}</label>
-      <textarea class="jf-sh-t" rows="3"></textarea>
-      <div class="jf-sh-foot"><button class="jf-sh-later">Later</button><button class="jf-sh-go" ${isAsk && a.options?.length ? "disabled" : ""}>${isAsk ? "Answer" : "Seen"}</button></div>`;
-    sheet.querySelector(".jf-sh-who").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
-    sheet.querySelector(".jf-sh-q").textContent = a.title;
-    sheet.querySelector(".jf-sh-d").textContent = a.context || "";
-    if (rec) {
-      sheet.querySelector(".jf-sh-rec b").textContent = `${a.by} recommends ${rec.label || rec.id}`;
-      sheet.querySelector(".jf-sh-rec span").textContent = a.why || "";
+    const opts = a.options || [];
+    const answered = a.answer && !editing.has(a.id);
+    const draft = root.querySelector("textarea")?.value || "";
+    root.innerHTML = `<style>${CARD_CSS}</style><div class="c${answered ? " answered" : ""}"></div>`;
+    const c = root.querySelector(".c");
+    if (answered) {
+      const o = opts.find((x) => x.id === a.answer.option);
+      c.innerHTML = `<div class="done"><span class="q"></span><span class="a"></span><span class="n"></span><button class="chg">Change</button></div>`;
+      c.querySelector(".q").textContent = a.title;
+      c.querySelector(".a").textContent = "✓ " + (o ? o.label || o.id : a.kind === "look" ? "Seen" : "Answered");
+      c.querySelector(".n").textContent = a.answer.text || "";
+      c.querySelector(".chg").onclick = () => { editing.add(a.id); renderCard(host, a); };
+      return;
     }
-    let picked = null;
-    const go = sheet.querySelector(".jf-sh-go");
-    const ta = sheet.querySelector(".jf-sh-t");
-    for (const o of a.options || []) {
-      const b = document.createElement("button");
-      b.className = "jf-sh-o" + (o.id === a.recommend ? " rec" : "");
-      b.innerHTML = '<i></i><span><b></b><em></em></span>';
-      b.querySelector("b").textContent = o.label || o.id;
-      b.querySelector("em").textContent = o.does || "";
-      b.onclick = () => { picked = o.id; sheet.querySelectorAll(".jf-sh-o").forEach((x) => x.classList.toggle("on", x === b)); go.disabled = false; };
-      sheet.querySelector(".jf-sh-opts").appendChild(b);
-    }
-    if (isAsk && !a.options?.length) ta.oninput = () => (go.disabled = !ta.value.trim());
-    if (isAsk && !a.options?.length) go.disabled = true;
-    sheet.querySelector(".jf-sh-x").onclick = closeSheet;
-    sheet.querySelector(".jf-sh-later").onclick = closeSheet;
-    sheet.querySelectorAll(".jf-sh-nav").forEach((n) => (n.onclick = () => openSheet(items[i + +n.dataset.d]?.id)));
-    go.onclick = () => {
+    const rec = opts.find((o) => o.id === a.recommend);
+    c.innerHTML = `<div class="who"></div><h3></h3><p class="ctx"></p>
+      ${rec ? '<div class="rec"><b></b> <span></span></div>' : ""}
+      ${opts.length ? '<div class="opts"></div>' : ""}
+      <div class="row"><textarea rows="1"></textarea><button class="go"></button></div>
+      <div class="hint">${opts.length ? "Click an option to answer. Add a note first if you like." : "Enter to send · Shift+Enter for a new line"}</div>`;
+    c.querySelector(".who").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
+    c.querySelector("h3").textContent = a.title;
+    c.querySelector(".ctx").textContent = a.context || "";
+    if (rec) { c.querySelector(".rec b").textContent = `Recommends ${rec.label || rec.id}.`; c.querySelector(".rec span").textContent = a.why || ""; }
+    const ta = c.querySelector("textarea"), go = c.querySelector(".go");
+    ta.value = draft;
+    ta.placeholder = !isAsk ? "Anything to say? (optional)" : opts.length ? "A note, or your own answer if none fit" : "Your answer";
+    go.textContent = !isAsk ? "Seen" : opts.length ? "Answer in words" : "Answer";
+    const sync = () => (go.disabled = isAsk && !ta.value.trim());
+    ta.oninput = sync; sync();
+    const send = (option) => {
+      if (isAsk && !option && !ta.value.trim()) return;
       go.disabled = true;
-      jelly.answer(a.id, { option: picked || undefined, text: ta.value }).then(() => {
-        sheet?.classList.add("jf-sh-done");
-        setTimeout(() => { const next = openItems().find((x) => x.id !== a.id); next ? openSheet(next.id) : closeSheet(); }, 450);
-      }, (e) => { go.disabled = false; alert(e.message); });
+      jelly.answer(a.id, { option, text: ta.value }).then(() => editing.delete(a.id), (e) => { sync(); alert(e.message); });
     };
-    sheet.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !go.disabled) go.click(); });
-    document.body.appendChild(sheet);
-    highlight(a);
+    for (const o of opts) {
+      const b = document.createElement("button");
+      b.className = "o" + (o.id === a.recommend ? " rec-o" : "") + (a.answer?.option === o.id ? " on" : "");
+      b.innerHTML = "<b></b><span></span>";
+      b.querySelector("b").textContent = o.label || o.id;
+      b.querySelector("span").textContent = o.does || "";
+      b.onclick = () => send(o.id);
+      c.querySelector(".opts").appendChild(b);
+    }
+    go.onclick = () => send(undefined);
+    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(undefined); } };
   }
-  // The jelly page can open the sheet on a given item (from the attention dock).
+  let topStack = null;
+  function drawAttention() {
+    const items = inline() ? [] : shownItems();
+    const keep = new Set(items.map((a) => a.id));
+    for (const [id, host] of cards) if (!keep.has(id)) { host.remove(); cards.delete(id); }
+    if (!document.body) return;
+    const dark = pageIsDark();
+    for (const a of items) {
+      let host = cards.get(a.id);
+      if (!host) {
+        host = document.createElement("div");
+        host.className = "jf-ask";
+        host.id = `jf-q-${a.id}`;
+        host.attachShadow({ mode: "open" });
+        cards.set(a.id, host);
+      }
+      host.toggleAttribute("dark", dark);
+      const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
+      if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
+      const after = placeAfter(a);
+      if (after) { if (after.nextElementSibling !== host) after.after(host); }
+      else {
+        if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; topStack.style.cssText = "max-width:880px;margin:14px auto;padding:0 16px"; }
+        if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
+        if (host.parentElement !== topStack) topStack.appendChild(host);
+      }
+    }
+    if (topStack && !topStack.children.length) topStack.remove();
+  }
+  // Pages re-render; put cards back when a render drops or moves them.
+  let drawQueued = false;
+  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawAttention(); }); } };
+  new MutationObserver((ms) => { if (ms.some((m) => ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && n.classList?.contains("jf-ask")))) queueDraw(); })
+    .observe(document.documentElement, { childList: true, subtree: true });
+  // The jelly page's dock opens a jelly on one item: scroll to its card.
   addEventListener("message", (e) => {
-    if (e.origin === location.origin && e.data?.type === "jelly:attend") openSheet(e.data.id);
+    if (e.origin !== location.origin || e.data?.type !== "jelly:attend") return;
+    drawAttention();
+    const host = cards.get(e.data.id);
+    if (!host) return;
+    host.scrollIntoView({ block: "center", behavior: "smooth" });
+    const c = host.shadowRoot.querySelector(".c");
+    c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash");
+    host.shadowRoot.querySelector("textarea")?.focus({ preventScroll: true });
   });
 
-  // A page that shows its own questions (the ask page) opts out of markers:
+  // A page that shows its own questions (the ask page) opts out:
   // <meta name="jelly-attention" content="inline">.
   const inline = () => document.querySelector('meta[name="jelly-attention"]')?.content === "inline";
-  function drawAttention() {
-    if (sheet && !openItems().some((x) => x.id === sheetAt)) { const n = openItems()[0]; n ? openSheet(n.id) : closeSheet(); }
-    attEls.forEach((e) => e.remove());
-    attEls = [];
-    if (inline()) return;
-    const open = openItems();
-    const loose = [];
-    for (const a of open) {
-      let el = null;
-      try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
-      if (!el) { loose.push(a); continue; }
-      const r = el.getBoundingClientRect();
-      const m = document.createElement("div");
-      m.className = "jf-att" + (a.kind === "look" ? " look" : "");
-      m.textContent = a.kind === "look" ? "look" : "?";
-      m.title = a.title;
-      m.style.left = Math.max(2, r.right - 18) + scrollX + "px";
-      m.style.top = Math.max(2, r.top - 10) + scrollY + "px";
-      m.onclick = (e) => { e.stopPropagation(); openSheet(a.id); };
-      document.body.appendChild(m);
-      attEls.push(m);
-    }
-    if (open.length) {
-      const c = document.createElement("button");
-      c.className = "jf-chip";
-      const all = openItems();
-      c.textContent = all.length === 1 ? (all[0].kind === "look" ? "1 thing to look at" : "1 question for you") : `${all.length} questions for you`;
-      c.onclick = (e) => { e.stopPropagation(); openSheet(loose[0].id); };
-      document.body.appendChild(c);
-      attEls.push(c);
-    }
-  }
   let workEl = null;
   function drawWorking() {
     workEl?.remove();
@@ -454,7 +457,7 @@
   }
 
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
-  const SKIP = ".jf-btn, .jf-pop, .jf-marker, .jf-att, .jf-chip, .jf-work";
+  const SKIP = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   function agentSnapshot() {

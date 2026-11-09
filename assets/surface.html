@@ -456,7 +456,7 @@
     if (g) {
       setDock(false);
       openFull(g.dataset.goto);
-      // Open the answer sheet on that item once the view has loaded.
+      // Scroll the jelly to that question once the view has loaded.
       if (g.dataset.item) {
         const send = () => $("full").querySelector("iframe")?.contentWindow?.postMessage({ type: "jelly:attend", id: g.dataset.item }, location.origin);
         const f = $("full").querySelector("iframe");

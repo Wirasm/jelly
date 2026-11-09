@@ -67,8 +67,10 @@ its own, and the jelly page uses it as the thumbnail.
 
 ## Ask the person: attention
 
-Attention is everything you need from the person. It sits on the jelly, next to
-what it is about, and in their attention dock on the jelly page.
+Attention is everything you need from the person. Each question shows as a card
+in the page itself, right below the element `--at` points to (or at the top), and
+in their attention dock on the jelly page. They answer in place; an answered card
+shrinks to one line they can change.
 
 One question on an existing jelly, about one part of it:
 

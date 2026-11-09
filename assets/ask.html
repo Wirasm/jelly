@@ -224,7 +224,14 @@ document.addEventListener("click", (e) => {
   }
 });
 document.addEventListener("input", (e) => { if (e.target.dataset.note) drafts[e.target.dataset.note] = e.target.value; });
-addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelector(".big")?.remove(); });
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelector(".big")?.remove();
+  // Enter sends a note, Shift+Enter is a new line.
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches(".note textarea")) {
+    e.preventDefault();
+    e.target.closest(".note").querySelector("button").click();
+  }
+});
 $("more-send").onclick = () => {
   const t = $("more-text");
   if (!t.value.trim()) return t.focus();
