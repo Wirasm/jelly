@@ -79,7 +79,8 @@ jelly focus plan               # open it full size on their screen
 
 Always look before you show: run `jelly see`, and fix what is off before you focus
 the jelly or ask about it. `see` lists the errors your page threw (`error` lines)
-and questions whose `--at` matches nothing (`!` lines): fix both. Clear your own
+and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
+`jelly look` also say so in their reply when `--at` matches nothing. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 

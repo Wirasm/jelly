@@ -487,9 +487,56 @@ struct AttendReq {
     spec: Value,
 }
 
-async fn attend(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AttendReq>) -> Result<Json<Event>, ApiError> {
+async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
-    app.change(|s| s.attend(&name, r.spec, &self::by(by)?))
+    let Json(ev) = app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?;
+    let mut out = json!(ev);
+    // Tell the asker where the card really shows. The item is made either way,
+    // and the event that listeners and the log get is unchanged.
+    let args = ev.args.unwrap_or_default();
+    if args["anchor"]["selector"].is_string() {
+        match anchor_matches(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version).await {
+            Ok(hit) => out["anchored"] = json!(hit),
+            Err(why) => out["anchor_unchecked"] = json!(why),
+        }
+    }
+    Ok(Json(out))
+}
+
+/// How long an ask waits for a browser before it answers "not checked".
+const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Whether an open item's anchor matches something on the page, from a
+/// snapshot of this version: one rendered now, or an open view's. `Err` says
+/// why it could not be checked.
+async fn anchor_matches(app: &App, port: u16, name: &str, item: &str, version: u64) -> Result<bool, String> {
+    let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
+    tokio::pin!(render);
+    // The browser often posts its snapshot and then lingers, so answer as soon
+    // as the snapshot is in; dropping the render stops the browser.
+    let mut rendered: Option<(Result<(), String>, std::time::Instant)> = None;
+    loop {
+        let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version).cloned();
+        if let Some(s) = snap {
+            return Ok(!s.missing.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item)));
+        }
+        match &rendered {
+            // The browser is gone: give its snapshot a moment to land, then give up.
+            Some((r, at)) if at.elapsed() > std::time::Duration::from_secs(2) => {
+                return Err(r.clone().err().unwrap_or_else(|| "the page rendered but sent no snapshot".into()));
+            }
+            Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            None => tokio::select! {
+                r = &mut render => rendered = Some((r, std::time::Instant::now())),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            },
+        }
+    }
+}
+
+/// The port this request came in on, for rendering our own pages.
+fn port_of(headers: &axum::http::HeaderMap) -> u16 {
+    headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878)
 }
 
 #[derive(Deserialize)]
@@ -615,9 +662,12 @@ fn chrome() -> Option<String> {
     candidates.into_iter().find(|c| !c.is_empty() && std::path::Path::new(c).exists())
 }
 
+/// How long `jelly see` waits for the browser.
+const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Runs headless Chrome on a jelly at a given size. With `png`, writes a
 /// screenshot there; either way the page's runtime posts a fresh snapshot.
-async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>) -> Result<(), String> {
+async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
     let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
@@ -643,10 +693,10 @@ async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std
         None => { cmd.arg("--dump-dom"); }
     }
     let run = cmd.arg(url).status();
-    match tokio::time::timeout(std::time::Duration::from_secs(20), run).await {
+    match tokio::time::timeout(limit, run).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
-        Err(_) => Err("the browser took longer than 20 s".into()),
+        Err(_) => Err(format!("the browser took longer than {} s", limit.as_secs())),
     }
 }
 
@@ -668,7 +718,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let store = app.store.lock().expect("store lock");
         (store.get(&name)?.clone(), store.home().to_path_buf())
     };
-    let port = req_headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878);
+    let port = port_of(&req_headers);
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
     // Use a snapshot from an open view if it is current and the right width; otherwise render one.
@@ -679,7 +729,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     let mut snap = fresh(&app);
     if snap.is_none() {
         let asked = now_ms();
-        match render(port, &name, width, height, None).await {
+        match render(port, &name, width, height, None, RENDER_LIMIT).await {
             Ok(()) => {
                 for _ in 0..30 {
                     if let Some(s) = app.screens.lock().expect("screens lock").get(&name).filter(|s| s.at_ms >= asked) {
@@ -699,7 +749,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let path = dir.join(format!("{}-{width}.png", name.replace(':', "_")));
         // The full page: as tall as the page said it was, within reason.
         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
-        match render(port, &name, width, h, Some(&path)).await {
+        match render(port, &name, width, h, Some(&path), RENDER_LIMIT).await {
             Ok(()) => Some(path),
             Err(e) => { notes.push(format!("No screenshot: {e}")); None }
         }
