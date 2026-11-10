@@ -1,0 +1,395 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>triage</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
+    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    color-scheme: light;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 20px calc(var(--foot, 68px) + 60px); }
+  h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  #ask { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  #ask:not(:empty)::before { content: "“"; } #ask:not(:empty)::after { content: "”"; }
+  small.k { font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+  /* ---- the map: every item as a chip, grouped by lane ---- */
+  #mix { display: flex; gap: 10px 22px; flex-wrap: wrap; margin-top: 16px; }
+  #mix .grp { min-width: 0; }
+  #mix .grp > b { font-size: 13px; } #mix .grp > span { font-size: 13px; color: var(--muted); margin-left: 5px; }
+  #mix .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+  .chip { all: unset; box-sizing: border-box; cursor: pointer; min-width: 30px; height: 24px; padding: 0 5px; border-radius: 7px; background: var(--c); color: #fff; font: 700 11px/24px ui-monospace, Menlo, monospace; text-align: center; border: 1.5px solid var(--c); }
+  .chip.unsure { background: color-mix(in srgb, var(--c) 16%, var(--card)); color: var(--ink); border-style: dashed; }
+  .chip.done { opacity: .4; } .chip.on { outline: 2px solid var(--ink); outline-offset: 1px; }
+  #mix.many .chip { min-width: 12px; width: 12px; height: 12px; padding: 0; border-radius: 3px; font-size: 0; }
+
+  /* ---- what the agent was unsure about, first ---- */
+  #unsure { margin-top: 22px; }
+  #unsure .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  #unsure h2 { margin: 0; font-size: 18px; }
+  #unsure .head span { color: var(--muted); font-size: 13px; }
+  .strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 10px; }
+  .ucard { scroll-snap-align: start; background: var(--card); border: 1.5px dashed var(--c); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .ucard .from { font-size: 12.5px; color: var(--muted); } .ucard .from b { color: var(--ink); }
+  .ucard .t { font-weight: 650; line-height: 1.3; font-size: 14.5px; }
+  .ucard .why { color: var(--ink-2); font-size: 13px; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .ucard .t { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  .ref { font: 600 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+  /* Where it belongs: one segment per lane. The agent's guess carries a question mark. */
+  .seg { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .seg button { flex: 1 1 auto; border: 1.5px solid var(--line); border-top: 4px solid var(--c); background: var(--card); border-radius: 9px; padding: 6px 6px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .seg button:hover:not([disabled]) { border-color: var(--c); }
+  .seg button.cur { background: color-mix(in srgb, var(--c) 16%, var(--card)); border-color: var(--c); cursor: default; }
+  .seg button.guess { background: color-mix(in srgb, var(--c) 16%, var(--card)); border: 1.5px dashed var(--c); border-top: 4px solid var(--c); }
+  .pick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .pick button { border: 1.5px solid var(--line); background: var(--card); border-radius: 99px; padding: 6px 12px; font-size: 13.5px; font-weight: 600; display: inline-flex; gap: 6px; align-items: center; }
+  .pick button::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+  .pick button.cur { border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, var(--card)); }
+  .pick button.yes { background: var(--good); border-color: var(--good); color: #fff; } .pick button.yes::before { content: "✓"; background: none; width: auto; height: auto; }
+  .pick button.plain::before { display: none; }
+
+  /* ---- board and scatter: two pictures of the same items ---- */
+  #tabs { display: inline-flex; margin-top: 24px; border: 1.5px solid var(--line); border-radius: 99px; overflow: hidden; background: var(--card); }
+  #tabs button { border: 0; background: none; padding: 7px 16px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+  #tabs button.on { background: var(--ink); color: var(--bg); }
+  #board { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
+  .lane { min-width: 0; background: var(--soft); border-radius: var(--r); border-top: 5px solid var(--c); padding: 10px; min-height: 120px; }
+  .lane.over { outline: 2px dashed var(--c); outline-offset: 2px; }
+  .lane header { display: flex; gap: 8px; align-items: center; padding: 2px 4px 8px; flex-wrap: wrap; }
+  .lane header b { font-size: 16px; } .lane header .n { font: 600 12px ui-monospace, monospace; color: var(--muted); }
+  .lane header .hint { font-size: 12.5px; color: var(--muted); flex: 1; }
+  .lane header button { border: 1.5px solid var(--line); background: var(--card); border-radius: 99px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
+  .lane header .ok { color: var(--good); font-weight: 700; font-size: 13.5px; }
+  .lane header .undo { border: 0; background: none; color: var(--muted); text-decoration: underline; padding: 4px 2px; font-weight: 500; }
+  /* Blocks, not a grid: a question about an item then sits right below that item. */
+  .cards > * + * { margin-top: 8px; }
+  .lane .empty { color: var(--muted); font-size: 13px; padding: 14px 6px; text-align: center; }
+  .item { position: relative; background: var(--card); border: 1.5px solid var(--line); border-left: 5px solid var(--c); border-radius: 12px; padding: 9px 12px; cursor: pointer; scroll-margin: 80px 0 200px; }
+  .item[draggable=true] { cursor: grab; }
+  .item.unsure { border-style: dashed; border-left-style: solid; }
+  .item.on { border-color: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 22%, transparent); cursor: default; }
+  .item.drag { opacity: .4; }
+  .item.before::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 3px; border-radius: 2px; background: var(--c); }
+  .cards.end::after { content: ""; display: block; height: 3px; border-radius: 2px; background: var(--c); }
+  .item .top { display: flex; gap: 8px; align-items: baseline; }
+  .item .num { font: 700 12px ui-monospace, monospace; color: var(--c); }
+  .item .t { flex: 1; font-weight: 600; line-height: 1.3; font-size: 14.5px; }
+  .item .why { color: var(--ink-2); font-size: 13px; margin-top: 3px; }
+  .lane.accepted .item:not(.on) .why { display: none; }
+  /* How sure the agent was, as signal bars. */
+  .conf { display: inline-flex; gap: 2px; flex: none; align-self: center; align-items: flex-end; height: 12px; } .conf i { width: 4px; border-radius: 1px; background: var(--line); } .conf i.f { background: var(--ink-2); }
+  .conf i:nth-child(1) { height: 5px; } .conf i:nth-child(2) { height: 8px; } .conf i:nth-child(3) { height: 12px; }
+  .q { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 11px/18px -apple-system, sans-serif; text-align: center; align-self: center; }
+  .tag { display: inline-block; margin-top: 6px; font-size: 12.5px; padding: 2px 9px; border-radius: 99px; background: var(--warn-soft); color: var(--ink); }
+  .tag.done { background: var(--good-soft); }
+  .item.done .t { text-decoration: line-through; text-decoration-color: var(--muted); color: var(--muted); }
+  .detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+  .meters { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .meter { display: inline-flex; gap: 2px; vertical-align: middle; margin-left: 5px; } .meter i { width: 5px; height: 12px; border-radius: 2px; background: var(--line); } .meter i.f { background: var(--ink-2); }
+  .said { font-size: 13.5px; padding: 6px 10px; border-radius: 10px; background: var(--warn-soft); } .said b { font-size: 11.5px; color: var(--muted); display: block; }
+
+  #scatter { margin-top: 12px; }
+  #plot { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); padding: 6px; }
+  #plot svg { display: block; width: 100%; height: auto; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #plot .grid { stroke: var(--line); stroke-width: 1; } #plot .mid { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 5 5; }
+  #plot .quad { fill: var(--muted); font-size: 12px; font-weight: 600; opacity: .7; } #plot .axis { fill: var(--muted); font-size: 12px; }
+  .dot { cursor: pointer; } .dot .hit { fill: transparent; }
+  .dot .c { fill: var(--c); stroke: var(--card); stroke-width: 2; }
+  .dot.unsure .c { fill: color-mix(in srgb, var(--c) 30%, var(--card)); stroke: var(--c); stroke-dasharray: 4 3; }
+  .dot.done .c { opacity: .35; }
+  .dot.on .ring { stroke: var(--ink); } .dot .ring { fill: none; stroke: transparent; stroke-width: 2.5; }
+  .dot .qd { fill: var(--accent); stroke: var(--card); stroke-width: 1.5; } .dot text.qt, .dot.unsure text.qt { font-size: 9px; fill: #fff; }
+  .dot text { font-size: 11px; font-weight: 700; fill: #fff; text-anchor: middle; pointer-events: none; } .dot.unsure text { fill: var(--ink); }
+  #legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  #legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: -1px; }
+  #legend span.u::before { background: none; border: 1.5px dashed var(--muted); }
+  #sel { margin-top: 12px; } #sel .hint { color: var(--muted); font-size: 13.5px; }
+
+  /* ---- after a move: why, if they care to say. And go. ---- */
+  #foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+  #foot .in { max-width: 1080px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 14px; align-items: center; }
+  #whybar .in { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+  #whybar .what { font-size: 13.5px; } #whybar .what span { color: var(--muted); }
+  #whybar .x { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; padding: 4px 6px; }
+  #whybar .compose { display: flex; gap: 8px; flex: 1 1 100%; }
+  #whybar textarea { flex: 1; min-height: 40px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 10px; resize: vertical; }
+  #whybar textarea:focus { outline: none; border-color: var(--accent); }
+  #whybar .compose button { border: 0; border-radius: 12px; padding: 9px 16px; font-weight: 600; background: var(--good); color: #fff; }
+  #go svg { flex: none; } #go circle { fill: none; stroke-width: 5; } #go .bg { stroke: var(--line); } #go .fg { stroke: var(--good); stroke-linecap: round; transition: stroke-dasharray .4s; }
+  #go .txt { flex: 1; min-width: 0; line-height: 1.3; } #go .txt b { display: block; } #go .txt span { color: var(--muted); font-size: 13px; }
+  #go button { border: 0; border-radius: 12px; padding: 11px 26px; font-weight: 700; font-size: 16px; background: var(--good); color: #fff; }
+  #go button[disabled] { background: var(--idle); cursor: default; }
+  .jf-btn { bottom: calc(var(--foot, 68px) + 10px) !important; } /* jelly's own Comment button, clear of the bars */
+  @media (max-width: 720px) {
+    #whybar .pick { flex-wrap: nowrap; overflow-x: auto; flex: 1 1 100%; order: 3; padding-bottom: 2px; } #whybar .pick button { white-space: nowrap; flex: none; }
+    #foot .in { padding-left: 14px; padding-right: 14px; } #go button { padding: 11px 18px; }
+    #board { grid-template-columns: minmax(0, 1fr); } h1 { font-size: 22px; }
+    .strip { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 80%; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; }
+    .item[draggable=true] { cursor: pointer; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title"></h1>
+  <p id="ask"></p>
+  <div id="mix"></div>
+  <section id="unsure"></section>
+  <div id="tabs"><button data-view="board">Board</button><button data-view="scatter">Impact × effort</button></div>
+  <div id="board"></div>
+  <div id="scatter" hidden><div id="plot"></div><div id="legend"></div><div id="sel"></div></div>
+</div>
+<div id="foot"><div id="whybar"></div><div id="go"></div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const TONES = { accent: "var(--accent)", warn: "var(--warn)", idle: "var(--idle)", good: "var(--good)", bad: "var(--bad)" };
+const ORDER = ["accent", "warn", "idle", "good", "bad"];
+const who = (by) => (by === "person" ? "You" : by);
+const short = (it) => String(it.ref || it.id).replace(/^#/, "");
+const asksAt = (it) => (jelly.itemsAt?.(`#i-${it.id}`) || []).filter((a) => !a.answer).length;
+
+// What is only on this screen. Everything else is state.
+let view = "board";   // or "scatter"
+let sel = null;       // the item that is open
+let asked = null;     // the item whose "why did you move it" bar is showing
+let writing = false;  // that bar's text field is open
+let drag = null;      // { item } while a card is being dragged
+
+const lanesOf = (s) => (s.lanes || []).map((l, i) => ({ ...l, c: TONES[l.tone] || TONES[ORDER[i % ORDER.length]] }));
+const isUnsure = (it, s) => !it.done && !it.checked && it.confidence < (s.unsure_below ?? 0.6);
+const conf = (c) => { const n = c >= 0.8 ? 3 : c >= (jelly.state.unsure_below ?? 0.6) ? 2 : 1; return { n, word: ["", "unsure", "fairly sure", "sure"][n] }; };
+const confDots = (c) => c == null ? "" : `<span class="conf" title="The agent was ${conf(c).word}" aria-label="The agent was ${conf(c).word}">${[1, 2, 3].map((k) => `<i class="${k <= conf(c).n ? "f" : ""}"></i>`).join("")}</span>`;
+const meter = (n, max) => `<span class="meter">${Array.from({ length: max }, (_, k) => `<i class="${k < n ? "f" : ""}"></i>`).join("")}</span>`;
+const scaleOf = (s) => Math.max(5, ...(s.items || []).flatMap((i) => [i.impact || 0, i.effort || 0]));
+
+// Lane buttons: one tap moves the item, or confirms where the agent put it.
+function pick(it, s, L) {
+  const unsure = isUnsure(it, s);
+  return `<div class="seg">${L.map((l) => l.id === it.lane
+    ? (unsure ? `<button class="guess" data-keep style="--c:${l.c}" title="Yes, keep it in ${esc(l.label)}">${esc(l.label)}?</button>` : `<button class="cur" disabled style="--c:${l.c}">✓ ${esc(l.label)}</button>`)
+    : `<button data-move="${esc(l.id)}" style="--c:${l.c}">${esc(l.label)}</button>`).join("")}</div>`;
+}
+
+function detail(it, s, L) {
+  const l = L.find((l) => l.id === it.lane), max = scaleOf(s);
+  const mates = s.items.filter((i) => i.lane === it.lane), at = mates.indexOf(it);
+  return `<div class="detail">
+    <div class="meters">${it.impact != null ? `<span>Impact${meter(it.impact, max)}</span>` : ""}${it.effort != null ? `<span>Effort${meter(it.effort, max)}</span>` : ""}${it.confidence != null ? `<span>The agent was ${conf(it.confidence).word}</span>` : ""}</div>
+    ${it.moved?.note ? `<div class="said"><b>${esc(who(it.moved.by))} said why</b>${esc(it.moved.note)}</div>` : ""}
+    ${pick(it, s, L)}
+    ${l?.ordered && mates.length > 1 || it.moved ? `<div class="pick">${l?.ordered && mates.length > 1 ? `<button class="plain" data-shift="-1"${at === 0 ? " disabled" : ""}>↑ Sooner</button><button class="plain" data-shift="1"${at === mates.length - 1 ? " disabled" : ""}>↓ After</button>` : ""}${it.moved && !it.moved.note ? `<button class="plain" data-ask-why>Say why</button>` : ""}</div>` : ""}
+  </div>`;
+}
+
+function card(it, s, L, opt = {}) {
+  const l = L.find((l) => l.id === it.lane) || {}, from = L.find((x) => x.id === it.moved?.from);
+  const open = sel === it.id, q = asksAt(it);
+  return `<article class="item${open ? " on" : ""}${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}" id="${opt.id || `i-${esc(it.id)}`}" data-item="${esc(it.id)}"${opt.still ? "" : ` draggable="true"`} style="--c:${l.c}">
+    <div class="top">${opt.num ? `<span class="num">${opt.num}</span>` : ""}<span class="ref">${esc(it.ref || "")}</span><span class="t">${esc(it.title)}</span>${q ? `<span class="q" title="The agent asks you something here">?</span>` : ""}${confDots(it.confidence)}</div>
+    <div class="why">${esc(it.reason)}</div>
+    ${it.done ? `<span class="tag done">✓ ${esc(it.done.result)}</span>` : ""}
+    ${it.moved ? `<span class="tag">${esc(who(it.moved.by))} moved this from ${esc(from?.label || it.moved.from)}</span>` : ""}
+    ${open ? detail(it, s, L) : ""}
+  </article>`;
+}
+
+function plot(s, L) {
+  const narrow = innerWidth < 720, W = narrow ? 360 : 720, H = narrow ? 340 : 400, m = { l: 34, r: 14, t: 14, b: 30 }, max = scaleOf(s), R = 14;
+  const x = (v) => m.l + ((v - 0.5) / max) * (W - m.l - m.r), y = (v) => H - m.b - ((v - 0.5) / max) * (H - m.t - m.b);
+  const placed = s.items.filter((i) => i.impact != null && i.effort != null);
+  const cells = {};
+  for (const it of placed) (cells[`${it.effort},${it.impact}`] ||= []).push(it);
+  const dots = Object.values(cells).flatMap((group) => group.map((it, k) => {
+    const per = 3, row = Math.floor(k / per), inRow = Math.min(per, group.length - row * per), col = k % per;
+    const cx = x(it.effort) + (col - (inRow - 1) / 2) * (R * 2 + 3), cy = y(it.impact) + (row - (Math.ceil(group.length / per) - 1) / 2) * (R * 2 + 3);
+    const l = L.find((l) => l.id === it.lane) || {};
+    return `<g class="dot${sel === it.id ? " on" : ""}${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}" id="d-${esc(it.id)}" data-item="${esc(it.id)}" style="--c:${l.c}" role="button" aria-label="${esc(it.title)}">
+      <circle class="hit" cx="${cx}" cy="${cy}" r="${R + 5}"/><circle class="ring" cx="${cx}" cy="${cy}" r="${R + 4}"/><circle class="c" cx="${cx}" cy="${cy}" r="${R}"/><text x="${cx}" y="${cy + 4}">${esc(short(it))}</text>${asksAt(it) ? `<circle class="qd" cx="${cx + R - 2}" cy="${cy - R + 2}" r="6"/><text class="qt" x="${cx + R - 2}" y="${cy - R + 5.5}">?</text>` : ""}</g>`;
+  })).join("");
+  const mid = (max + 1) / 2, lines = Array.from({ length: max + 1 }, (_, k) => k + 0.5);
+  $("plot").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Items by impact and effort">
+    ${lines.map((v) => `<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="${m.t}" y2="${H - m.b}"/><line class="grid" y1="${y(v)}" y2="${y(v)}" x1="${m.l}" x2="${W - m.r}"/>`).join("")}
+    <line class="mid" x1="${x(mid)}" x2="${x(mid)}" y1="${m.t}" y2="${H - m.b}"/><line class="mid" y1="${y(mid)}" y2="${y(mid)}" x1="${m.l}" x2="${W - m.r}"/>
+    <text class="quad" x="${m.l + 8}" y="${m.t + 18}">Quick wins</text><text class="quad" x="${W - m.r - 8}" y="${m.t + 18}" text-anchor="end">Big bets</text>
+    <text class="quad" x="${m.l + 8}" y="${H - m.b - 8}">Fill-ins</text><text class="quad" x="${W - m.r - 8}" y="${H - m.b - 8}" text-anchor="end">Think twice</text>
+    <text class="axis" x="${W - m.r}" y="${H - 8}" text-anchor="end">more effort →</text><text class="axis" x="${m.l}" y="${H - 8}">less effort</text>
+    <text class="axis" transform="translate(14 ${m.t}) rotate(-90)" text-anchor="end">more impact →</text>
+    ${dots}</svg>`;
+  const off = s.items.filter((i) => !placed.includes(i));
+  $("legend").innerHTML = L.map((l) => `<span style="--c:${l.c}">${esc(l.label)}</span>`).join("") + `<span class="u">the agent was unsure</span>` + (off.length ? `<span class="u">${off.length} not placed: no impact or effort given</span>` : "");
+  const it = s.items.find((i) => i.id === sel);
+  $("sel").innerHTML = it ? card(it, s, L, { id: "picked", still: true }) : `<p class="hint">Tap a dot to see the item and move it.</p>`;
+}
+
+function render(s) {
+  // Keep where the person is and what they are typing across a redraw.
+  const opened = new Set([...document.querySelectorAll("details[open]")].map((d) => d.id));
+  const draft = document.querySelector("#whybar textarea");
+  const kept = draft && { value: draft.value, focus: document.activeElement === draft };
+  const at = { y: scrollY, strip: document.querySelector(".strip")?.scrollLeft || 0 };
+
+  const L = lanesOf(s), items = s.items || [];
+  if (sel && !items.some((i) => i.id === sel)) sel = null;
+  if (asked && !items.find((i) => i.id === asked)?.moved) asked = null;
+
+  $("title").textContent = s.title || "Triage";
+  $("ask").textContent = s.ask || "";
+  $("mix").className = items.length > 40 ? "many" : "";
+  $("mix").innerHTML = L.map((l) => { const mine = items.filter((i) => i.lane === l.id); return `<div class="grp" style="--c:${l.c}"><b>${esc(l.label)}</b><span>${mine.length}</span>
+    <div class="chips">${mine.map((it) => `<button class="chip${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}${sel === it.id ? " on" : ""}" data-item="${esc(it.id)}" data-chip title="${esc(it.title)}">${esc(short(it))}</button>`).join("")}</div></div>`; }).join("");
+
+  const unsure = items.filter((i) => isUnsure(i, s)).sort((a, b) => a.confidence - b.confidence);
+  $("unsure").innerHTML = !unsure.length ? "" : `<div class="head"><h2>I was unsure about ${unsure.length === 1 ? "this one" : `these ${unsure.length}`}</h2><span>Tap where each belongs. The rest I am fairly sure of.</span></div>
+    <div class="strip">${unsure.map((it) => { const l = L.find((l) => l.id === it.lane) || {}; return `<article class="ucard" id="u-${esc(it.id)}" data-item="${esc(it.id)}" style="--c:${l.c}">
+      <div class="from"><span class="ref">${esc(it.ref || "")}</span></div><div class="t">${esc(it.title)}</div><div class="why">${esc(it.reason)}</div>${pick(it, s, L)}</article>`; }).join("")}</div>`;
+
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.view === view);
+  $("board").hidden = view !== "board"; $("scatter").hidden = view !== "scatter";
+  $("board").style.setProperty("--n", L.length);
+  // The board stays in the page under the scatter, so questions about an item stay anchored.
+  $("board").innerHTML = L.map((l) => {
+    const mine = items.filter((i) => i.lane === l.id), ok = s.accepted?.[l.id];
+    return `<section class="lane${ok ? " accepted" : ""}" id="lane-${esc(l.id)}" data-lane="${esc(l.id)}" style="--c:${l.c}">
+      <header><b>${esc(l.label)}</b><span class="n">${mine.length}</span><span class="hint">${esc(l.hint || "")}</span>${ok ? `<span class="ok">✓ Sorted</span><button class="undo" data-reopen>undo</button>` : `<button data-accept>Looks right</button>`}</header>
+      <div class="cards">${mine.map((it, i) => card(it, s, L, { num: l.ordered ? i + 1 : 0 })).join("") || `<div class="empty">Nothing here</div>`}</div>
+    </section>`;
+  }).join("");
+  if (view === "scatter") plot(s, L);
+
+  const moved = items.find((i) => i.id === asked), to = L.find((l) => l.id === moved?.lane);
+  $("whybar").innerHTML = !moved ? "" : `<div class="in"><span class="what"><b>${esc(moved.ref || moved.title)}</b> moved to ${esc(to?.label)}. <span>Why? Only if you care to say.</span></span>
+    <div class="pick">${(s.whys || []).map((w) => `<button class="plain" data-why="${esc(w)}">${esc(w)}</button>`).join("")}<button class="plain" data-write>In my words</button></div><button class="x" data-skip aria-label="Skip">×</button>
+    ${writing ? `<div class="compose"><textarea id="why-note" aria-label="Why you moved it" placeholder="Why it belongs there"></textarea><button data-send>Send</button></div>` : ""}</div>`;
+
+  const done = L.filter((l) => s.accepted?.[l.id]).length, all = L.length > 0 && done === L.length;
+  const asks = (jelly.attention || []).length;
+  const C = 2 * Math.PI * 16, part = L.length ? done / L.length : 0;
+  const head = s.applied ? "Done" : s.go ? "You said go" : all ? "Every lane is sorted" : [unsure.length && `${unsure.length} unsure`, `${L.length - done} lane${L.length - done === 1 ? "" : "s"} to look at`, asks && `${asks} question${asks === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+  const sub = s.applied ? s.applied.note : s.go ? `${s.next || ""}: the agent is on it` : `Then: ${s.next || ""}`;
+  $("go").innerHTML = `<div class="in"><svg width="42" height="42" viewBox="0 0 42 42" role="img" aria-label="${done} of ${L.length} lanes sorted"><circle class="bg" cx="21" cy="21" r="16"/><circle class="fg" cx="21" cy="21" r="16" transform="rotate(-90 21 21)" stroke-dasharray="${C * part} ${C}"/><text x="21" y="25" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${done}/${L.length}</text></svg>
+    <div class="txt"><b>${esc(head)}</b><span>${esc(sub)}</span></div>${s.applied || s.go ? "" : `<button id="go-btn"${all ? "" : " disabled"}>Go</button>`}</div>`;
+
+  for (const id of opened) { const d = $(id); if (d) d.open = true; }
+  if (kept) { const t = $("why-note"); if (t) { t.value = kept.value; if (kept.focus) t.focus(); } }
+  document.documentElement.style.setProperty("--foot", $("foot").offsetHeight + "px");
+  const strip = document.querySelector(".strip"); if (strip) strip.scrollLeft = at.strip;
+  scrollTo(0, at.y);
+}
+
+// A shared, read-only jelly says so itself; anything else the person should see.
+const fail = (e) => { if (!/read-only/.test(e.message)) alert(e.message); };
+const redraw = () => render(jelly.state);
+// A move, from a button or a drop. Afterwards the bar offers to hear why.
+function move(item, lane, before) {
+  const it = jelly.state.items.find((i) => i.id === item), was = it.lane;
+  const args = { item, lane }; if (before !== undefined) args.before = before;
+  return jelly.call("move", args).then(() => {
+    const now = jelly.state.items.find((i) => i.id === item);
+    if (now.lane !== was && now.moved) { asked = item; writing = false; } else if (asked === item) asked = null;
+    redraw();
+  }, fail);
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button, [data-item]");
+  if (!b) return;
+  const item = b.closest("[data-item]")?.dataset.item, lane = b.closest("[data-lane]")?.dataset.lane;
+  if (b.dataset.view) { view = b.dataset.view; return redraw(); }
+  if (b.id === "go-btn") return jelly.call("go").catch(fail);
+  if (b.dataset.accept !== undefined) return jelly.call("accept", { lane }).catch(fail);
+  if (b.dataset.reopen !== undefined) return jelly.call("reopen", { lane }).catch(fail);
+  if (b.dataset.why) return jelly.call("note", { item: asked, note: b.dataset.why }).then(() => { asked = null; redraw(); }, fail);
+  if (b.dataset.write !== undefined) { writing = !writing; redraw(); return $("why-note")?.focus(); }
+  if (b.dataset.skip !== undefined) { asked = null; writing = false; return redraw(); }
+  if (b.dataset.send !== undefined) return jelly.call("note", { item: asked, note: $("why-note").value }).then(() => { asked = null; writing = false; redraw(); }, fail);
+  if (!item) return;
+  if (b.dataset.move) return move(item, b.dataset.move);
+  if (b.dataset.keep !== undefined) return jelly.call("keep", { item }).catch(fail);
+  if (b.dataset.askWhy !== undefined) { asked = item; writing = false; return redraw(); }
+  if (b.dataset.shift) {
+    // Sooner: before the one above. After: before the one after the next, or at the end.
+    const it = jelly.state.items.find((i) => i.id === item), mates = jelly.state.items.filter((i) => i.lane === it.lane), at = mates.indexOf(it);
+    const before = +b.dataset.shift < 0 ? mates[at - 1]?.id : mates[at + 2]?.id ?? null;
+    return move(item, it.lane, before);
+  }
+  if (b.dataset.chip !== undefined) {
+    sel = item; redraw();
+    return (view === "scatter" ? $("picked") : $(`i-${item}`))?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  if (b.matches("button")) return;
+  if (b.matches(".ucard")) return; // its buttons are the point
+  sel = sel === item && !b.matches(".dot") ? null : item;
+  redraw();
+});
+
+// Dragging a card to another lane, or to another place in its lane.
+const dropSpot = (laneEl, y) => {
+  const cards = [...laneEl.querySelectorAll(".item")].filter((c) => c.dataset.item !== drag.item);
+  return cards.find((c) => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; }) || null;
+};
+const clearMarks = () => document.querySelectorAll(".over, .before, .end").forEach((n) => n.classList.remove("over", "before", "end"));
+document.addEventListener("dragstart", (e) => {
+  const c = e.target.closest?.(".item[draggable]");
+  if (!c) return;
+  drag = { item: c.dataset.item };
+  e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.dataset.item);
+  requestAnimationFrame(() => c.classList.add("drag"));
+});
+document.addEventListener("dragover", (e) => {
+  const laneEl = e.target.closest?.(".lane");
+  if (!drag || !laneEl) return;
+  e.preventDefault();
+  clearMarks();
+  laneEl.classList.add("over");
+  const spot = dropSpot(laneEl, e.clientY);
+  if (spot) spot.classList.add("before"); else laneEl.querySelector(".cards").classList.add("end");
+});
+document.addEventListener("drop", (e) => {
+  const laneEl = e.target.closest?.(".lane");
+  if (!drag || !laneEl) return;
+  e.preventDefault();
+  const item = drag.item, before = dropSpot(laneEl, e.clientY)?.dataset.item ?? null;
+  drag = null; clearMarks();
+  move(item, laneEl.dataset.lane, before);
+});
+document.addEventListener("dragend", () => { drag = null; clearMarks(); document.querySelectorAll(".drag").forEach((n) => n.classList.remove("drag")); });
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("textarea")) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.target.nextElementSibling.click(); }
+    return;
+  }
+  if (e.key === "Escape" && sel) { sel = null; redraw(); }
+});
+let wide = innerWidth < 720;
+addEventListener("resize", () => { if ((innerWidth < 720) !== wide) { wide = innerWidth < 720; redraw(); } });
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(render);
+jelly.onAttention?.(redraw);
+</script>
+</body>
+</html>

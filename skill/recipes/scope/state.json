@@ -1,0 +1,337 @@
+{
+  "title": "What goes into jelly's next release",
+  "ask": "Everything logged this session, against two weeks. Move things until it is the release you want, then lock it.",
+  "unit": "h",
+  "start": "2026-11-10",
+  "groups": [
+    {
+      "id": "hear",
+      "label": "Hearing the person"
+    },
+    {
+      "id": "run",
+      "label": "Starting and checking"
+    },
+    {
+      "id": "safe",
+      "label": "Safety"
+    },
+    {
+      "id": "recipes",
+      "label": "Recipes"
+    },
+    {
+      "id": "bugs",
+      "label": "Bugs found since"
+    }
+  ],
+  "levers": [
+    {
+      "id": "hours",
+      "role": "pace",
+      "label": "Hours a week on jelly",
+      "min": 5,
+      "max": 40,
+      "step": 5,
+      "value": 15,
+      "unit": "h"
+    },
+    {
+      "id": "days",
+      "role": "window",
+      "label": "Days until the release",
+      "min": 7,
+      "max": 28,
+      "step": 1,
+      "value": 14,
+      "unit": "days"
+    },
+    {
+      "id": "buffer",
+      "role": "buffer",
+      "label": "Buffer for surprises",
+      "min": 0,
+      "max": 50,
+      "step": 5,
+      "value": 20,
+      "unit": "%"
+    }
+  ],
+  "items": [
+    {
+      "id": "i1",
+      "short": "#1",
+      "label": "Ask and get the answer in one command",
+      "cost": 3,
+      "value": 5,
+      "group": "hear",
+      "why": "The loop agents use most. Today it takes two commands and parsing an event.",
+      "in": true,
+      "needs": [
+        "i2"
+      ]
+    },
+    {
+      "id": "i2",
+      "short": "#2",
+      "label": "jelly wait never misses a change",
+      "cost": 3,
+      "value": 5,
+      "group": "hear",
+      "why": "An answer given before wait connects is lost, and the agent blocks on it.",
+      "in": true
+    },
+    {
+      "id": "i3",
+      "short": "#3",
+      "label": "Each agent gets its own inbox",
+      "cost": 3,
+      "value": 3,
+      "group": "hear",
+      "why": "Only bites when two agents share one project.",
+      "in": false
+    },
+    {
+      "id": "i4",
+      "short": "#4",
+      "label": "jelly is running when an agent reaches for it",
+      "cost": 4,
+      "value": 4,
+      "group": "run",
+      "why": "A stopped daemon is the likeliest reason an agent falls back to prose.",
+      "in": true
+    },
+    {
+      "id": "i5",
+      "short": "#5",
+      "label": "jelly ask says so when --at matches nothing",
+      "cost": 3,
+      "value": 3,
+      "group": "run",
+      "why": "Shipped in ef60c62.",
+      "in": true,
+      "done": true
+    },
+    {
+      "id": "i6",
+      "short": "#6",
+      "label": "The first jelly see returns a snapshot",
+      "cost": 2,
+      "value": 4,
+      "group": "run",
+      "why": "Cause found: Chrome posts its snapshot, then lingers, and see waits 20 s.",
+      "in": true
+    },
+    {
+      "id": "i7",
+      "short": "#7",
+      "label": "One line per item from every command",
+      "cost": 2,
+      "value": 2,
+      "group": "run",
+      "why": "attention and ask --spec print raw JSON. Costs tokens, breaks nothing.",
+      "in": false
+    },
+    {
+      "id": "i8",
+      "short": "#8",
+      "label": "Only jelly's own pages can talk to the daemon",
+      "cost": 5,
+      "value": 4,
+      "group": "safe",
+      "why": "No Origin or Host check. Unconfirmed, and the repo is public: confirming is half the work.",
+      "in": true
+    },
+    {
+      "id": "review",
+      "short": "review",
+      "label": "Recipe: review a change",
+      "cost": 5,
+      "value": 5,
+      "group": "recipes",
+      "why": "Shipped with a real review as its example.",
+      "in": true,
+      "done": true
+    },
+    {
+      "id": "plan",
+      "short": "plan",
+      "label": "Recipe: a live plan",
+      "cost": 1,
+      "value": 4,
+      "group": "recipes",
+      "why": "Being built now. What is left is your look at it.",
+      "in": true
+    },
+    {
+      "id": "triage",
+      "short": "triage",
+      "label": "Recipe: triage a pile",
+      "cost": 1,
+      "value": 4,
+      "group": "recipes",
+      "why": "Being built now. What is left is your look at it.",
+      "in": true
+    },
+    {
+      "id": "scope",
+      "short": "scope",
+      "label": "Recipe: a tradeoff to play with",
+      "cost": 1.5,
+      "value": 4,
+      "group": "recipes",
+      "why": "This jelly. Being built now; the sums need a second pair of eyes.",
+      "in": true
+    },
+    {
+      "id": "map",
+      "short": "map",
+      "label": "Recipe: a map of the code",
+      "cost": 1.5,
+      "value": 3,
+      "group": "recipes",
+      "why": "Being built now. Worth less until it is tried on a big repo.",
+      "in": false
+    },
+    {
+      "id": "timeline",
+      "short": "timeline",
+      "label": "Recipe: an incident timeline",
+      "cost": 1,
+      "value": 3,
+      "group": "recipes",
+      "why": "Being built now. What is left is your look at it.",
+      "in": true
+    },
+    {
+      "id": "monitor",
+      "short": "monitor",
+      "label": "Recipe: a long run, live",
+      "cost": 1.5,
+      "value": 3,
+      "group": "recipes",
+      "why": "Being built now. Needs a real long run to prove the push path.",
+      "in": true
+    },
+    {
+      "id": "share",
+      "short": "share",
+      "label": "jelly share keeps images named in state",
+      "cost": 1,
+      "value": 3,
+      "group": "bugs",
+      "why": "Only assets named in the view are inlined, so a shared review loses its screenshots.",
+      "in": true
+    },
+    {
+      "id": "pipe",
+      "short": "pipe",
+      "label": "No panic when output is piped to head",
+      "cost": 0.5,
+      "value": 1,
+      "group": "bugs",
+      "why": "`jelly new … | head -1` panics with Broken pipe. Ugly, harmless.",
+      "in": false
+    }
+  ],
+  "recommended": {
+    "items": [
+      "i1",
+      "i2",
+      "i4",
+      "i6",
+      "i8",
+      "plan",
+      "triage",
+      "scope",
+      "timeline",
+      "monitor",
+      "share"
+    ],
+    "levers": {
+      "hours": 15,
+      "days": 14,
+      "buffer": 20
+    },
+    "why": "Hearing you first, then the daemon and the safety check. #3, #7, the map recipe and the pipe panic wait: 7 h that nobody is stuck on.",
+    "by": "agent",
+    "at_ms": 0
+  },
+  "last": null,
+  "locked": null,
+  "reopened": null,
+  "result": {
+    "in": [
+      "i1",
+      "i2",
+      "i4",
+      "i6",
+      "i8",
+      "plan",
+      "triage",
+      "scope",
+      "timeline",
+      "monitor",
+      "share"
+    ],
+    "out": [
+      "i3",
+      "i7",
+      "map",
+      "pipe"
+    ],
+    "fell": [],
+    "done": [
+      "i5",
+      "review"
+    ],
+    "cost": 24,
+    "buffer": 4.8,
+    "load": 28.8,
+    "capacity": 30,
+    "spare": 1.2,
+    "fits": true,
+    "value": 51,
+    "value_total": 60,
+    "date": "2026-11-24",
+    "days": 14,
+    "deadline": "2026-11-24",
+    "late": 0,
+    "unit": "h",
+    "date_text": "Tue 24 Nov",
+    "deadline_text": "Tue 24 Nov",
+    "rec": {
+      "in": [
+        "i1",
+        "i2",
+        "i4",
+        "i6",
+        "i8",
+        "plan",
+        "triage",
+        "scope",
+        "timeline",
+        "monitor",
+        "share"
+      ],
+      "load": 28.8,
+      "capacity": 30,
+      "spare": 1.2,
+      "fits": true,
+      "value": 51,
+      "date": "2026-11-24",
+      "date_text": "Tue 24 Nov",
+      "days": 14
+    },
+    "vs": {
+      "same": true,
+      "added": [],
+      "dropped": [],
+      "levers": [],
+      "load": 0,
+      "value": 0,
+      "days": 0
+    },
+    "summary": "Lands Tue 24 Nov: fits with 1.2 h spare · 11 in, 4 out, 2 done · value 51 of 60"
+  }
+}

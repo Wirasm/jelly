@@ -1,0 +1,269 @@
+{
+  "title": "Make jelly worth reaching for",
+  "goal": "Check this app is it useful for you",
+  "steps": [
+    {
+      "id": "evaluate",
+      "title": "Try jelly as an agent",
+      "why": "Is it useful to the agent it is built for?",
+      "needs": [],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794258000000
+      },
+      "result": {
+        "text": "Useful: made a jelly, asked, looked and undid in seconds. Eight rough edges.",
+        "show": {
+          "kind": "terminal",
+          "after": "$ jelly new plan --view view.html --verbs verbs.js --state state.json --about \"trial\"\ntrial:plan v1: made\n$ jelly call plan add '{\"title\":\"second\"}'\ntrial:plan v2: add ran · changed /items\n$ jelly call plan add '{}'\njelly: title needed\n$ jelly undo plan\ntrial:plan v5: undo · changed /items"
+        },
+        "by": "agent",
+        "at_ms": 1794258840000
+      },
+      "notes": [
+        {
+          "text": "Check this app is it useful for you",
+          "by": "person",
+          "at_ms": 1794257940000
+        }
+      ]
+    },
+    {
+      "id": "issues",
+      "title": "Log what would make it better",
+      "why": "",
+      "needs": [
+        "evaluate"
+      ],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794259200000
+      },
+      "result": {
+        "text": "Eight outcome-driven issues, #1 to #8, each with evidence and a done-when list.",
+        "show": {
+          "kind": "terminal",
+          "after": "#1  An agent can ask a question and get the answer in one command\n#2  jelly wait never misses a change made before it started listening\n#3  Every agent in a project sees everything the person did\n#4  jelly is running whenever an agent reaches for it\n#5  jelly ask says so when its --at matches nothing\n#6  The first jelly see after the daemon starts returns a snapshot\n#7  Every command an agent reads prints one line per item\n#8  Only jelly's own pages and the CLI can talk to the daemon"
+        },
+        "by": "agent",
+        "at_ms": 1794260040000
+      }
+    },
+    {
+      "id": "review-v1",
+      "title": "Review recipe, first cut",
+      "why": "Outcomes with evidence, changes by intent, approve or push back.",
+      "needs": [
+        "evaluate"
+      ],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794261600000
+      },
+      "result": {
+        "text": "Worked end to end, and read as prose in boxes. Commit cc1498b.",
+        "show": {
+          "kind": "image",
+          "after": "assets/review-first-cut.png",
+          "caption": "Every verb, refusal and the inbox checked on a throwaway daemon."
+        },
+        "by": "agent",
+        "at_ms": 1794264300000
+      },
+      "notes": [
+        {
+          "text": "It’s not very visual at all and still a wall of text",
+          "by": "person",
+          "at_ms": 1794264480000
+        }
+      ]
+    },
+    {
+      "id": "review-v2",
+      "title": "Make the review visual",
+      "why": "",
+      "needs": [
+        "review-v1"
+      ],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794264600000
+      },
+      "result": {
+        "text": "A map, before and after, one change at a time. Commit 15569be.",
+        "show": {
+          "kind": "image",
+          "compare": "side",
+          "labels": [
+            "first cut",
+            "visual"
+          ],
+          "before": "assets/review-first-cut.png",
+          "after": "assets/review-visual.png",
+          "caption": "Clicked through in a real browser: push back, pick on the map, approve, arrow keys. No page errors."
+        },
+        "by": "agent",
+        "at_ms": 1794266400000
+      },
+      "notes": [
+        {
+          "text": "Better",
+          "by": "person",
+          "at_ms": 1794266520000
+        }
+      ]
+    },
+    {
+      "id": "fix-5",
+      "title": "Fix issue #5 for real",
+      "why": "A real change to review, instead of an invented one.",
+      "needs": [
+        "issues"
+      ],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794267000000
+      },
+      "result": {
+        "text": "jelly ask and jelly look now say when --at matches nothing. About 0.7 s per ask. Commit ef60c62.",
+        "show": {
+          "kind": "terminal",
+          "before": "$ jelly ask plan \"Which order?\" --at \"#nope\"\nit shows on the page below #nope",
+          "after": "$ jelly ask plan \"Which order?\" --at \"#nope\"\n#nope matches nothing on the page, so it shows at the top",
+          "caption": "The page has no #nope."
+        },
+        "by": "agent",
+        "at_ms": 1794268320000
+      }
+    },
+    {
+      "id": "real-review",
+      "title": "Review the fix in the recipe",
+      "why": "",
+      "needs": [
+        "review-v2",
+        "fix-5"
+      ],
+      "status": "done",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794268320000
+      },
+      "result": {
+        "text": "All 104 changed lines sit in five changes; the recipe's example is now this review. Commit d37025b.",
+        "show": {
+          "kind": "image",
+          "after": "assets/review-real.png"
+        },
+        "by": "agent",
+        "at_ms": 1794269160000
+      }
+    },
+    {
+      "id": "pr",
+      "title": "Open the pull request for #5",
+      "why": "",
+      "needs": [
+        "real-review"
+      ],
+      "status": "next",
+      "gate": {
+        "by": "agent",
+        "at_ms": 1794269220000,
+        "note": "The review ends on Go, and that is yours to say.",
+        "cleared": {
+          "by": "person",
+          "at_ms": 1794269700000
+        }
+      },
+      "notes": [
+        {
+          "text": "Open it",
+          "by": "person",
+          "at_ms": 1794269700000
+        }
+      ]
+    },
+    {
+      "id": "recipes",
+      "title": "Build more recipes",
+      "why": "Starting points for the jellies that are easy to get wrong the first time.",
+      "needs": [
+        "review-v2"
+      ],
+      "status": "doing",
+      "started": {
+        "by": "agent",
+        "at_ms": 1794269820000
+      },
+      "progress": {
+        "text": "Four at once: plan, triage, map and monitor.",
+        "show": {
+          "kind": "terminal",
+          "after": "$ ls skill/recipes\nmap  monitor  plan  review  triage"
+        },
+        "by": "agent",
+        "at_ms": 1794270180000
+      },
+      "notes": [
+        {
+          "text": "Build some more recipes. This tool is for you, don’t limit yourself.",
+          "by": "person",
+          "at_ms": 1794269700000
+        }
+      ]
+    },
+    {
+      "id": "bugs",
+      "title": "Log bugs found along the way",
+      "why": "New issues, or evidence on the ones that exist.",
+      "needs": [
+        "issues"
+      ],
+      "status": "next",
+      "notes": [
+        {
+          "text": "Log bugs as well when and if you find them or add evidence to existing",
+          "by": "person",
+          "at_ms": 1794269700000
+        },
+        {
+          "text": "Two so far: headless Chrome posts its snapshot and then lingers (evidence for #6), and jelly share drops images named in state.",
+          "by": "agent",
+          "at_ms": 1794269880000
+        }
+      ]
+    },
+    {
+      "id": "index",
+      "title": "List every recipe in the skill",
+      "why": "One line each in SKILL.md, so a session reads a recipe only when it uses it.",
+      "needs": [
+        "recipes"
+      ],
+      "status": "next"
+    },
+    {
+      "id": "merge",
+      "title": "Merge to main",
+      "why": "",
+      "needs": [
+        "pr",
+        "index"
+      ],
+      "status": "next",
+      "gate": {
+        "by": "agent",
+        "at_ms": 1794269820000,
+        "note": "Merging is yours to decide.",
+        "cleared": null
+      }
+    }
+  ],
+  "wrap": null
+}

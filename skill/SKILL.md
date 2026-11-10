@@ -63,8 +63,19 @@ A recipe is a folder next to this file with `view.html`, `verbs.js`, an example
 the folder to a scratch place, write your own state, and change the view and
 verbs as the job needs: `jelly new review --from /tmp/review`.
 
-- `recipes/review`: you changed code and the person must judge it. Outcomes with
-  evidence, changes grouped by intent, approve or push back per group, then go.
+- `recipes/review`: you changed code and the person must judge it. A map of what
+  they asked for wired to the changes, before and after per change, approve or
+  push back, then go.
+- `recipes/plan`: work with more than three steps. A live track of steps the
+  person can reorder, veto or put a gate on; you start, show progress and finish.
+- `recipes/triage`: ten to a hundred items the person must agree on. You sort
+  them into lanes; they correct the ones you were unsure of.
+- `recipes/map`: how a system fits together. Layers, nodes and wires, traces that
+  play step by step, and the nodes a change will touch.
+- `recipes/scope`: a tradeoff between many parts. Items in or out, a few levers,
+  and a date and capacity bar that move as the person plays.
+- `recipes/timeline`: working out why something happened. Evidence on a time
+  axis, competing explanations, and the person says which they believe.
 
 ## Show it
 
@@ -80,7 +91,9 @@ jelly focus plan               # open it full size on their screen
 Always look before you show: run `jelly see`, and fix what is off before you focus
 the jelly or ask about it. `see` lists the errors your page threw (`error` lines)
 and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
-`jelly look` also say so in their reply when `--at` matches nothing. Clear your own
+`jelly look` say in their reply where the card landed: below the element, at the
+top because nothing matched or the element is in a fixed or sticky part, or below
+an element that is not on screen right now. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 

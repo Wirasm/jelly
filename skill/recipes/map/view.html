@@ -1,0 +1,443 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>map</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
+    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --term: #17141c; --term-ink: #e9e4ee; --blue: #3b78c9; --wire: #cfc6ca;
+    color-scheme: light;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    --term: #0d0b11; --blue: #7fb0f0; --wire: #4a4258;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px; }
+  h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  #about { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+  #tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .pill { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; gap: 7px; align-items: center; padding: 7px 13px; border-radius: 99px;
+    border: 1.5px solid var(--line); background: var(--card); font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+  .pill:hover { border-color: var(--ink-2); }
+  .pill.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .pill.change.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pill .ok { color: var(--good); } .pill.on .ok { color: inherit; }
+
+  #main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; margin-top: 16px; align-items: start; }
+
+  /* ---- the map: layers top to bottom, wires drawn between the nodes ---- */
+  #map { position: relative; }
+  #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 0; }
+  #wires path { fill: none; stroke: var(--wire); stroke-width: 1.5; }
+  #wires path.near { stroke: color-mix(in srgb, var(--accent) 55%, var(--wire)); }
+  #wires path.on { stroke: var(--ink-2); stroke-width: 2.2; }
+  #wires path.done { stroke: color-mix(in srgb, var(--accent) 60%, var(--wire)); stroke-width: 2.2; }
+  #wires path.now { stroke: var(--accent); stroke-width: 3.2; }
+  #wires path.hop { stroke-dasharray: 5 5; }
+  #wires path.faint { opacity: .35; }
+  #wires text { font: 600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; text-anchor: middle; }
+  #wires text.now { fill: var(--accent); }
+  #token { fill: var(--accent); stroke: var(--bg); stroke-width: 3; }
+  .band { position: relative; z-index: 1; padding: 0 0 34px; }
+  .band:last-child { padding-bottom: 0; }
+  .band > small { display: table; background: var(--bg); padding-right: 6px; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 26px 14px; justify-content: center; }
+  .node { all: unset; box-sizing: border-box; cursor: pointer; position: relative; flex: 1 1 104px; max-width: 150px; min-width: 100px; min-height: 52px; display: flex; gap: 8px; align-items: center;
+    padding: 8px 10px; border-radius: 12px; background: var(--card); border: 1.5px solid var(--line); border-top: 4px solid var(--k, var(--idle));
+    font-size: 13.5px; font-weight: 600; line-height: 1.25; transition: opacity .25s, box-shadow .2s, transform .2s; scroll-margin: 90px 0; }
+  .node:hover { border-color: var(--ink-2); border-top-color: var(--k, var(--idle)); }
+  .node .t { flex: 1; min-width: 0; overflow-wrap: break-word; }
+  .k-person { --k: var(--accent); border-radius: 99px; border-top-width: 1.5px; border-left: 5px solid var(--k); padding-left: 14px; }
+  .k-browser { --k: var(--blue); } .k-code { --k: var(--ink-2); } .k-store, .k-file { --k: var(--warn); } .k-process { --k: var(--idle); }
+  .k-file, .k-store { border-style: solid; border-radius: 4px 4px 12px 12px; }
+  /* Dimmed by colour, not opacity: the box stays solid so wires pass behind it. */
+  .node.dim { color: color-mix(in srgb, var(--ink) 36%, var(--card)); border-color: color-mix(in srgb, var(--line) 60%, var(--card)); border-top-color: color-mix(in srgb, var(--k, var(--idle)) 35%, var(--card)); }
+  .node.k-person.dim { border-left-color: color-mix(in srgb, var(--k) 35%, var(--card)); }
+  .node.sel { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 30%, transparent); border-color: var(--ink); border-top-color: var(--k, var(--idle)); }
+  .node.touched { border-color: var(--accent); border-top-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+  .node.near { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); border-top-style: solid; }
+  .node.visited { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); border-top-color: var(--k, var(--idle)); }
+  .node.now { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 28%, transparent); transform: scale(1.04); }
+  .badges { position: absolute; top: -11px; right: -6px; display: flex; gap: 3px; }
+  .badges i { font: 700 11px/18px -apple-system, sans-serif; font-style: normal; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; text-align: center; color: #fff; background: var(--ink-2); }
+  .badges .b-step { background: var(--accent); } .badges .b-touch { background: var(--accent); } .badges .b-flag { background: var(--warn); color: #1f1a1d; }
+  .badges .b-ask { background: var(--accent); } .badges .b-ok { background: var(--good); }
+
+  /* ---- the panel: one node, one step of a trace, or what to do next ---- */
+  #panel { position: sticky; top: 14px; background: var(--card); border: 1.5px solid var(--line); border-top: 5px solid var(--pk, var(--idle)); border-radius: var(--r); padding: 16px 18px; min-width: 0; }
+  #panel.tracing { --pk: var(--accent); }
+  .crumbs { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  .crumbs .x { margin-left: auto; }
+  .round { all: unset; box-sizing: border-box; cursor: pointer; width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--card); display: grid; place-items: center; font-size: 15px; line-height: 1; }
+  .chip { font: 600 11.5px -apple-system, sans-serif; padding: 2px 8px; border-radius: 99px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+  #panel h2 { margin: 6px 0 0; font-size: 20px; line-height: 1.25; letter-spacing: -.01em; }
+  #panel h3 { margin: 16px 0 6px; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .what { margin: 6px 0 0; color: var(--ink-2); }
+  .say { margin: 8px 0 0; font-size: 17px; line-height: 1.4; }
+  .cite { margin-top: 8px; font: 12px ui-monospace, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+  .note { margin-top: 10px; padding: 8px 12px; border-radius: 10px; background: var(--warn-soft); font-size: 14px; }
+  .note.change { background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+  .note b { display: block; font-size: 11.5px; color: var(--muted); }
+  .files { margin: 0; padding: 0; list-style: none; font: 12px/1.6 ui-monospace, Menlo, monospace; color: var(--ink-2); overflow-wrap: anywhere; }
+  .links { display: flex; flex-direction: column; gap: 5px; }
+  .link { all: unset; box-sizing: border-box; cursor: pointer; display: flex; gap: 8px; align-items: baseline; padding: 6px 10px; border-radius: 9px; background: var(--soft); font-size: 13.5px; }
+  .link b { white-space: nowrap; } .link span { color: var(--muted); font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+  .link:hover { outline: 1.5px solid var(--ink-2); }
+
+  .hero { display: grid; gap: 8px; margin-top: 12px; }
+  .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); }
+  .pane.after { border-color: var(--good); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; background: var(--idle); color: #fff; }
+  .pane.after > b { background: var(--good); }
+  .pane pre { margin: 0; padding: 10px 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, Menlo, monospace; }
+  .pane pre .p { opacity: .55; }
+  .pane iframe { display: block; width: 100%; height: 220px; border: 0; background: #fff; }
+  .pane img { display: block; width: 100%; }
+  .cap2 { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+
+  .steps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 14px; }
+  .steps button { all: unset; cursor: pointer; width: 14px; height: 14px; border-radius: 50%; background: var(--line); }
+  .steps button.done { background: color-mix(in srgb, var(--accent) 55%, var(--line)); } .steps button.now { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .ctl { display: flex; gap: 8px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  .btn { all: unset; box-sizing: border-box; cursor: pointer; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 9px 15px; font-weight: 600; font-size: 14px; }
+  .btn.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.yes { background: var(--good); border-color: var(--good); color: #fff; }
+  .btn[disabled] { opacity: .4; cursor: default; }
+  .undo { all: unset; cursor: pointer; color: var(--muted); font-size: 13px; text-decoration: underline; }
+  .ok-line { font-weight: 700; color: var(--good); }
+
+  .talk { display: grid; gap: 6px; }
+  .said { padding: 8px 12px; border-radius: 12px 12px 12px 2px; background: var(--warn-soft); }
+  .said.agent { background: var(--soft); border-radius: 12px 12px 2px 12px; margin-left: 18px; }
+  .said b { font-size: 11.5px; display: flex; gap: 8px; color: var(--muted); } .said b .undo { margin-left: auto; font-weight: 500; }
+  .said span { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .flagrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .flagrow .btn { padding: 7px 11px; font-size: 13px; } .flagrow .btn.on { border-color: var(--warn); background: var(--warn-soft); }
+  .compose { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
+  .compose textarea { flex: 1; min-width: 0; min-height: 44px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 10px; resize: vertical; }
+  .compose textarea:focus { outline: none; border-color: var(--accent); }
+  .legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; } .legend i { width: 14px; height: 10px; border-radius: 3px; border-top: 4px solid var(--k); background: var(--card); outline: 1px solid var(--line); }
+
+  @media (max-width: 900px) {
+    #main { grid-template-columns: minmax(0, 1fr); }
+    #panel { position: static; }
+    .row { gap: 24px 10px; } .node { flex-basis: 96px; min-width: 96px; max-width: 140px; font-size: 12.5px; padding: 7px 8px; }
+    /* While a trace plays, its step rides at the bottom so the map stays in view. */
+    body.tracing #panel { position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 20; max-height: 48vh; overflow-y: auto; border-radius: var(--r) var(--r) 0 0; box-shadow: 0 -10px 30px -12px rgba(0,0,0,.4); padding: 12px 16px 14px; }
+    body.tracing .wrap { padding-bottom: 52vh; }
+    body.tracing .jf-btn { bottom: auto !important; top: 10px; }
+    .say { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title"></h1>
+  <p id="about"></p>
+  <div id="tools"></div>
+  <div id="main">
+    <div id="map"><svg id="wires" aria-hidden="true"></svg><div id="bands"></div></div>
+    <aside id="panel" aria-live="polite"></aside>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const KIND = { person: "Someone", browser: "In the browser", code: "Code", store: "Kept in memory", file: "On disk", process: "A process" };
+const FLAG = { wrong: ["✗", "This is wrong", "What is wrong?"], more: ["…", "Tell me more", "About what? (optional)"], careful: ["⚠", "Careful here", "Why? (optional)"] };
+const who = (by) => (by === "person" ? "You" : by);
+const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
+const narrow = () => matchMedia("(max-width: 900px)").matches;
+
+// What is only on this screen. Everything else is state.
+let sel = null;        // the node in the panel
+let tr = null;         // the trace being walked: { id, i }
+let playing = null;    // the auto-play timer
+let overlay = true;    // is the change laid over the map
+let flagging = null;   // { node, kind }: the open flag composer
+let drawn = "";        // what the map was last built from
+
+const S = () => jelly.state || {};
+const nodeOf = (id) => (S().nodes || []).find((n) => n.id === id);
+const traceOf = (id) => (S().traces || []).find((t) => t.id === id);
+const flagsOn = (id) => (S().flags || []).filter((f) => f.node === id);
+const asksAt = (id) => (jelly.itemsAt?.(`#n-${id}`) || []).filter((a) => !a.answer).length;
+const touchedIds = () => (S().nodes || []).filter((n) => n.touched).map((n) => n.id);
+
+// The picture for a trace step: before and after. Terminal text, images, or live HTML.
+function hero(show, id) {
+  if (Array.isArray(show)) return show.map((s, i) => hero(s, `${id}-${i + 1}`)).join("");
+  if (!show) return "";
+  const kind = show.kind || "terminal", [lb, la] = show.labels || ["before", "after"];
+  const pane = (side, v) => v == null ? "" : `<div class="pane ${side}" id="${id}-${side}"><b>${esc(side === "before" ? lb : la)}</b>${
+    kind === "html" ? `<iframe sandbox="allow-scripts" srcdoc="${esc(v)}" title="${esc(side)}"></iframe>` : kind === "image" ? `<img src="${esc(v)}" alt="${esc(side === "before" ? lb : la)}">` : `<pre>${term(v)}</pre>`}</div>`;
+  return `<div class="hero">${pane("before", show.before)}${pane("after", show.after)}</div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
+}
+
+// ---- the map ----
+function buildMap(state) {
+  const sig = JSON.stringify([(state.layers || []), (state.nodes || []).map((n) => [n.id, n.layer, n.label, n.kind])]);
+  if (sig === drawn) return;
+  drawn = sig;
+  const layers = state.layers?.length ? state.layers : [...new Set((state.nodes || []).map((n) => n.layer))].map((id) => ({ id, label: id }));
+  $("bands").innerHTML = layers.map((l) => `<section class="band" id="l-${esc(l.id)}"><small>${esc(l.label || l.id)}</small><div class="row">${
+    (state.nodes || []).filter((n) => n.layer === l.id).map((n) => `<button class="node k-${esc(n.kind || "code")}" id="n-${esc(n.id)}" data-node="${esc(n.id)}"><span class="t">${esc(n.label).replace(/\//g, "/<wbr>")}</span><span class="badges"></span></button>`).join("")}</div></section>`).join("");
+}
+
+// The edge a trace step travels: a drawn one, either way round, or a hop.
+function stepEdge(steps, i) {
+  if (i < 1) return null;
+  const a = steps[i - 1].at, b = steps[i].at, edges = S().edges || [];
+  if (a === b) return null;
+  let k = edges.findIndex((e) => e.from === a && e.to === b);
+  if (k >= 0) return { k, back: false };
+  k = edges.findIndex((e) => e.from === b && e.to === a);
+  return k >= 0 ? { k, back: true } : { hop: [a, b] };
+}
+
+// Where two nodes join: the sides that face each other, nudged toward the other end.
+function curve(a, b, box) {
+  const p = a.getBoundingClientRect(), q = b.getBoundingClientRect();
+  const pc = { x: p.left + p.width / 2 - box.left, y: p.top + p.height / 2 - box.top }, qc = { x: q.left + q.width / 2 - box.left, y: q.top + q.height / 2 - box.top };
+  const lean = (from, to, w) => Math.max(-w * 0.36, Math.min(w * 0.36, (to - from) * 0.22));
+  if (Math.abs(qc.y - pc.y) > Math.min(p.height, q.height) * 0.6) {
+    const down = qc.y > pc.y;
+    const x1 = pc.x + lean(pc.x, qc.x, p.width), y1 = pc.y + (down ? p.height / 2 : -p.height / 2), x2 = qc.x + lean(qc.x, pc.x, q.width), y2 = qc.y + (down ? -q.height / 2 - 5 : q.height / 2 + 5);
+    const m = (y1 + y2) / 2;
+    return `M${x1},${y1} C${x1},${m} ${x2},${m} ${x2},${y2}`;
+  }
+  const right = qc.x > pc.x;
+  const x1 = pc.x + (right ? p.width / 2 : -p.width / 2), x2 = qc.x + (right ? -q.width / 2 - 5 : q.width / 2 + 5);
+  // Same row: a shallow arc under the nodes, so it clears whatever sits between them.
+  const dip = Math.abs(x2 - x1) > p.width * 0.8 ? p.height * 0.75 : 0, y = pc.y + (dip ? p.height / 2 - 6 : 0), y2 = qc.y + (dip ? q.height / 2 - 6 : 0);
+  return dip ? `M${pc.x + (right ? 1 : -1) * p.width * 0.3},${pc.y + p.height / 2} C${pc.x + (right ? 1 : -1) * p.width * 0.3},${y + dip + 14} ${qc.x - (right ? 1 : -1) * q.width * 0.3},${y2 + dip + 14} ${qc.x - (right ? 1 : -1) * q.width * 0.3},${qc.y + q.height / 2 + 5}`
+    : `M${x1},${pc.y} L${x2},${qc.y}`;
+}
+
+function paint(state) {
+  const t = tr && traceOf(tr.id), steps = t?.steps || [];
+  const touched = touchedIds(), lay = overlay && !t && touched.length > 0;
+  const edges = state.edges || [];
+  // What stays lit: the selected node's neighbours, else whatever sits next to the change.
+  const lit = (ids) => new Set(edges.filter((e) => ids.includes(e.from) || ids.includes(e.to)).flatMap((e) => [e.from, e.to]).concat(ids));
+  const near = sel ? lit([sel]) : lay ? lit(touched) : null;
+  const stepAt = new Map();
+  if (t) steps.slice(0, tr.i + 1).forEach((s, i) => stepAt.set(s.at, i + 1));
+
+  for (const n of state.nodes || []) {
+    const el = $(`n-${n.id}`);
+    if (!el) continue;
+    const isNow = t && steps[tr.i]?.at === n.id, vis = t && stepAt.has(n.id);
+    el.className = `node k-${n.kind || "code"}` + (sel === n.id ? " sel" : "") + (isNow ? " now" : vis ? " visited" : "")
+      + (t ? (vis ? "" : " dim") : (lay && touched.includes(n.id) ? " touched" : "") + (near && !near.has(n.id) ? " dim" : lay && !sel && !touched.includes(n.id) ? " near" : ""));
+    const fl = flagsOn(n.id), open = fl.filter((f) => !f.reply).length, asks = asksAt(n.id);
+    el.querySelector(".badges").innerHTML = (t && vis ? `<i class="b-step">${stepAt.get(n.id)}</i>` : "")
+      + (n.touched && overlay && !t ? `<i class="b-touch" title="The change touches this">✎</i>` : "")
+      + (asks ? `<i class="b-ask" title="The agent asks you something here">?</i>` : "")
+      + (open ? `<i class="b-flag" title="You flagged this">${open > 1 ? open : "!"}</i>` : fl.length ? `<i class="b-ok" title="The agent answered your flag">✓</i>` : "");
+    el.setAttribute("aria-pressed", sel === n.id);
+  }
+
+  // Wires. Labels only where the eye already is: the selected node, or the step being taken.
+  const box = $("map").getBoundingClientRect();
+  const used = new Map(); // edge index -> "done" | "now"
+  const hops = [];
+  if (t) for (let i = 1; i <= tr.i; i++) {
+    const e = stepEdge(steps, i);
+    if (!e) continue;
+    if (e.hop) hops.push({ ...e, now: i === tr.i }); else used.set(e.k, i === tr.i ? "now" : used.get(e.k) === "now" ? "now" : "done");
+  }
+  const mk = (cls) => `marker-end="url(#arr-${cls})"`;
+  let paths = "", labels = [];
+  edges.forEach((e, k) => {
+    const a = $(`n-${e.from}`), b = $(`n-${e.to}`);
+    if (!a || !b) return;
+    const touch = sel && (e.from === sel || e.to === sel);
+    const cls = used.get(k) || (t ? "faint" : touch ? "on" : sel ? "faint" : lay && (touched.includes(e.from) || touched.includes(e.to)) ? "near" : "");
+    paths += `<path id="w-${k}" class="${cls}" d="${curve(a, b, box)}" ${mk(cls === "now" || cls === "done" ? "hot" : cls === "on" ? "on" : cls === "near" ? "near" : "idle")}/>`;
+    if ((cls === "now" || cls === "on") && e.label) labels.push({ k, text: e.label, cls });
+  });
+  hops.forEach((h, j) => {
+    const a = $(`n-${h.hop[0]}`), b = $(`n-${h.hop[1]}`);
+    if (a && b) paths += `<path id="w-hop-${j}" class="hop ${h.now ? "now" : "done"}" d="${curve(a, b, box)}" ${mk("hot")}/>`;
+  });
+  const arrow = (id, color) => `<marker id="arr-${id}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" style="fill:${color};stroke:none"/></marker>`;
+  $("wires").innerHTML = `<defs>${arrow("idle", "var(--wire)")}${arrow("on", "var(--ink-2)")}${arrow("near", "color-mix(in srgb, var(--accent) 55%, var(--wire))")}${arrow("hot", "var(--accent)")}</defs>${paths}`;
+  $("wires").insertAdjacentHTML("beforeend", labels.map((l) => {
+    const p = $(`w-${l.k}`), len = p.getTotalLength(), at = p.getPointAtLength(len / 2);
+    if (len < 70) return ""; // too short to carry words; the panel says it
+    const x = Math.max(60, Math.min(box.width - 60, at.x));
+    return `<text class="${l.cls}" x="${x}" y="${at.y - 6}">${esc(l.text)}</text>`;
+  }).join("") + `<circle id="token" r="7" style="display:none"/>`);
+}
+
+// The token that travels the step just taken.
+let flying = 0;
+function fly(i) {
+  const t = tr && traceOf(tr.id);
+  if (!t || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const e = stepEdge(t.steps, i);
+  if (!e) return;
+  const path = e.hop ? document.querySelector("#wires path.hop.now") : $(`w-${e.k}`), token = $("token");
+  if (!path || !token) return;
+  const len = path.getTotalLength(), run = ++flying, t0 = performance.now(), ms = 520;
+  token.style.display = "";
+  (function frame(now) {
+    const tok = $("token");
+    if (run !== flying || !tok || !path.isConnected) return;
+    const f = Math.min(1, (now - t0) / ms), ease = f < .5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
+    const p = path.getPointAtLength((e.back ? 1 - ease : ease) * len);
+    tok.setAttribute("cx", p.x); tok.setAttribute("cy", p.y); tok.style.display = "";
+    if (f < 1) requestAnimationFrame(frame); else tok.style.display = "none";
+  })(t0);
+}
+
+// ---- the panel ----
+function panelTrace(state, t) {
+  const s = t.steps[tr.i], n = nodeOf(s.at), last = tr.i === t.steps.length - 1;
+  const u = t.understood, e = stepEdge(t.steps, tr.i), via = e && !e.hop ? (state.edges[e.k].label || "") : "";
+  return `<div class="crumbs"><span>${esc(t.title)}</span><span class="chip">Step ${tr.i + 1} of ${t.steps.length}</span><button class="round x" data-close aria-label="Leave the trace">✕</button></div>
+    <h2><button class="undo" data-peek="${esc(s.at)}" style="font:inherit;color:inherit;text-decoration:underline dotted" title="What is this?">${esc(n?.label || s.at)}</button></h2>
+    <p class="say" id="t-${esc(t.id)}-say">${esc(s.say)}</p>
+    ${via ? `<div class="cite" style="color:var(--accent)">↳ ${esc(via)}</div>` : ""}
+    ${s.cite ? `<div class="cite">${esc(s.cite)}</div>` : ""}
+    ${hero(s.show, `t-${t.id}-${tr.i + 1}`)}
+    <div class="steps" id="t-${esc(t.id)}-steps">${t.steps.map((x, i) => `<button class="${i === tr.i ? "now" : i < tr.i ? "done" : ""}" data-goto="${i}" aria-label="Step ${i + 1}" title="${esc(nodeOf(x.at)?.label || x.at)}"></button>`).join("")}</div>
+    <div class="ctl"><button class="btn" data-step="-1"${tr.i ? "" : " disabled"}>‹ Back</button>
+      ${last ? (u ? `<span class="ok-line">✓ Makes sense</span><button class="undo" data-understood="no">Take back</button>` : `<button class="btn yes" data-understood="yes">✓ That makes sense</button>`)
+        : `<button class="btn go" data-step="1">Next ›</button><button class="btn" data-play>${playing ? "❚❚ Pause" : "▶ Play"}</button>`}</div>`;
+}
+
+function panelNode(state, n) {
+  const edges = state.edges || [];
+  const out = edges.filter((e) => e.from === n.id), inn = edges.filter((e) => e.to === n.id);
+  const link = (id, label, arrow) => { const o = nodeOf(id); return o ? `<button class="link" data-node="${esc(id)}"><b>${arrow} ${esc(o.label)}</b><span>${esc(label || "")}</span></button>` : ""; };
+  const through = (state.traces || []).map((t) => ({ t, i: t.steps.findIndex((s) => s.at === n.id) })).filter((x) => x.i >= 0);
+  const fl = flagsOn(n.id);
+  const back = tr && traceOf(tr.id);
+  return `<div class="crumbs"><span class="chip">${KIND[n.kind] || esc(n.kind || "")}</span>${back ? `<button class="undo" data-back>‹ Back to the trace</button>` : ""}<button class="round x" data-unsel aria-label="Close">✕</button></div>
+    <h2>${esc(n.label)}</h2>
+    <p class="what">${esc(n.what || "")}</p>
+    ${n.touched && state.change ? `<div class="note change"><b>${esc(state.change.title)}</b>${esc(n.touched.note || "This changes.")}</div>` : ""}
+    ${n.risk ? `<div class="note"><b>⚠ Careful</b>${esc(n.risk)}</div>` : ""}
+    ${(n.files || []).length ? `<h3>Where it lives</h3><ul class="files">${n.files.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+    ${inn.length ? `<h3>What leans on it</h3><div class="links">${inn.map((e) => link(e.from, e.label, "←")).join("")}</div>` : ""}
+    ${out.length ? `<h3>What it leans on</h3><div class="links">${out.map((e) => link(e.to, e.label, "→")).join("")}</div>` : ""}
+    ${through.length ? `<h3>Traces through here</h3><div class="links">${through.map(({ t, i }) => `<button class="link" data-trace="${esc(t.id)}" data-at="${i}"><b>▶ ${esc(t.title)}</b><span>step ${i + 1}</span></button>`).join("")}</div>` : ""}
+    <h3>Your say</h3>
+    ${fl.length ? `<div class="talk">${fl.map((f) => `<div class="said" id="f-${esc(f.id)}"><b>${FLAG[f.kind]?.[0] || ""} ${esc(who(f.by))}: ${esc((FLAG[f.kind]?.[1] || f.kind).toLowerCase())}${f.reply ? "" : `<button class="undo" data-unflag="${esc(f.id)}">Take back</button>`}</b><span>${esc(f.note)}</span></div>${f.reply ? `<div class="said agent"><b>${esc(f.reply.by)}${f.fixed ? " · changed the map" : ""}</b><span>${esc(f.reply.note)}</span></div>` : ""}`).join("")}</div>` : ""}
+    <div class="flagrow" style="margin-top:${fl.length ? 8 : 0}px">${Object.entries(FLAG).map(([k, [icon, label]]) => `<button class="btn${flagging?.node === n.id && flagging.kind === k ? " on" : ""}" data-flag="${k}">${icon} ${label}</button>`).join("")}</div>
+    ${flagging?.node === n.id ? `<div class="compose"><textarea id="flag-note" aria-label="${esc(FLAG[flagging.kind][2])}" placeholder="${esc(FLAG[flagging.kind][2])}"></textarea><button class="btn go" data-send-flag>Send</button></div>` : ""}`;
+}
+
+function panelHome(state) {
+  const touched = (state.nodes || []).filter((n) => n.touched), flags = state.flags || [];
+  const open = flags.filter((f) => !f.reply);
+  return `<div class="crumbs"><span>Tap any box, or walk a path through it</span></div>
+    ${(state.traces || []).length ? `<h3>Walk through</h3><div class="links">${state.traces.map((t) => `<button class="link" data-trace="${esc(t.id)}"><b>${t.understood ? `<span style="color:var(--good)">✓</span>` : "▶"} ${esc(t.title)}</b><span>${t.steps.length} steps</span></button>`).join("")}</div>` : ""}
+    ${state.change && touched.length ? `<h3>The change</h3><div class="note change" style="margin-top:0"><b>${esc(state.change.title)}</b>${esc(state.change.note || "")}</div>
+      <div class="links" style="margin-top:8px">${touched.map((n) => `<button class="link" data-node="${esc(n.id)}"><b>✎ ${esc(n.label)}</b><span>${esc(n.touched.note || "")}</span></button>`).join("")}</div>` : ""}
+    ${flags.length ? `<h3>Your flags</h3><div class="links">${flags.map((f) => `<button class="link" data-node="${esc(f.node)}"><b>${f.reply ? "✓" : FLAG[f.kind]?.[0] || "!"} ${esc(nodeOf(f.node)?.label || f.node)}</b><span>${f.reply ? "answered" : "waiting on the agent"}</span></button>`).join("")}</div>` : ""}
+    <div class="legend">${[["person", "someone"], ["browser", "in the browser"], ["code", "code"], ["store", "kept"], ["process", "a process"]].filter(([k]) => (state.nodes || []).some((n) => (n.kind || "code") === k || (k === "store" && n.kind === "file")))
+      .map(([k, l]) => `<span><i class="k-${k}"></i>${l}</span>`).join("")}</div>`;
+}
+
+function render(state) {
+  state = state || {};
+  const draft = $("flag-note"), kept = draft && { value: draft.value, focus: document.activeElement === draft };
+  if (tr && !traceOf(tr.id)) { tr = null; stop(); }
+  if (tr) tr.i = Math.max(0, Math.min(tr.i, traceOf(tr.id).steps.length - 1));
+  if (sel && !nodeOf(sel)) sel = null;
+  if (flagging && flagging.node !== sel) flagging = null;
+
+  $("title").textContent = state.title || "Map";
+  $("about").textContent = state.about || "";
+  const touched = touchedIds();
+  $("tools").innerHTML = (state.traces || []).map((t) => `<button class="pill${tr?.id === t.id ? " on" : ""}" id="t-${esc(t.id)}" data-trace="${esc(t.id)}">${t.understood ? `<span class="ok">✓</span>` : "▶"} ${esc(t.title)}</button>`).join("")
+    + (state.change && touched.length ? `<button class="pill change${overlay ? " on" : ""}" data-overlay aria-pressed="${overlay}">✎ ${esc(state.change.title)}</button>` : "");
+
+  buildMap(state);
+  paint(state);
+  const t = tr && traceOf(tr.id), n = sel && nodeOf(sel);
+  document.body.classList.toggle("tracing", !!t && !n);
+  $("panel").className = t && !n ? "tracing" : "";
+  $("panel").style.setProperty("--pk", n ? getComputedStyle($(`n-${n.id}`)).getPropertyValue("--k") : "");
+  $("panel").innerHTML = n ? panelNode(state, n) : t ? panelTrace(state, t) : panelHome(state);
+  const again = $("flag-note");
+  if (again && kept) { again.value = kept.value; if (kept.focus) again.focus(); }
+}
+
+// ---- walking a trace ----
+function stop() { clearInterval(playing); playing = null; }
+function go(i, animate = true) {
+  const t = tr && traceOf(tr.id);
+  if (!t) return;
+  const from = tr.i;
+  tr.i = Math.max(0, Math.min(i, t.steps.length - 1));
+  sel = null; flagging = null;
+  if (tr.i === t.steps.length - 1) stop();
+  render(jelly.state);
+  if (animate && tr.i === from + 1) fly(tr.i);
+  if (narrow()) $(`n-${t.steps[tr.i].at}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+function start(id, at = 0) { stop(); tr = { id, i: 0 }; go(+at || 0, false); }
+
+const fail = (e) => alert(e.message);
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || b.closest(".jf-ask, .jf-pop")) return;
+  const d = b.dataset;
+  if (d.trace) return tr?.id === d.trace && d.at === undefined && !sel ? (tr = null, stop(), render(jelly.state)) : start(d.trace, d.at);
+  if (d.node || d.peek) { stop(); sel = sel === (d.node || d.peek) && !d.peek ? null : d.node || d.peek; flagging = null; return render(jelly.state); }
+  if ("unsel" in d || "back" in d) { sel = null; flagging = null; return render(jelly.state); }
+  if ("close" in d) { tr = null; stop(); return render(jelly.state); }
+  if (d.step) { stop(); return go(tr.i + +d.step); }
+  if (d.goto) { stop(); return go(+d.goto); }
+  if ("play" in d) {
+    if (playing) stop(); else { playing = setInterval(() => go(tr.i + 1), 2400); go(tr.i + 1); }
+    return render(jelly.state);
+  }
+  if ("overlay" in d) { overlay = !overlay; return render(jelly.state); }
+  if (d.understood) return jelly.call("understood", { trace: tr.id, yes: d.understood === "yes" }).catch(fail);
+  if (d.flag) { flagging = flagging?.kind === d.flag && flagging.node === sel ? null : { node: sel, kind: d.flag }; render(jelly.state); return $("flag-note")?.focus(); }
+  if ("sendFlag" in d) return jelly.call("flag", { node: flagging.node, kind: flagging.kind, note: $("flag-note").value }).then(() => { flagging = null; render(jelly.state); }, fail);
+  if (d.unflag) return jelly.call("unflag", { flag: d.unflag }).catch(fail);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("textarea, input")) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.id === "flag-note") { e.preventDefault(); document.querySelector("[data-send-flag]").click(); }
+    return;
+  }
+  if (e.target.closest?.(".jf-ask, .jf-pop")) return;
+  if (tr && !sel && e.key === "ArrowRight") { stop(); go(tr.i + 1); }
+  if (tr && !sel && e.key === "ArrowLeft") { stop(); go(tr.i - 1); }
+  if (e.key === "Escape") { if (sel) sel = null; else if (tr) { tr = null; stop(); } flagging = null; render(jelly.state); }
+});
+// The wires follow the boxes: when the map reflows, or a question card opens under a row.
+new ResizeObserver(() => paint(S())).observe($("map"));
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(render);
+jelly.onAttention?.(() => render(jelly.state));
+</script>
+</body>
+</html>
