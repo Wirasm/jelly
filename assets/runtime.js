@@ -351,6 +351,8 @@
     try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
     if (!el || el === document.body) return null;
     if (el.closest(".jf-ask")) return null;
+    // A card cannot live inside a drawing: go below the whole SVG.
+    while (el.ownerSVGElement) el = el.ownerSVGElement;
     for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return null;
     while (el.parentElement && el.parentElement !== document.body) {
       const p = el.parentElement, d = getComputedStyle(p).display;
@@ -511,12 +513,24 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, missing: deadAnchors() }) }).catch(() => {});
+          page_height: document.documentElement.scrollHeight, missing: deadAnchors(), floating: anchorsThat("floating"), hidden: anchorsThat("hidden") }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   // Questions whose --at matches nothing on the page (they fall back to the top).
   function deadAnchors() {
     return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => { try { return !document.querySelector(a.anchor.selector); } catch { return true; } }).map((a) => `${a.id} ${a.anchor.selector}`);
+  }
+  // Questions whose anchor is there but whose card is not where the agent thinks:
+  // "floating" anchors sit in a fixed or sticky part, so the card went to the top;
+  // "hidden" anchors are not shown right now, so neither is the card below them.
+  function anchorsThat(kind) {
+    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => {
+      let el = null;
+      try { el = document.querySelector(a.anchor.selector); } catch {}
+      if (!el) return false;
+      const top = !placeAfter(a);
+      return kind === "floating" ? top : !top && el.getClientRects().length === 0;
+    }).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());

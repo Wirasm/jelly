@@ -489,14 +489,15 @@ struct AttendReq {
 
 async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
+    let asked = now_ms();
     let Json(ev) = app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?;
     let mut out = json!(ev);
     // Tell the asker where the card really shows. The item is made either way,
     // and the event that listeners and the log get is unchanged.
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
-        match anchor_matches(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version).await {
-            Ok(hit) => out["anchored"] = json!(hit),
+        match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
+            Ok(place) => out["anchor"] = json!(place),
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
     }
@@ -506,19 +507,24 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 /// How long an ask waits for a browser before it answers "not checked".
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Whether an open item's anchor matches something on the page, from a
-/// snapshot of this version: one rendered now, or an open view's. `Err` says
-/// why it could not be checked.
-async fn anchor_matches(app: &App, port: u16, name: &str, item: &str, version: u64) -> Result<bool, String> {
+/// Where an open item's card lands, from a snapshot taken after it was asked
+/// (one rendered now, or an open view's): "below" its anchor, or at the top
+/// because the anchor is "missing" or "floating" (in a fixed or sticky part),
+/// or below an anchor that is "hidden" right now. `Err` says why it could not
+/// be checked.
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<&'static str, String> {
     let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
     // as the snapshot is in; dropping the render stops the browser.
     let mut rendered: Option<(Result<(), String>, std::time::Instant)> = None;
     loop {
-        let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version).cloned();
+        // Screens are kept by name, so one from before the ask may belong to
+        // a jelly this one replaced: only a snapshot taken since counts.
+        let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version && s.at_ms >= asked).cloned();
         if let Some(s) = snap {
-            return Ok(!s.missing.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item)));
+            let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
+            return Ok(if lists(&s.missing) { "missing" } else if lists(&s.floating) { "floating" } else if lists(&s.hidden) { "hidden" } else { "below" });
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
@@ -623,6 +629,13 @@ struct Screen {
     /// Open questions whose anchor matches nothing: "a2 #f2".
     #[serde(default)]
     missing: Vec<String>,
+    /// Open questions whose anchor is in a fixed or sticky part of the page,
+    /// so their card shows at the top too.
+    #[serde(default)]
+    floating: Vec<String>,
+    /// Open questions whose anchor is on the page but not shown right now.
+    #[serde(default)]
+    hidden: Vec<String>,
     #[serde(default)]
     page_height: u32,
 }
@@ -796,6 +809,10 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         for m in &sc.missing {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
             line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; it shows at the top instead"));
+        }
+        for m in &sc.floating {
+            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
+            line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; it shows at the top instead"));
         }
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
