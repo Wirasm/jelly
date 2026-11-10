@@ -76,6 +76,8 @@ verbs as the job needs: `jelly new review --from /tmp/review`.
   and a date and capacity bar that move as the person plays.
 - `recipes/timeline`: working out why something happened. Evidence on a time
   axis, competing explanations, and the person says which they believe.
+- `recipes/monitor`: something that runs for minutes or hours. Live charts fed
+  by `jelly call`, and pause, stop and limits the person sets and your loop obeys.
 
 ## Show it
 
