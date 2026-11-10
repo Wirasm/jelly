@@ -1,0 +1,586 @@
+{
+  "title": "How jelly works",
+  "about": "One daemon, one store, one lock. Everything that changes a jelly takes the same road.",
+  "layers": [
+    {
+      "id": "who",
+      "label": "Who"
+    },
+    {
+      "id": "surfaces",
+      "label": "What they use"
+    },
+    {
+      "id": "daemon",
+      "label": "The daemon · src/server.rs"
+    },
+    {
+      "id": "store",
+      "label": "The store · src/store.rs"
+    },
+    {
+      "id": "disk",
+      "label": "On the machine · ~/.jelly"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "agent",
+      "layer": "who",
+      "label": "The agent",
+      "kind": "person",
+      "what": "Any agent with a shell. It only ever talks to jelly through the CLI.",
+      "files": [
+        "skill/SKILL.md"
+      ]
+    },
+    {
+      "id": "person",
+      "layer": "who",
+      "label": "The person",
+      "kind": "person",
+      "what": "Uses jellies in a browser: clicks, answers, comments.",
+      "files": []
+    },
+    {
+      "id": "cli",
+      "layer": "surfaces",
+      "label": "The jelly CLI",
+      "kind": "code",
+      "what": "One binary. Every command but `serve` is an HTTP request to the daemon (ureq), and most print one line.",
+      "files": [
+        "src/main.rs: run, report, placement, inbox, detect_project"
+      ],
+      "touched": {
+        "note": "placement turns `anchor` into the sentence the agent reads."
+      }
+    },
+    {
+      "id": "runtime",
+      "layer": "surfaces",
+      "label": "runtime.js",
+      "kind": "code",
+      "what": "`window.jelly` in every view: call, onState, comments, question cards, and the text snapshot for `jelly see`.",
+      "files": [
+        "assets/runtime.js: jelly.call, apply, drawAttention, placeAfter, deadAnchors, postSnapshot"
+      ],
+      "risk": "One WebSocket per page. An EventSource per view would hit the browser's six-per-host limit."
+    },
+    {
+      "id": "view",
+      "layer": "surfaces",
+      "label": "A jelly's view",
+      "kind": "browser",
+      "what": "Any HTML the agent wrote, served at /j/<id>/ with the runtime injected first in <head>.",
+      "files": [
+        "src/server.rs: view, inject_head"
+      ],
+      "risk": "Keep the trailing slash in /j/<id>/: relative `assets/<file>` paths depend on it."
+    },
+    {
+      "id": "page",
+      "layer": "surfaces",
+      "label": "The jelly page",
+      "kind": "browser",
+      "what": "The internal jelly, id `surface`, that lays out the others. Each jelly on it is an iframe of /j/<id>/.",
+      "files": [
+        "assets/surface.html",
+        "assets/surface.verbs.js: focus, seen",
+        "src/store.rs: PAGE"
+      ],
+      "risk": "It is a jelly too: its own verb calls are events like any other."
+    },
+    {
+      "id": "screens",
+      "layer": "daemon",
+      "label": "Screens",
+      "kind": "store",
+      "what": "What a browser last showed of each jelly, as text, with page errors and dead anchors. Memory only.",
+      "files": [
+        "src/server.rs: App.screens, Screen, put_screen"
+      ],
+      "risk": "Gone on restart, and the last poster wins: an open view and a headless render both write here."
+    },
+    {
+      "id": "see",
+      "layer": "daemon",
+      "label": "see and the anchor check",
+      "kind": "code",
+      "what": "Renders a jelly in headless Chrome and reads back what the page says is on screen. `jelly see` prints it; an ask with --at uses it to check its anchor.",
+      "files": [
+        "src/server.rs: see, render, anchor_place, RENDER_LIMIT, ANCHOR_CHECK"
+      ],
+      "risk": "Headless Chrome often posts its snapshot and then does not exit. anchor_place answers when the snapshot is in; see still waits for the browser (issue #6).",
+      "touched": {
+        "note": "anchor_place is new; render takes a time limit."
+      }
+    },
+    {
+      "id": "routes",
+      "layer": "daemon",
+      "label": "Routes",
+      "kind": "code",
+      "what": "The axum router: one handler per thing you can do to a jelly. Listens on 127.0.0.1 only, with no login.",
+      "files": [
+        "src/server.rs: serve, call, set_state, reshape, attend, comment"
+      ],
+      "risk": "Anything that can reach the port can run verbs.",
+      "touched": {
+        "note": "attend checks the anchor after the item is made, and adds `anchor` to its reply."
+      }
+    },
+    {
+      "id": "change",
+      "layer": "daemon",
+      "label": "App::change",
+      "kind": "code",
+      "what": "Every write goes through here: take the store lock, run one store change, broadcast its event.",
+      "files": [
+        "src/server.rs: App::change, App::change_many"
+      ],
+      "risk": "The lock is what makes verbs run one at a time. Do not write state around it."
+    },
+    {
+      "id": "bus",
+      "layer": "daemon",
+      "label": "Broadcast channel",
+      "kind": "code",
+      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket; `jelly wait` and `jelly events` hear it over /api/events.",
+      "files": [
+        "src/server.rs: App.events, serve, events",
+        "src/main.rs: Cmd::Wait, Cmd::Events"
+      ],
+      "risk": "A listener that falls behind is told to resync (the page reloads)."
+    },
+    {
+      "id": "ws",
+      "layer": "daemon",
+      "label": "WebSocket",
+      "kind": "code",
+      "what": "/api/ws: one task per open page forwards every event as JSON.",
+      "files": [
+        "src/server.rs: ws, pump"
+      ]
+    },
+    {
+      "id": "design",
+      "layer": "store",
+      "label": "DESIGN.md tokens",
+      "kind": "code",
+      "what": "A project's DESIGN.md front matter, flattened into CSS variables at /p/<project>/design.css.",
+      "files": [
+        "src/design.rs: css_vars",
+        "src/server.rs: design_css, put_design",
+        "src/main.rs: sync_design"
+      ]
+    },
+    {
+      "id": "store",
+      "layer": "store",
+      "label": "Store",
+      "kind": "code",
+      "what": "Every jelly in memory, behind one Mutex. Each change bumps the version, saves the jelly and returns an event.",
+      "files": [
+        "src/store.rs: Store, call_from, set_state, reshape, commit, event"
+      ],
+      "risk": "State changes only here. Undo, events and attribution all hang off commit."
+    },
+    {
+      "id": "verbs",
+      "layer": "store",
+      "label": "Verbs in QuickJS",
+      "kind": "code",
+      "what": "A jelly's verbs are JavaScript. Each call gets a fresh engine: 1 second, 64 MB, no files, no network.",
+      "files": [
+        "src/verbs.rs: run, check, eval, TIME_LIMIT, MEMORY_LIMIT"
+      ],
+      "risk": "Never give verbs network access. Live data is pushed in with `jelly call`."
+    },
+    {
+      "id": "undo",
+      "layer": "store",
+      "label": "Undo",
+      "kind": "store",
+      "what": "Before a call, set or reshape, the old view, verbs and state are kept, 100 deep.",
+      "files": [
+        "src/store.rs: snapshot, undo, UNDO_DEPTH"
+      ],
+      "risk": "Undo restores view, verbs and state only."
+    },
+    {
+      "id": "beside",
+      "layer": "store",
+      "label": "Attention and comments",
+      "kind": "store",
+      "what": "Asks, looks and comment threads live on the jelly beside its state, not in it. Undo does not touch them.",
+      "files": [
+        "src/store.rs: Attention, Comment, attend, answer, comment, reply"
+      ]
+    },
+    {
+      "id": "chrome",
+      "layer": "disk",
+      "label": "Headless Chrome",
+      "kind": "process",
+      "what": "Whatever Chrome, Chromium, Edge or Brave is installed, run with --headless=new on /j/<id>/?agent=1.",
+      "files": [
+        "src/server.rs: chrome, render"
+      ],
+      "risk": "Shares one profile in the temp dir; it can linger after it is done."
+    },
+    {
+      "id": "file",
+      "layer": "disk",
+      "label": "jellies/<id>.json",
+      "kind": "file",
+      "what": "One file per jelly: view, verbs, state, attention, comments and its undo history. Written whole, atomically.",
+      "files": [
+        "src/store.rs: commit, write_atomic, Store::open"
+      ]
+    },
+    {
+      "id": "log",
+      "layer": "disk",
+      "label": "events.jsonl",
+      "kind": "file",
+      "what": "Every event, one JSON line each, append only. `jelly inbox` and `jelly see` read it.",
+      "files": [
+        "src/store.rs: Store::log, events_path",
+        "src/server.rs: inbox"
+      ],
+      "risk": "An event's `state` goes to live listeners only, never into this file."
+    },
+    {
+      "id": "assets",
+      "layer": "disk",
+      "label": "assets/<id>/",
+      "kind": "file",
+      "what": "Images, video, data beside a jelly. Outside state and undo.",
+      "files": [
+        "src/store.rs: put_asset, asset_dir",
+        "src/server.rs: put_asset, asset"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "person",
+      "to": "view",
+      "label": "clicks, answers, comments"
+    },
+    {
+      "from": "person",
+      "to": "page",
+      "label": "opens 127.0.0.1:7878"
+    },
+    {
+      "from": "agent",
+      "to": "cli",
+      "label": "runs `jelly …`"
+    },
+    {
+      "from": "page",
+      "to": "view",
+      "label": "an iframe per jelly"
+    },
+    {
+      "from": "view",
+      "to": "runtime",
+      "label": "jelly.call, jelly.onState"
+    },
+    {
+      "from": "runtime",
+      "to": "routes",
+      "label": "POST /api/jellies/<id>/call"
+    },
+    {
+      "from": "cli",
+      "to": "routes",
+      "label": "HTTP on 127.0.0.1"
+    },
+    {
+      "from": "routes",
+      "to": "change",
+      "label": "every write"
+    },
+    {
+      "from": "change",
+      "to": "store",
+      "label": "under the store lock"
+    },
+    {
+      "from": "store",
+      "to": "verbs",
+      "label": "verbs::run"
+    },
+    {
+      "from": "store",
+      "to": "undo",
+      "label": "snapshot first"
+    },
+    {
+      "from": "store",
+      "to": "beside",
+      "label": "attend, answer, comment"
+    },
+    {
+      "from": "store",
+      "to": "file",
+      "label": "write_atomic"
+    },
+    {
+      "from": "store",
+      "to": "log",
+      "label": "append"
+    },
+    {
+      "from": "store",
+      "to": "assets",
+      "label": "put_asset"
+    },
+    {
+      "from": "change",
+      "to": "bus",
+      "label": "events.send"
+    },
+    {
+      "from": "bus",
+      "to": "ws",
+      "label": "subscribe"
+    },
+    {
+      "from": "ws",
+      "to": "runtime",
+      "label": "every event, with state"
+    },
+    {
+      "from": "routes",
+      "to": "see",
+      "label": "GET /see · after an ask with --at"
+    },
+    {
+      "from": "see",
+      "to": "chrome",
+      "label": "render"
+    },
+    {
+      "from": "chrome",
+      "to": "runtime",
+      "label": "loads the view"
+    },
+    {
+      "from": "runtime",
+      "to": "screens",
+      "label": "POST /screen"
+    },
+    {
+      "from": "see",
+      "to": "screens",
+      "label": "reads the snapshot"
+    },
+    {
+      "from": "routes",
+      "to": "design",
+      "label": "design.css"
+    },
+    {
+      "from": "bus",
+      "to": "cli",
+      "label": "/api/events: jelly wait, jelly events"
+    }
+  ],
+  "traces": [
+    {
+      "id": "click",
+      "title": "A person clicks a button",
+      "steps": [
+        {
+          "at": "person",
+          "say": "They click a button in a jelly's view."
+        },
+        {
+          "at": "view",
+          "say": "The button's handler calls jelly.call(\"add\", { title }). The view never writes state itself."
+        },
+        {
+          "at": "runtime",
+          "say": "The runtime POSTs the verb and its args, signed by: \"person\", with the element they used.",
+          "cite": "assets/runtime.js: jelly.call, post, source"
+        },
+        {
+          "at": "routes",
+          "say": "The call route hands it on.",
+          "cite": "src/server.rs: call"
+        },
+        {
+          "at": "change",
+          "say": "App::change takes the store lock. This lock is why verbs run one at a time.",
+          "cite": "src/server.rs: App::change"
+        },
+        {
+          "at": "store",
+          "say": "call_from finds the jelly and gives the verb its state.",
+          "cite": "src/store.rs: Store::call_from"
+        },
+        {
+          "at": "verbs",
+          "say": "A fresh QuickJS engine runs the verb: at most 1 second and 64 MB, with no network. It returns the next state, or throws to refuse.",
+          "cite": "src/verbs.rs: run, eval",
+          "show": {
+            "kind": "terminal",
+            "after": "$ jelly call plan add '{}'\njelly: title needed",
+            "caption": "A verb that throws changes nothing; its message is the error."
+          }
+        },
+        {
+          "at": "undo",
+          "say": "The old view, verbs and state are pushed for undo.",
+          "cite": "src/store.rs: snapshot"
+        },
+        {
+          "at": "file",
+          "say": "commit bumps the version and writes the whole jelly to disk.",
+          "cite": "src/store.rs: commit, write_atomic"
+        },
+        {
+          "at": "log",
+          "say": "The event is appended to events.jsonl: who, which verb, which args, which paths changed. State is attached only after this line is written.",
+          "cite": "src/store.rs: commit, Store::log",
+          "show": {
+            "kind": "terminal",
+            "after": "$ jelly call plan add '{\"title\":\"second\"}'\ntrial:plan v2: add ran · changed /items",
+            "caption": "The CLI's one line is built from the same event."
+          }
+        },
+        {
+          "at": "bus",
+          "say": "Back in App::change, the event goes on the broadcast channel, now with the new state.",
+          "cite": "src/server.rs: App::change"
+        },
+        {
+          "at": "ws",
+          "say": "Each open page's socket task forwards it.",
+          "cite": "src/server.rs: pump"
+        },
+        {
+          "at": "runtime",
+          "say": "The runtime keeps it if the version is newer, and calls every onState.",
+          "cite": "assets/runtime.js: apply"
+        },
+        {
+          "at": "view",
+          "say": "Every open view redraws: theirs, and anyone else's.",
+          "cite": "the view's own jelly.onState"
+        }
+      ],
+      "understood": null
+    },
+    {
+      "id": "ask",
+      "title": "An agent asks about one element",
+      "steps": [
+        {
+          "at": "agent",
+          "say": "It asks about one part of a jelly.",
+          "show": {
+            "kind": "terminal",
+            "after": "$ jelly ask plan \"Which order?\" --option a=\"Newest first\" --option b=\"Oldest first\" --at \"#nope\""
+          }
+        },
+        {
+          "at": "cli",
+          "say": "The CLI turns the flags into one item: kind, title, options, anchor.selector.",
+          "cite": "src/main.rs: Cmd::Ask"
+        },
+        {
+          "at": "routes",
+          "say": "POST /api/jellies/<id>/attention reaches attend.",
+          "cite": "src/server.rs: attend"
+        },
+        {
+          "at": "change",
+          "say": "The store lock, as for any write.",
+          "cite": "src/server.rs: App::change"
+        },
+        {
+          "at": "store",
+          "say": "attend checks the item and gives it the next id: a1, a2, …",
+          "cite": "src/store.rs: Store::attend, attention_from"
+        },
+        {
+          "at": "beside",
+          "say": "It is pushed onto the jelly's attention list. That list sits beside state, so undo never removes a question.",
+          "cite": "src/store.rs: Store::attend"
+        },
+        {
+          "at": "log",
+          "say": "commit saves the jelly and logs an `attention` event.",
+          "cite": "src/store.rs: commit"
+        },
+        {
+          "at": "bus",
+          "say": "The event is broadcast, so open views draw the card at once.",
+          "cite": "src/server.rs: App::change"
+        },
+        {
+          "at": "see",
+          "say": "New in ef60c62. The ask has an anchor, so attend goes on to anchor_place.",
+          "cite": "src/server.rs: attend, anchor_place"
+        },
+        {
+          "at": "chrome",
+          "say": "It renders the page once, headless, and gives it 8 seconds.",
+          "cite": "src/server.rs: render, ANCHOR_CHECK"
+        },
+        {
+          "at": "runtime",
+          "say": "In that page the runtime places the card, lists the open questions whose anchor matches nothing, and posts what is on screen.",
+          "cite": "assets/runtime.js: placeAfter, deadAnchors, postSnapshot",
+          "show": {
+            "kind": "image",
+            "compare": "side",
+            "labels": [
+              "--at \"#list\": there",
+              "--at \"#nope\": not there"
+            ],
+            "before": "assets/card-good.png",
+            "after": "assets/card-dead.png",
+            "caption": "The card lands below its anchor, or at the top when nothing matches."
+          }
+        },
+        {
+          "at": "screens",
+          "say": "put_screen keeps that snapshot in memory.",
+          "cite": "src/server.rs: put_screen, Screen.missing"
+        },
+        {
+          "at": "see",
+          "say": "anchor_place answers as soon as a snapshot of this version is in, and drops the browser without waiting for it to exit.",
+          "cite": "src/server.rs: anchor_place"
+        },
+        {
+          "at": "cli",
+          "say": "The reply now says the anchor is missing, and placement turns it into a sentence.",
+          "cite": "src/main.rs: report, placement",
+          "show": {
+            "kind": "terminal",
+            "before": "asked a1 \"Which order?\"; it shows on the page below #nope",
+            "after": "asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top",
+            "caption": "Before, the reply named a place the card never went."
+          }
+        },
+        {
+          "at": "agent",
+          "say": "It reads one line and knows to fix the selector, about 0.7 s after asking."
+        }
+      ],
+      "understood": null
+    }
+  ],
+  "change": {
+    "title": "ef60c62: asks say so when their anchor matches nothing",
+    "note": "Three places changed. The store, the log and the views are untouched: the item and its event are the same as before."
+  },
+  "flags": [],
+  "flag_seq": 0
+}

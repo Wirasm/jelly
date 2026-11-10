@@ -1,0 +1,429 @@
+{
+  "title": "The 20-second browser",
+  "question": "Why does jelly see sometimes take 20 s and come back without a snapshot?",
+  "status": "Open. jelly ask no longer waits for the browser to exit; jelly see still does (issue #6).",
+  "clock": "21:02",
+  "lanes": [
+    {
+      "id": "see",
+      "label": "jelly see"
+    },
+    {
+      "id": "ask",
+      "label": "jelly ask, anchor check"
+    },
+    {
+      "id": "hand",
+      "label": "Chrome outside jelly"
+    },
+    {
+      "id": "disk",
+      "label": "Processes and profile"
+    },
+    {
+      "id": "code",
+      "label": "Code"
+    }
+  ],
+  "marks": [
+    {
+      "id": "see-first",
+      "lane": "see",
+      "t": 0,
+      "dur": 20,
+      "kind": "bad",
+      "when": "21:02",
+      "label": "First see: 20 s, no snapshot",
+      "detail": "The very first jelly see against a new daemon. The profile folder /tmp/jelly-chrome did not exist before this run.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ time jelly see plan\ntrial:plan · trial · v4 · made by agent · last change just now by agent\nwaits    a1 ask \"Which order?\" [a★/b] at #list\nwaits    a2 ask \"Dead anchor?\" [y/n] at #nope\n!        No snapshot: the browser took longer than 20 s\n\nreal    0m20.006s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "code-render",
+      "lane": "code",
+      "t": 70,
+      "kind": "info",
+      "when": "21:03",
+      "label": "render() waits for Chrome to exit",
+      "detail": "What the daemon does: one shared profile folder, a virtual time budget of 2.5 s, and it waits up to 20 s for the browser process to end. It does not look at whether the snapshot already arrived.",
+      "show": {
+        "kind": "terminal",
+        "after": "let profile = std::env::temp_dir().join(\"jelly-chrome\");\ncmd.args([\"--headless=new\", \"--disable-gpu\", …])\n    .arg(format!(\"--user-data-dir={}\", profile.display()))\n    .arg(\"--virtual-time-budget=2500\")\n    .kill_on_drop(true);\n…\nlet run = cmd.arg(url).status();\nmatch tokio::time::timeout(Duration::from_secs(20), run).await {\n    …\n    Err(_) => Err(\"the browser took longer than 20 s\".into()),",
+        "caption": "src/server.rs, as it was"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "hand-budget",
+      "lane": "hand",
+      "t": 95,
+      "dur": 1,
+      "kind": "ok",
+      "approx": true,
+      "when": "21:03",
+      "label": "By hand, with the time budget: 1 s",
+      "detail": "The same Chrome and the same page, run from a shell with its own profile folder. It dumped the page and exited.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ google-chrome --headless=new --disable-gpu --virtual-time-budget=2500 \\\n    --dump-dom --user-data-dir=…/prof \"http://127.0.0.1:7879/j/trial:plan/?agent=1\" | wc -c\n4588\nexit 0   1s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "hand-nobudget",
+      "lane": "hand",
+      "t": 97,
+      "dur": 25,
+      "kind": "bad",
+      "approx": true,
+      "when": "21:03",
+      "label": "By hand, without it: never exits",
+      "detail": "Without --virtual-time-budget Chrome was still running when timeout killed it at 25 s. Left alone, this page does not let Chrome finish.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ timeout 25 google-chrome --headless=new --disable-gpu --timeout=5000 \\\n    --dump-dom --user-data-dir=…/prof \"http://127.0.0.1:7879/j/trial:plan/?agent=1\" | wc -c\nTerminated\nexit 124   25s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "see-retry",
+      "lane": "see",
+      "t": 150,
+      "dur": 1,
+      "kind": "ok",
+      "approx": true,
+      "when": "21:04",
+      "label": "Retry: snapshot in 1 s",
+      "detail": "Same daemon, same jelly, two minutes later. This is what made a cold start look like the cause.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly see plan\ntrial:plan · trial · v5 · made by agent · last change 1m ago by agent\n…\non screen at 1280×757 (v5):\n- heading \"Plan\" [h1] #title\n- ul: #list\n  - text \"first\"\n- button \"Add\" #add\n1s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "disk-first",
+      "lane": "disk",
+      "t": 145,
+      "kind": "info",
+      "approx": true,
+      "when": "21:04",
+      "label": "No Chrome running; profile made at 21:02",
+      "detail": "Just before the retry: no Chromium process was left over from the failed run, and /tmp/jelly-chrome held a full profile created at 21:02.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ pgrep -af chromium\n$ ls -la /tmp/jelly-chrome\ndrwx------ 39 root root  4096 Nov  9 21:02 .\ndrwx------  2 root root  4096 Nov  9 21:02 ActorSafetyLists\ndrwx------  2 root root  4096 Nov  9 21:02 CertificateRevocation\n…"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "see-1280",
+      "lane": "see",
+      "t": 7980,
+      "dur": 1,
+      "kind": "ok",
+      "when": "23:15",
+      "label": "see --full at 1280: fine",
+      "detail": "A second daemon, two hours later. The profile folder is the same one from 21:02.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly see review --full\npng      …/home2/see/demo_review-1280.png"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "see-390",
+      "lane": "see",
+      "t": 8040,
+      "dur": 20,
+      "kind": "bad",
+      "when": "23:16",
+      "label": "At 390 wide: png, but no snapshot",
+      "detail": "The very next command. The screenshot was written; the snapshot step timed out.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly see review --full --width 390\npng      …/home2/see/demo_review-390.png\n!        No snapshot: the browser took longer than 20 s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "see-reshape",
+      "lane": "see",
+      "t": 8280,
+      "dur": 20,
+      "kind": "bad",
+      "approx": true,
+      "when": "about 23:20",
+      "label": "After a reshape: no snapshot again",
+      "detail": "Same failure a few minutes later, after the view changed.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly reshape review --view view.html\ndemo:review v6: reshape\n$ jelly see review --full --width 390\npng      …/home2/see/demo_review-390.png\n!        No snapshot: the browser took longer than 20 s"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "see-split",
+      "lane": "see",
+      "t": 8400,
+      "dur": 20,
+      "kind": "bad",
+      "approx": true,
+      "when": "about 23:22",
+      "label": "Snapshot arrives, screenshot times out",
+      "detail": "One command, two renders. The first posted its snapshot (the page text came back); the second, for the png, hit 20 s. So a render can do its work and still be counted as failed.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly see example --full\n!        No screenshot: the browser took longer than 20 s\n  - text \"All 29 changed lines are in a group, checked against the whole diff\" #account"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "disk-lock",
+      "lane": "disk",
+      "t": 8500,
+      "kind": "info",
+      "approx": true,
+      "when": "about 23:24",
+      "label": "Lock files in the profile, 0 Chrome running",
+      "detail": "Chrome's SingletonLock, SingletonCookie and SingletonSocket were in /tmp/jelly-chrome while no Chromium process existed, before and after the three runs that follow.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ pgrep -f \"pw-browsers/chromium\" | wc -l\n0\n$ ls /tmp/jelly-chrome | grep -i singleton\nSingletonCookie\nSingletonLock\nSingletonSocket"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "three-1",
+      "lane": "see",
+      "t": 8520,
+      "dur": 0.5,
+      "kind": "ok",
+      "approx": true,
+      "when": "about 23:24",
+      "label": "1 of 3: 0 s",
+      "detail": "Three identical commands in a loop, nothing else running.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo_example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo_example-1280.png\n1s",
+        "caption": "This one is the first line."
+      },
+      "by": "agent"
+    },
+    {
+      "id": "three-2",
+      "lane": "see",
+      "t": 8521,
+      "dur": 20,
+      "kind": "bad",
+      "approx": true,
+      "when": "about 23:24",
+      "label": "2 of 3: 20 s, fails",
+      "detail": "The second of the three, started the moment the first returned.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo_example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo_example-1280.png\n1s",
+        "caption": "This one is the middle line."
+      },
+      "by": "agent"
+    },
+    {
+      "id": "three-3",
+      "lane": "see",
+      "t": 8542,
+      "dur": 1,
+      "kind": "ok",
+      "approx": true,
+      "when": "about 23:25",
+      "label": "3 of 3: 1 s",
+      "detail": "The third, started the moment the failed one was killed.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo_example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo_example-1280.png\n1s",
+        "caption": "This one is the last line."
+      },
+      "by": "agent"
+    },
+    {
+      "id": "hand-playwright",
+      "lane": "hand",
+      "t": 8900,
+      "kind": "ok",
+      "approx": true,
+      "when": "about 23:30",
+      "label": "Playwright's Chromium: never hung",
+      "detail": "The same Chromium binary, driven by Playwright with a fresh profile per launch, loaded these pages in several scripts tonight and always closed. It does not use --dump-dom, so it cannot tell a lock problem from an exit problem.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ node shot.js\nstart | 3 to go · 1 question | on stage: Check the anchor before replying\n…\nerrors: []"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "ask-before",
+      "lane": "ask",
+      "t": 9840,
+      "dur": 0.004,
+      "kind": "ok",
+      "when": "23:46",
+      "label": "ask before the check: 4 ms",
+      "detail": "The baseline. Before the anchor check, jelly ask never started a browser.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly ask plan \"Which order?\" … --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; it shows on the page below #nope.\nms 4"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "ask-8s",
+      "lane": "ask",
+      "t": 10200,
+      "dur": 8.027,
+      "kind": "bad",
+      "approx": true,
+      "when": "about 23:52",
+      "label": "Check v1: right answer, after 8 s",
+      "detail": "The first anchor check waited for Chrome to exit, with an 8 s limit. It took all 8 s and still knew #nope matched nothing. The snapshot had arrived; only the exit was missing.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ jelly ask plan \"Which order?\" … --at \"#nope\"\ndemo:plan v2: asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top.\nms 8027"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "ask-four",
+      "lane": "ask",
+      "t": 10240,
+      "dur": 25,
+      "kind": "bad",
+      "approx": true,
+      "when": "about 23:53",
+      "label": "4 asks: 450, 8009, 8006, 8009 ms",
+      "detail": "Four asks in a row against one daemon. Every one got the right answer. One exited at once; three ran to the limit.",
+      "show": {
+        "kind": "terminal",
+        "after": "--- timing x4 (dead anchor)\nasked a3 \"Again 1?\"; #nope matches nothing on the page, so it shows at the top.\n   450 ms\nasked a4 \"Again 2?\"; #nope matches nothing on the page, so it shows at the top.\n   8009 ms\nasked a5 \"Again 3?\"; #nope matches nothing on the page, so it shows at the top.\n   8006 ms\nasked a6 \"Again 4?\"; #nope matches nothing on the page, so it shows at the top.\n   8009 ms"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "code-fix",
+      "lane": "code",
+      "t": 10500,
+      "kind": "ok",
+      "approx": true,
+      "when": "about 23:57",
+      "label": "Fix: answer when the snapshot is in",
+      "detail": "The anchor check stops waiting for the process. It polls for the snapshot while the browser runs and drops the browser once it has one. jelly see was left as it is.",
+      "show": {
+        "kind": "terminal",
+        "before": "let rendered = render(…).await;   // waits for Chrome to exit\nfor _ in 0..30 { if let Some(s) = snap() { return Ok(…) } … }",
+        "after": "tokio::pin!(render);\nloop {\n    if let Some(s) = snap() { return Ok(…) }   // dropping render stops Chrome\n    …\n    tokio::select! {\n        r = &mut render => rendered = Some((r, Instant::now())),\n        _ = sleep(50 ms) => {}\n    }\n}",
+        "caption": "anchor_place in src/server.rs"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "ask-fixed",
+      "lane": "ask",
+      "t": 10560,
+      "dur": 9,
+      "kind": "ok",
+      "approx": true,
+      "when": "about 23:58",
+      "label": "7 asks after the fix: 0.7 s each",
+      "detail": "Seven asks in a row: 3745, 730, 725, 720, 725, 775 and 724 ms. All right. The first is unexplained.",
+      "show": {
+        "kind": "terminal",
+        "after": "--- timing x6\nmatches nothing\n   3745 ms\nmatches nothing\n   730 ms\nmatches nothing\n   725 ms\nmatches nothing\n   720 ms\nmatches nothing\n   725 ms\nmatches nothing\n   775 ms\nbelow #title\n   724 ms"
+      },
+      "by": "agent"
+    },
+    {
+      "id": "disk-after",
+      "lane": "disk",
+      "t": 10575,
+      "kind": "info",
+      "approx": true,
+      "when": "about 23:58",
+      "label": "2 Chrome processes still alive",
+      "detail": "Right after the seven asks. The check had already answered each time, so something of Chrome outlives the answer.",
+      "show": {
+        "kind": "terminal",
+        "after": "$ pgrep -f pw-browsers/chromium | wc -l\n2"
+      },
+      "by": "agent"
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "cold",
+      "text": "Chrome's first start on an empty profile is slow",
+      "confidence": 5,
+      "was": 60,
+      "why": "My first guess, and what issue #6 says. It fits only the first two runs.",
+      "supports": [
+        "see-first",
+        "see-retry"
+      ],
+      "contradicts": [
+        "see-390",
+        "see-reshape",
+        "see-split",
+        "three-2",
+        "ask-four"
+      ],
+      "settle": "Settled against: it keeps failing on a profile that has been warm for two hours.",
+      "verdict": null,
+      "by": "agent"
+    },
+    {
+      "id": "lock",
+      "text": "Runs collide on the one shared profile and its lock",
+      "confidence": 25,
+      "why": "The lock files are there and runs alternate, but a locked-out Chrome would not render at all, and these do.",
+      "supports": [
+        "disk-lock",
+        "three-1",
+        "three-2",
+        "three-3"
+      ],
+      "contradicts": [
+        "ask-8s",
+        "ask-four",
+        "see-split"
+      ],
+      "settle": "Give every render its own profile folder and run jelly see fifty times. If the 20 s runs stop, it was the profile.",
+      "verdict": null,
+      "by": "agent"
+    },
+    {
+      "id": "linger",
+      "text": "Chrome posts its snapshot, then does not exit, because the page keeps a WebSocket open",
+      "confidence": 55,
+      "why": "The first half is seen: right answers after 8 s, a snapshot with a timed-out screenshot, processes left over. The WebSocket as the reason is a guess, and it does not explain the runs that exit in 1 s.",
+      "supports": [
+        "ask-8s",
+        "ask-four",
+        "see-split",
+        "hand-nobudget",
+        "code-render",
+        "disk-after",
+        "ask-fixed"
+      ],
+      "contradicts": [
+        "see-retry",
+        "three-1",
+        "three-3",
+        "hand-budget"
+      ],
+      "settle": "Serve the same view with the WebSocket stubbed out and render it twenty times with --dump-dom. Count how many exit on their own.",
+      "verdict": null,
+      "by": "agent"
+    }
+  ],
+  "conclusion": null
+}

@@ -1,0 +1,352 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plan</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
+    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --bad-soft: #fde7e4; --idle: #b9b0b5;
+    --term: #17141c; --term-ink: #e9e4ee;
+    color-scheme: light;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --bad-soft: #3d1f1d; --idle: #5a5266;
+    --term: #0d0b11;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 20px 120px; }
+  h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  #goal { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  #goal:not(:empty)::before { content: "“"; } #goal:not(:empty)::after { content: "”"; }
+
+  /* A step's colour, by where it stands. */
+  .next { --c: var(--idle); } .doing { --c: var(--accent); } .done { --c: var(--good); } .blocked { --c: var(--bad); }
+  .gated { --c: var(--warn); } .vetoed { --c: var(--idle); }
+
+  /* ---- the whole plan as one bar ---- */
+  #bar { display: flex; gap: 3px; height: 14px; margin-top: 18px; }
+  #bar i { all: unset; cursor: pointer; flex: 1; border-radius: 4px; background: var(--c); position: relative; overflow: hidden; }
+  #bar i.next, #bar i.vetoed { background: var(--line); } #bar i.vetoed { background-image: repeating-linear-gradient(45deg, transparent 0 4px, var(--idle) 4px 6px); }
+  #bar i.on { outline: 2px solid var(--ink); outline-offset: 1px; }
+  #bar i.doing::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); animation: sweep 1.8s linear infinite; }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  #count { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  #count b { color: var(--ink); font-weight: 600; }
+
+  .cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 26px; align-items: start; margin-top: 20px; }
+
+  /* ---- the track: every step on a rail, with what it needs drawn beside it ---- */
+  #track { position: relative; padding-left: 40px; }
+  #track::before { content: ""; position: absolute; left: 63px; top: 22px; bottom: 22px; width: 2px; background: var(--line); }
+  #arcs { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  #arcs path { fill: none; stroke-width: 2; opacity: .5; stroke: var(--idle); }
+  #arcs path.met { stroke: var(--good); } #arcs path.hot { opacity: 1; stroke-width: 2.5; stroke: var(--ink); }
+  .row { all: unset; box-sizing: border-box; cursor: pointer; display: flex; gap: 11px; align-items: flex-start; width: 100%; padding: 8px 10px; border-radius: var(--r); position: relative; border: 1.5px solid transparent; }
+  .row:hover { background: var(--soft); }
+  .row.on { background: var(--card); border-color: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent); }
+  .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row[draggable=true] { cursor: grab; -webkit-user-drag: element; user-select: none; -webkit-user-select: none; }
+  .row.dragging { opacity: .4; }
+  .row.drop-before::before, .row.drop-after::after { content: ""; position: absolute; left: 8px; right: 8px; height: 3px; border-radius: 2px; background: var(--accent); }
+  .row.drop-before::before { top: -3px; } .row.drop-after::after { bottom: -3px; }
+  .node { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 700 12.5px -apple-system, sans-serif; position: relative; z-index: 1;
+    background: var(--c); color: #fff; border: 2px solid var(--c); }
+  .next .node, .vetoed .node { background: var(--card); color: var(--muted); }
+  .next.wait .node { border-style: dashed; }
+  .doing .node { animation: alive 1.6s ease-in-out infinite; }
+  @keyframes alive { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 50% { box-shadow: 0 0 0 8px transparent; } }
+  .node svg { width: 13px; height: 13px; fill: currentColor; }
+  .row .t { flex: 1; min-width: 0; padding-top: 3px; line-height: 1.3; }
+  .row .t b { font-weight: 600; display: block; } .vetoed .t b { text-decoration: line-through; color: var(--muted); }
+  .row .t span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .doing .t span { color: var(--accent); font-weight: 600; } .blocked .t span { color: var(--bad); } .gated .t span { color: var(--warn); font-weight: 600; }
+  .row .badges { display: flex; gap: 4px; padding-top: 5px; }
+  .row .q, .row .n { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font: 700 11px/18px -apple-system, sans-serif; text-align: center; }
+  .row .q { background: var(--accent); color: #fff; } .row .n { background: var(--soft); color: var(--muted); }
+
+  /* ---- the stage: one step at a time ---- */
+  /* Not sticky: jelly puts a question about anything inside a sticky box at the top of the page instead. */
+  #stage { min-width: 0; }
+  .card { background: var(--card); border: 1.5px solid var(--line); border-top: 5px solid var(--c, var(--idle)); border-radius: var(--r); padding: 18px 20px; }
+  .crumbs { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  .crumbs .nav { margin-left: auto; display: flex; gap: 6px; }
+  .crumbs .nav button { width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--card); font-size: 16px; line-height: 1; }
+  .chip { all: unset; font: 600 11.5px -apple-system, sans-serif; padding: 2px 9px; border-radius: 99px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+  button.chip { cursor: pointer; } .chip.st { background: var(--c); color: #fff; } .chip.st.next { color: var(--ink); background: var(--line); } .chip.met { background: var(--good-soft); color: var(--ink); }
+  .card h2 { margin: 8px 0 0; font-size: 21px; line-height: 1.25; letter-spacing: -.01em; }
+  .why { margin: 4px 0 0; color: var(--ink-2); }
+  .needs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+  .flag { margin-top: 12px; padding: 10px 14px; border-radius: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .flag b { display: block; } .flag span { color: var(--ink-2); font-size: 13.5px; } .flag > div { flex: 1; min-width: 180px; }
+  .flag.gate { background: var(--warn-soft); } .flag.block { background: var(--bad-soft); } .flag.veto, .flag.open { background: var(--soft); }
+  .result { margin: 14px 0 0; font-size: 16px; font-weight: 600; line-height: 1.35; }
+  .result::before { content: "✓ "; color: var(--good); }
+  .result.live::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: alive 1.6s ease-in-out infinite; }
+
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .hero.one { grid-template-columns: 1fr; }
+  .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); }
+  .pane.after { border-color: var(--good); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; background: var(--idle); color: #fff; }
+  .pane.after > b { background: var(--good); }
+  .pane pre { margin: 0; padding: 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, Menlo, monospace; }
+  .pane pre .p { opacity: .55; }
+  .pane iframe { display: block; width: 100%; height: 260px; border: 0; background: #fff; }
+  .pane img { display: block; width: 100%; }
+  .wipe { position: relative; margin-top: 12px; border-radius: 10px; overflow: hidden; border: 2px solid var(--good); line-height: 0; }
+  .wipe img { display: block; width: 100%; }
+  .wipe .b { position: absolute; inset: 0; width: var(--w, 50%); overflow: hidden; border-right: 2px solid #fff; }
+  .wipe .b img { width: auto; height: 100%; max-width: none; }
+  .wipe input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; margin: 0; }
+  .wipe .tag { position: absolute; top: 8px; font: 600 11px/1.6 ui-monospace, monospace; padding: 1px 8px; border-radius: 99px; background: rgba(0,0,0,.65); color: #fff; }
+  .wipe .tag.l { left: 8px; } .wipe .tag.r { right: 8px; }
+  .cap2 { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  .talk { margin-top: 14px; display: grid; gap: 6px; }
+  .said { padding: 8px 12px; border-radius: 12px 12px 12px 2px; background: var(--warn-soft); max-width: 88%; justify-self: start; }
+  .said.agent { background: var(--soft); border-radius: 12px 12px 2px 12px; justify-self: end; }
+  .said b { font-size: 11.5px; display: block; color: var(--muted); } .said span { white-space: pre-wrap; }
+
+  .act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .act button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 9px 14px; font-weight: 600; }
+  .act button[disabled] { opacity: .35; cursor: default; }
+  .act .sq { width: 42px; padding: 9px 0; text-align: center; }
+  .act .sep { flex: 1; }
+  .flag button, .compose button { border: 0; border-radius: 12px; padding: 10px 16px; font-weight: 600; background: var(--good); color: #fff; }
+  .compose { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+  .compose textarea { flex: 1; min-height: 46px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 9px 11px; resize: vertical; }
+  .compose textarea:focus { outline: none; border-color: var(--accent); }
+
+  /* ---- where things stand, always in reach ---- */
+  #now { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+  #now .in { max-width: 1080px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 14px; align-items: center; }
+  #now svg { flex: none; } #now circle { fill: none; stroke-width: 5; } #now .bg { stroke: var(--line); } #now .fg { stroke: var(--good); stroke-linecap: round; transition: stroke-dasharray .4s; }
+  #now .txt { flex: 1; min-width: 0; line-height: 1.3; } #now .txt b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #now .txt span { color: var(--muted); font-size: 13px; }
+  #now .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-right: 7px; }
+  #now .doing .dot { animation: alive 1.6s ease-in-out infinite; }
+  #now button { border: 0; border-radius: 12px; padding: 10px 18px; font-weight: 700; background: var(--ink); color: var(--bg); white-space: nowrap; }
+  .jf-btn { bottom: 78px !important; } /* jelly's own Comment button, clear of the bar */
+  @media (max-width: 760px) {
+    .cols { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+    .hero { grid-template-columns: 1fr; } .card { padding: 14px; } .card h2 { font-size: 19px; } .said { max-width: 100%; }
+    #track { padding-left: 30px; } #track::before { left: 53px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .doing .node, #bar i.doing::after, #now .doing .dot, .result.live::before { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title"></h1>
+  <p id="goal"></p>
+  <div id="bar"></div>
+  <div id="count"></div>
+  <div class="cols">
+    <div id="track"><svg id="arcs"></svg><div id="rows"></div></div>
+    <div id="stage"></div>
+  </div>
+</div>
+<div id="now"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
+const who = (by) => (by === "person" ? "You" : by);
+const LOCK = `<svg viewBox="0 0 16 16"><path d="M4 7V5a4 4 0 0 1 8 0v2h1v8H3V7h1zm2 0h4V5a2 2 0 0 0-4 0v2z"/></svg>`;
+const LABEL = { next: "Next", doing: "In progress", done: "Done", blocked: "Blocked", gated: "Waits for you", vetoed: "Vetoed" };
+
+// Where a step stands: its status, unless the person's veto or an open gate is on it.
+const gated = (s) => s.gate && !s.gate.cleared;
+const st = (s) => (s.vetoed ? "vetoed" : s.status === "next" && gated(s) ? "gated" : s.status || "next");
+const started = (s) => (s.status || "next") !== "next";
+const steps = () => jelly.state.steps || [];
+const byId = (id) => steps().find((s) => s.id === id);
+const unmet = (s) => (s.needs || []).map(byId).filter((d) => d && d.status !== "done");
+const asksAt = (s) => (jelly.itemsAt?.(`#s-${s.id}`) || []).filter((a) => !a.answer).length;
+const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min` : m < 720 ? `${Math.round(m / 60)} h` : ""; };
+// The same rule the `move` verb enforces, so the buttons only offer what it allows.
+const canMove = (s, d) => {
+  const all = steps(), i = all.indexOf(s), other = all[i + d];
+  return !started(s) && other && !(d < 0 ? (s.needs || []).includes(other.id) : (other.needs || []).includes(s.id));
+};
+
+// What is only on this screen: the step on the stage, and an open note field.
+let sel = null;       // a step id
+let composing = null; // a step id
+
+// The picture of a result: terminal text, images, or live HTML. A list shows
+// several; `labels` renames the two sides; `compare: "side"` skips the slider.
+function hero(show, id) {
+  if (Array.isArray(show)) return show.map((s, i) => hero(s, `${id}-${i + 1}`)).join("");
+  if (!show) return "";
+  const kind = show.kind || "terminal", [lb, la] = show.labels || ["before", "after"];
+  if (kind === "image" && show.before && show.after && show.compare !== "side") {
+    return `<div class="wipe" id="${id}-show"><img src="${esc(show.after)}" alt="${esc(la)}"><div class="b"><img src="${esc(show.before)}" alt="${esc(lb)}"></div>
+      <span class="tag l">${esc(lb)}</span><span class="tag r">${esc(la)}</span><input type="range" min="0" max="100" value="50" aria-label="Drag to compare"></div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
+  }
+  const pane = (side, v, label) => v == null ? "" : `<div class="pane ${side}" id="${id}-${side}">${label ? `<b>${esc(label)}</b>` : ""}${
+    kind === "html" ? `<iframe sandbox="allow-scripts" srcdoc="${esc(v)}" title="${esc(label || side)}"></iframe>` : kind === "image" ? `<img src="${esc(v)}" alt="${esc(label || side)}">` : `<pre>${term(v)}</pre>`}</div>`;
+  const both = show.before != null && show.after != null;
+  return `<div class="hero${both ? "" : " one"}">${pane("before", show.before, lb)}${pane("after", show.after, both || show.labels ? la : "")}</div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
+}
+
+function row(s, i) {
+  const k = st(s), wait = k === "next" && unmet(s).length;
+  const sub = k === "doing" ? s.progress?.text || `in progress${s.started && ago(s.started.at_ms) ? ` · ${ago(s.started.at_ms)}` : ""}` : k === "done" ? s.result?.text || "" : k === "blocked" ? s.blocked?.reason || "blocked"
+    : k === "gated" ? "waits for you" : k === "vetoed" ? `vetoed by ${who(s.vetoed.by).toLowerCase()}` : wait ? `after ${unmet(s).map((d) => d.title).join(", ")}` : "";
+  const q = asksAt(s), n = (s.notes || []).length;
+  return `<div role="button" tabindex="0" class="row ${k}${wait ? " wait" : ""}${sel === s.id ? " on" : ""}" id="t-${esc(s.id)}" data-sel="${esc(s.id)}"${started(s) ? "" : ` draggable="true"`} title="${LABEL[k]}${started(s) ? "" : ": drag to reorder"}">
+    <span class="node">${k === "done" ? "✓" : k === "blocked" ? "!" : k === "vetoed" ? "✕" : k === "gated" ? LOCK : i + 1}</span>
+    <span class="t"><b>${esc(s.title)}</b>${sub ? `<span>${esc(sub)}</span>` : ""}</span>
+    <span class="badges">${q ? `<span class="q" title="The agent asks you something here">?</span>` : ""}${n ? `<span class="n" title="${n} note${n === 1 ? "" : "s"}">${n}</span>` : ""}</span></div>`;
+}
+
+function card(s, i, n) {
+  const k = st(s), needs = (s.needs || []).map(byId).filter(Boolean);
+  const flags = [];
+  if (s.vetoed) flags.push(`<div class="flag veto"><div><b>Vetoed by ${esc(who(s.vetoed.by).toLowerCase())}${s.vetoed.stopped ? ", while it was in progress" : ""}</b><span>${esc(s.vetoed.note || "The agent leaves this step alone.")}</span></div><button data-do="unveto">Bring it back</button></div>`);
+  if (s.gate && !s.gate.cleared) flags.push(`<div class="flag gate"><div><b>${s.gate.by === "person" ? "You asked to be checked with before this" : `${esc(s.gate.by)} checks with you before this`}</b><span>${esc(s.gate.note || "The agent will not start it until you clear the gate.")}</span></div><button data-do="clear_gate">Clear the gate</button></div>`);
+  if (s.gate?.cleared) flags.push(`<div class="flag open"><div><span>Gate cleared by ${esc(who(s.gate.cleared.by).toLowerCase())}${s.gate.note ? `: “${esc(s.gate.note)}”` : ""}</span></div></div>`);
+  if (k === "blocked") flags.push(`<div class="flag block"><div><b>Blocked</b><span>${esc(s.blocked?.reason || "")}</span></div></div>`);
+  const talk = (s.notes || []).map((m) => `<div class="said${m.by === "person" ? "" : " agent"}"><b>${esc(who(m.by))}</b><span>${esc(m.text)}</span></div>`).join("");
+  const acts = [];
+  if (!started(s)) acts.push(`<button class="sq" data-move="up" aria-label="Move earlier"${canMove(s, -1) ? "" : " disabled"}>↑</button><button class="sq" data-move="down" aria-label="Move later"${canMove(s, 1) ? "" : " disabled"}>↓</button>`);
+  if (!started(s) && !gated(s)) acts.push(`<button data-do="gate">Check with me first</button>`);
+  if (s.status !== "done" && !s.vetoed) acts.push(`<button data-do="veto">${s.status === "doing" ? "Stop this" : "Veto"}</button>`);
+  acts.push(`<span class="sep"></span><button data-open="note">Add a note</button>`);
+  return `<section class="card ${k}" id="s-${esc(s.id)}" data-step="${esc(s.id)}">
+    <div class="crumbs"><span>Step ${i + 1} of ${n}</span><span class="chip st ${k}">${LABEL[k]}</span>
+      <span class="nav"><button data-go="-1" aria-label="Previous step">‹</button><button data-go="1" aria-label="Next step">›</button></span></div>
+    <h2>${esc(s.title)}</h2>
+    ${s.why ? `<p class="why">${esc(s.why)}</p>` : ""}
+    ${needs.length ? `<div class="needs"><span>needs</span>${needs.map((d) => `<button class="chip${d.status === "done" ? " met" : ""}" data-sel="${esc(d.id)}">${d.status === "done" ? "✓ " : ""}${esc(d.title)}</button>`).join("")}</div>` : ""}
+    ${flags.join("")}
+    ${s.result ? `<p class="result">${esc(s.result.text)}</p>${hero(s.result.show, `s-${s.id}`)}`
+      : k === "doing" && s.progress ? `<p class="result live">${esc(s.progress.text)}</p>${hero(s.progress.show, `s-${s.id}`)}` : ""}
+    ${talk ? `<div class="talk">${talk}</div>` : ""}
+    <div class="act">${acts.join("")}</div>
+    ${composing === s.id ? `<div class="compose"><textarea id="s-${esc(s.id)}-note" aria-label="Your note on this step" placeholder="A word for the agent on this step"></textarea><button data-send>Send</button></div>` : ""}
+  </section>`;
+}
+
+function render(state) {
+  const opened = new Set([...document.querySelectorAll("details[open]")].map((d) => d.id));
+  const draft = document.querySelector(".compose textarea");
+  const kept = draft && { id: draft.id, value: draft.value, focus: document.activeElement === draft };
+  const wipes = Object.fromEntries([...document.querySelectorAll(".wipe")].map((w) => [w.id, w.style.getPropertyValue("--w")]));
+
+  const all = state.steps || [];
+  const ready = (s) => st(s) === "gated" && !unmet(s).length;
+  // Start on what is alive: a step that waits for them, else the one in progress.
+  if (!byId(sel)) sel = (all.find(ready) || all.find((s) => st(s) === "blocked") || all.find((s) => st(s) === "doing") || all.find((s) => st(s) === "next") || all[all.length - 1])?.id || null;
+
+  $("title").textContent = state.title || "Plan";
+  $("goal").textContent = state.goal || "";
+  $("bar").innerHTML = all.map((s) => `<i class="${st(s)}${sel === s.id ? " on" : ""}" data-sel="${esc(s.id)}" title="${esc(s.title)}: ${LABEL[st(s)].toLowerCase()}"></i>`).join("");
+  const n = (k) => all.filter((s) => st(s) === k).length;
+  $("count").innerHTML = [[n("done"), "done"], [n("doing"), "in progress"], [n("gated"), n("gated") === 1 ? "waits for you" : "wait for you"], [n("blocked"), "blocked"], [n("next"), "to come"], [n("vetoed"), "vetoed"]]
+    .filter(([c]) => c).map(([c, t]) => `<span><b>${c}</b> ${t}</span>`).join("");
+
+  $("rows").innerHTML = all.map(row).join("");
+  // Every step stays in the page so questions about it stay anchored; one shows.
+  $("stage").innerHTML = all.map((s, i) => `<div class="slide"${sel === s.id ? "" : " hidden"}>${card(s, i, all.length)}</div>`).join("");
+
+  const done = n("done"), live = all.length - n("vetoed"), C = 2 * Math.PI * 16, part = live ? done / live : 0;
+  const asks = (jelly.attention || []).length;
+  const head = state.wrap ? null : all.find(ready) || all.find((s) => st(s) === "blocked") || all.find((s) => st(s) === "doing") || all.find((s) => st(s) === "next" && !unmet(s).length);
+  const hk = head ? st(head) : "";
+  const line = state.wrap ? ["Finished", state.wrap.text] : !head ? [live && done === live ? "Every step is done" : "Nothing can start", live && done === live ? "" : "The steps left are vetoed or wait on something."]
+    : [`${{ gated: "Waits for you", blocked: "Blocked", doing: "Doing", next: "Up next" }[hk]}: ${head.title}`, hk === "gated" ? head.gate.note || "Clear the gate when you are ready." : hk === "blocked" ? head.blocked?.reason || "" : `${done} of ${live} done${asks ? ` · ${asks} question${asks === 1 ? "" : "s"} for you` : ""}`];
+  $("now").innerHTML = `<div class="in ${hk}"><svg width="42" height="42" viewBox="0 0 42 42" role="img" aria-label="${done} of ${live} steps done"><circle class="bg" cx="21" cy="21" r="16"/><circle class="fg" cx="21" cy="21" r="16" transform="rotate(-90 21 21)" stroke-dasharray="${C * part} ${C}"/><text x="21" y="25" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${done}/${live}</text></svg>
+    <div class="txt"><b>${head ? `<i class="dot"></i>` : ""}${esc(line[0])}</b><span>${esc(line[1])}</span></div>${head && head.id !== sel ? `<button data-sel="${esc(head.id)}">Show</button>` : ""}</div>`;
+
+  for (const id of opened) { const d = $(id); if (d) d.open = true; }
+  for (const [id, w] of Object.entries(wipes)) { if (w && $(id)) $(id).style.setProperty("--w", w); }
+  if (kept) { const t = $(kept.id); if (t) { t.value = kept.value; if (kept.focus) t.focus(); } }
+  wire();
+}
+
+// What each step needs, as curves beside the rail: green once the need is met.
+function wire() {
+  const box = $("track").getBoundingClientRect();
+  const at = (id) => { const r = document.querySelector(`#t-${CSS.escape(id)} .node`)?.getBoundingClientRect(); return r && { x: r.left - box.left - 2, y: r.top + r.height / 2 - box.top }; };
+  const all = steps();
+  $("arcs").innerHTML = all.flatMap((s, i) => (s.needs || []).map((n) => {
+    const d = byId(n), a = d && at(n), b = at(s.id);
+    if (!a || !b) return "";
+    const bulge = Math.min(a.x - 4, 10 + 9 * Math.abs(i - all.indexOf(d)));
+    return `<path class="${d.status === "done" ? "met" : ""}${sel === s.id || sel === n ? " hot" : ""}" d="M${a.x},${a.y} C${a.x - bulge},${a.y} ${b.x - bulge},${b.y} ${b.x},${b.y}"/>`;
+  })).join("");
+}
+new ResizeObserver(wire).observe($("track"));
+
+const fail = (e) => alert(e.message);
+const show = (id, scroll) => { sel = id; composing = null; render(jelly.state); if (scroll) $("stage").scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+const go = (d) => { const ids = steps().map((s) => s.id), i = ids.indexOf(sel); if (ids.length) show(ids[(Math.max(i, 0) + d + ids.length) % ids.length]); };
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button, [data-sel]");
+  if (!b) return;
+  if (b.dataset.sel) return show(b.dataset.sel, true);
+  if (b.dataset.go) return go(+b.dataset.go);
+  const step = b.closest("[data-step]")?.dataset.step;
+  if (!step) return;
+  if (b.dataset.move) return jelly.call("move", { step, dir: b.dataset.move }).catch(fail);
+  if (b.dataset.do) return jelly.call(b.dataset.do, { step }).catch(fail);
+  if (b.dataset.open) { composing = composing === step ? null : step; render(jelly.state); return $(`s-${step}-note`)?.focus(); }
+  if ("send" in b.dataset) return jelly.call("note", { step, text: $(`s-${step}-note`).value }).then(() => { composing = null; render(jelly.state); }, fail);
+});
+document.addEventListener("input", (e) => { if (e.target.matches(".wipe input")) e.target.parentElement.style.setProperty("--w", e.target.value + "%"); });
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("textarea, input")) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches(".compose textarea")) { e.preventDefault(); e.target.nextElementSibling.click(); }
+    return;
+  }
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches(".row")) { e.preventDefault(); return show(e.target.dataset.sel, true); }
+  if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); go(1); }
+  if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+});
+
+// Drag a step that has not started to a new place on the track.
+let dragged = null;
+const clearDrop = () => document.querySelectorAll(".drop-before, .drop-after").forEach((r) => r.classList.remove("drop-before", "drop-after"));
+const rowAt = (e) => e.target.closest?.(".row");
+document.addEventListener("dragstart", (e) => { const r = rowAt(e); if (!r) return; dragged = r.dataset.sel; r.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragged); });
+document.addEventListener("dragover", (e) => {
+  const r = rowAt(e);
+  if (!dragged || !r) return;
+  e.preventDefault();
+  clearDrop();
+  if (r.dataset.sel === dragged) return;
+  const box = r.getBoundingClientRect();
+  r.classList.add(e.clientY < box.top + box.height / 2 ? "drop-before" : "drop-after");
+});
+document.addEventListener("drop", (e) => {
+  const r = rowAt(e);
+  if (!dragged || !r) return;
+  e.preventDefault();
+  const step = dragged, ids = steps().map((s) => s.id), i = ids.indexOf(r.dataset.sel);
+  const before = r.classList.contains("drop-before") ? ids[i] : ids[i + 1] ?? null;
+  if (r.dataset.sel !== step && before !== step && ids[ids.indexOf(step) + 1] !== before) jelly.call("move", { step, before }).catch(fail);
+});
+document.addEventListener("dragend", () => { dragged = null; clearDrop(); document.querySelectorAll(".dragging").forEach((r) => r.classList.remove("dragging")); });
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(render);
+jelly.onAttention?.(() => render(jelly.state));
+</script>
+</body>
+</html>

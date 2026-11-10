@@ -1,0 +1,332 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scope</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
+    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --bad-soft: #fde7e4; --idle: #b9b0b5;
+    --on: #fff; --g0: #c8255d; --g1: #2f7fb8; --g2: #c98a00; --g3: #7a56c2; --g4: #1f9c93; --g5: #6b7a3a;
+    color-scheme: light;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --bad-soft: #3d1f1d; --idle: #5a5266;
+    --on: #15131a; --g0: #ff5c95; --g1: #62a8dc; --g2: #e0a83a; --g3: #a48be6; --g4: #4cc4ba; --g5: #a3b565;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 22px 20px 120px; }
+  h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  #ask { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  .g0 { --g: var(--g0); } .g1 { --g: var(--g1); } .g2 { --g: var(--g2); } .g3 { --g: var(--g3); } .g4 { --g: var(--g4); } .g5 { --g: var(--g5); }
+  #banner:not(:empty) { margin-top: 14px; padding: 10px 14px; border-radius: var(--r); background: var(--warn-soft); }
+
+  /* ---- the result: where this plan lands, and how it compares with the agent's cut ---- */
+  #result { margin-top: 18px; display: grid; grid-template-columns: auto 1fr; gap: 6px 28px; align-items: end; }
+  #result small { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #when { display: block; font-size: 54px; line-height: 1.02; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .over #when { color: var(--bad); }
+  #fit { display: inline-block; margin-top: 8px; font-weight: 700; font-size: 14px; padding: 3px 11px; border-radius: 99px; background: var(--good-soft); color: var(--good); }
+  .over #fit { background: var(--bad); color: var(--on); }
+  #vs { padding-bottom: 4px; color: var(--ink-2); min-width: 0; }
+  #vs b { color: var(--ink); } #vs .why { color: var(--muted); font-size: 13.5px; margin-top: 2px; }
+  #vs .delta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .chip { font: 600 12px -apple-system, sans-serif; padding: 2px 9px; border-radius: 99px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+  .chip.up { background: var(--good-soft); color: var(--good); } .chip.down { background: var(--bad-soft); color: var(--bad); }
+  #reset-btn { margin-top: 8px; border: 1.5px dashed var(--ink-2); background: none; border-radius: 99px; padding: 5px 14px; font-weight: 600; font-size: 13.5px; }
+
+  /* The capacity: what is in, laid end to end, against the room there is. */
+  #cap { margin-top: 30px; }
+  .capbar { position: relative; height: 34px; border-radius: 9px; background: var(--soft); }
+  .capbar .segs { position: absolute; inset: 0; display: flex; border-radius: 9px; overflow: hidden; }
+  .capbar .segs i { flex: none; height: 100%; background: var(--g, var(--idle)); border-right: 2px solid var(--bg); transition: width .25s; }
+  .capbar .segs i.buf { background: repeating-linear-gradient(135deg, var(--idle) 0 5px, transparent 5px 10px); border-right: 0; }
+  .capbar .spill { position: absolute; top: -4px; bottom: -4px; border: 2.5px solid var(--bad); border-left: 0; border-radius: 0 9px 9px 0; background: color-mix(in srgb, var(--bad) 18%, transparent); pointer-events: none; }
+  .capbar .mark { position: absolute; top: -9px; bottom: -9px; width: 0; border-left: 3px solid var(--ink); z-index: 2; transition: left .25s; }
+  .capbar .mark span { position: absolute; bottom: 100%; left: -3px; transform: translateX(-100%); white-space: nowrap; font: 600 11px ui-monospace, Menlo, monospace; color: var(--ink); padding: 0 4px 2px 0; }
+  .capbar .mark.ghost { border-left: 2.5px dashed var(--muted); top: 0; bottom: -16px; z-index: 1; }
+  .capbar .mark.ghost span { bottom: auto; top: 100%; left: 0; transform: translateX(-50%); color: var(--muted); padding: 0; }
+  .capcap { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--muted); margin-top: 20px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 4px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--g); margin-right: 5px; }
+
+  /* ---- the levers ---- */
+  #levers { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 22px; }
+  .lever { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); padding: 12px 16px 10px; }
+  .lever.moved { border-color: var(--accent); }
+  .lever .lv { display: flex; align-items: baseline; gap: 5px; }
+  .lever .lv b { font-size: 30px; line-height: 1; font-weight: 750; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .lever .lv span { color: var(--muted); font-size: 13px; }
+  .lever label { display: block; font-size: 13.5px; color: var(--ink-2); margin-top: 2px; }
+  .lever .track { position: relative; margin-top: 6px; }
+  .lever input { width: 100%; margin: 0; accent-color: var(--accent); height: 26px; display: block; }
+  .lever .ghost { position: absolute; top: 100%; width: 0; height: 0; border: 5px solid transparent; border-bottom-color: var(--muted); border-top: 0; transform: translateX(-50%); pointer-events: none; }
+  .lever .ends { display: flex; justify-content: space-between; font: 11px ui-monospace, Menlo, monospace; color: var(--muted); margin-top: 6px; }
+
+  /* ---- the board: value against cost, and every item ---- */
+  #board { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 18px; margin-top: 22px; align-items: start; }
+  #chart-box { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); padding: 10px 10px 6px; position: sticky; top: 12px; }
+  #chart { display: block; width: 100%; height: auto; overflow: visible; }
+  #chart text { font: 11px -apple-system, sans-serif; fill: var(--muted); }
+  #chart .grid { stroke: var(--line); stroke-width: 1; }
+  #chart .hint { font-size: 11.5px; font-style: italic; }
+  #chart g.pt { cursor: pointer; }
+  #chart g.pt rect { fill: var(--g); stroke: var(--g); stroke-width: 1.5; }
+  #chart g.pt text { fill: var(--on); font-weight: 700; font-size: 11.5px; }
+  #chart g.pt.out rect, #chart g.pt.fell rect { fill: var(--card); stroke: var(--idle); stroke-dasharray: 3 3; }
+  #chart g.pt.out text, #chart g.pt.fell text { fill: var(--muted); }
+  #chart g.pt.fell text { text-decoration: line-through; }
+  #chart g.pt.done { cursor: default; } #chart g.pt.done rect { fill: var(--good-soft); stroke: var(--good); } #chart g.pt.done text { fill: var(--good); }
+  #chart g.pt.diff rect { stroke: var(--ink); stroke-width: 2.5; stroke-dasharray: none; }
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .tile { all: unset; box-sizing: border-box; cursor: pointer; position: relative; display: flex; flex-direction: column; gap: 3px; padding: 8px 12px 11px; border-radius: 12px; overflow: hidden; min-width: 0;
+    background: var(--card); border: 1.5px solid color-mix(in srgb, var(--g) 55%, var(--line)); border-left: 6px solid var(--g); }
+  .tile:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+  .tile .top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .tile .short { font-weight: 750; font-size: 15px; }
+  .tile .state { font: 600 11.5px -apple-system, sans-serif; padding: 1px 8px; border-radius: 99px; background: var(--g); color: var(--on); white-space: nowrap; }
+  .tile .label { font-size: 14px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .tile .why { font-size: 12.5px; line-height: 1.35; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile:hover .why, .tile:focus-visible .why { white-space: normal; }
+  .tile .meta { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+  .tile .dots { letter-spacing: 1px; color: var(--g); } .tile .dots s { text-decoration: none; opacity: .28; }
+  .tile .cost { font: 600 12.5px ui-monospace, Menlo, monospace; }
+  .tile .was { color: var(--muted); text-decoration: line-through; }
+  .tile .costbar { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--g); opacity: .7; }
+  .tile.out, .tile.fell { background: transparent; border-style: dashed; border-color: var(--idle); border-left-style: solid; border-left-color: var(--idle); color: var(--muted); }
+  .tile.out .state, .tile.fell .state { background: var(--soft); color: var(--muted); } .tile.fell .state { background: var(--warn-soft); color: var(--ink); }
+  .tile.out .label, .tile.fell .label, .tile.out .meta, .tile.fell .meta { color: var(--muted); }
+  .tile.out .dots, .tile.fell .dots, .tile.out .costbar, .tile.fell .costbar { color: var(--idle); background-color: var(--idle); } .tile.out .dots, .tile.fell .dots { background: none; }
+  .tile.done { cursor: default; border-color: var(--line); border-left-color: var(--good); } .tile.done .state { background: var(--good-soft); color: var(--good); } .tile.done .costbar { display: none; }
+  .tile .flag { font: 600 11px -apple-system, sans-serif; color: var(--ink); background: var(--warn-soft); border-radius: 99px; padding: 0 7px; }
+  .locked .tile, .locked #chart g.pt { cursor: default; }
+
+  /* ---- lock: the outcome in a sentence, and the one button ---- */
+  .jf-btn { bottom: 78px !important; } /* jelly's own Comment button, clear of the lock bar */
+  #lockbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+  #lockbar .in { max-width: 1000px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 14px; align-items: center; }
+  #lockbar .txt { flex: 1; min-width: 0; line-height: 1.3; } #lockbar .txt b { display: block; } #lockbar .txt span { color: var(--muted); font-size: 13px; }
+  #lockbar button { border: 0; border-radius: 12px; padding: 11px 22px; font-weight: 700; font-size: 15px; background: var(--good); color: var(--on); white-space: nowrap; }
+  #lockbar button[disabled] { background: var(--idle); cursor: default; }
+  #lockbar button.quiet { background: none; color: var(--ink); border: 1.5px solid var(--line); }
+  #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 7; max-width: min(92vw, 560px); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); }
+  #toast:empty { display: none; }
+  @media (max-width: 720px) {
+    #result { grid-template-columns: 1fr; } #when { font-size: 44px; }
+    #board { grid-template-columns: 1fr; } #chart-box { position: static; }
+    .capbar .mark span { font-size: 10px; }
+    #lockbar button { padding: 11px 14px; }
+    #levers { grid-template-columns: 1fr; gap: 8px; }
+    .lever { display: grid; grid-template-columns: auto 1fr; gap: 0 12px; align-items: baseline; padding: 10px 14px 8px; }
+    .lever .lv b { font-size: 26px; } .lever .track, .lever .ends { grid-column: 1 / -1; }
+    #tiles { grid-template-columns: 1fr 1fr; } .tile .why { display: none; } .tile .label { font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <h1 id="title"></h1>
+  <p id="ask"></p>
+  <div id="banner"></div>
+  <section id="result"></section>
+  <div id="cap"></div>
+  <div id="levers"></div>
+  <div id="board"><div id="chart-box"><svg id="chart" viewBox="0 0 460 380" role="img" aria-label="Value against cost"></svg></div><div id="tiles"></div></div>
+</div>
+<div id="toast" role="status"></div>
+<div id="lockbar"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const n1 = (n) => String(Math.round(Math.abs(n) * 10) / 10);
+const plural = (n, w) => `${n1(n)} ${w}${Math.abs(n) === 1 ? "" : "s"}`;
+const who = (by) => (by === "person" ? "you" : by);
+const whose = (by) => (by === "person" ? "your" : by === "agent" ? "the agent’s" : `${by}’s`);
+
+// The sums are `model` in this jelly's verbs. Until it is loaded (and in a shared
+// read-only file, where it never is) the page draws the result the verbs wrote.
+let model = null;
+// What is only on this screen: a lever that is being dragged right now.
+let drag = null; // { id, value }
+function loadModel() {
+  if (!location.protocol.startsWith("http")) return;
+  fetch(`/api/jellies/${encodeURIComponent(jelly.name)}`).then((r) => r.json()).then((j) => {
+    model = new Function(`${j.verbs}\n;return typeof model === "function" ? model : null;`)();
+    draw();
+  }).catch(() => {});
+}
+const current = () => (drag ? { ...jelly.state, levers: (jelly.state.levers || []).map((l) => (l.id === drag.id ? { ...l, value: drag.value } : l)) } : jelly.state);
+const result = (state) => { try { return model ? model(state) : state.result; } catch (e) { console.error(e); return state.result; } };
+
+let toastT = null;
+function say(msg) {
+  if (/read-only/i.test(msg)) return; // the shared file says so itself
+  $("toast").textContent = msg;
+  clearTimeout(toastT);
+  toastT = setTimeout(() => ($("toast").textContent = ""), 5000);
+}
+const call = (verb, args) => jelly.call(verb, args).catch((e) => say(e.message));
+
+function draw() {
+  const state = current(), R = result(state);
+  if (!R) { $("result").innerHTML = `<div><small>No result yet</small>Run <code>jelly call ${esc(jelly.name)} recount</code>.</div>`; return; }
+  const items = state.items || [], levers = state.levers || [], groups = state.groups || [], rec = state.recommended;
+  const unit = state.unit || "", amt = (n) => `${n1(n)}${unit ? " " + unit : ""}`;
+  const by = Object.fromEntries(items.map((i) => [i.id, i]));
+  const name = (id) => by[id]?.short || by[id]?.label || id;
+  const g = (it) => `g${Math.max(0, groups.findIndex((x) => x.id === it.group)) % 6}`;
+  const fell = Object.fromEntries((R.fell || []).map((f) => [f.id, f.with]));
+  const st = (it) => (it.done ? "done" : R.in.includes(it.id) ? "in" : it.id in fell ? "fell" : "out");
+  const mine = new Set(R.rec?.in || []);
+  const diff = (it) => (!rec || it.done ? "" : R.in.includes(it.id) && !mine.has(it.id) ? "added" : !R.in.includes(it.id) && mine.has(it.id) ? "dropped" : "");
+  const focused = document.activeElement?.id;
+  $("wrap").classList.toggle("locked", !!state.locked);
+
+  $("title").textContent = state.title || "Scope";
+  $("ask").textContent = state.ask || "";
+  $("banner").textContent = state.reopened ? `Reopened: ${state.reopened.why}.` : "";
+
+  // ---- where it lands ----
+  const v = R.vs, bits = [];
+  if (v && !v.same) {
+    if (v.days) bits.push(`<span class="chip ${v.days > 0 ? "down" : "up"}">${plural(v.days, "day")} ${v.days > 0 ? "later" : "sooner"}</span>`);
+    else if (v.load) bits.push(`<span class="chip ${v.load > 0 ? "down" : "up"}">${amt(v.load)} ${v.load > 0 ? "more" : "less"}</span>`);
+    if (v.value) bits.push(`<span class="chip ${v.value > 0 ? "up" : "down"}">${v.value > 0 ? "+" : "−"}${n1(v.value)} value</span>`);
+    if (v.added.length) bits.push(`<span class="chip">added ${v.added.map(name).map(esc).join(", ")}</span>`);
+    if (v.dropped.length) bits.push(`<span class="chip">dropped ${v.dropped.map(name).map(esc).join(", ")}</span>`);
+    for (const id of v.levers) { const l = levers.find((l) => l.id === id); bits.push(`<span class="chip">${esc(l.label)}: ${n1(rec.levers[id])} → ${n1(l.value)}</span>`); }
+  }
+  $("result").className = R.fits ? "fits" : "over";
+  $("result").innerHTML = `<div><small>${R.date ? "Lands" : "Adds up to"}</small><b id="when">${esc(R.date ? R.date_text : amt(R.load))}</b>
+      <span id="fit">${R.spare == null ? `${R.in.length} in` : R.fits ? `fits · ${amt(R.spare)} spare` : `${amt(R.spare)} over${R.late > 0 ? ` · ${plural(R.late, "day")} late` : ""}`}</span></div>
+    <div id="vs">${!v ? "" : v.same ? `<b>This is ${esc(whose(rec.by))} cut.</b><div class="why">${esc(rec.why || "")}</div>`
+      : `<b>Against ${esc(whose(rec.by))} cut</b>${R.rec.date_text ? ` <span>(${esc(R.rec.date_text)}, value ${R.rec.value})</span>` : ""}<div class="delta">${bits.join("")}</div>${state.locked ? "" : `<button id="reset-btn">↺ Back to ${esc(whose(rec.by))} cut</button>`}`}</div>`;
+
+  // ---- the capacity bar ----
+  const scale = Math.max(R.capacity || 0, R.load, R.rec?.load || 0, 1) * 1.04, pct = (n) => `${(n / scale) * 100}%`;
+  const inOrder = items.filter((it) => R.in.includes(it.id)).sort((a, b) => groups.findIndex((x) => x.id === a.group) - groups.findIndex((x) => x.id === b.group));
+  $("cap").innerHTML = `<div class="capbar" id="capbar"><div class="segs">${inOrder.map((it) => `<i class="${g(it)}" style="width:${pct(it.cost)}" title="${esc(name(it.id))}: ${amt(it.cost)}"></i>`).join("")}${R.buffer ? `<i class="buf" style="width:${pct(R.buffer)}" title="buffer: ${amt(R.buffer)}"></i>` : ""}</div>
+      ${R.capacity != null && !R.fits ? `<div class="spill" style="left:${pct(R.capacity)};width:${pct(R.load - R.capacity)}"></div>` : ""}
+      ${v && !v.same && R.rec ? `<div class="mark ghost" style="left:${pct(R.rec.load)}"><span>${esc(whose(rec.by))} cut</span></div>` : ""}
+      ${R.capacity != null ? `<div class="mark" style="left:${pct(R.capacity)}"><span>room for ${amt(R.capacity)}${R.deadline_text ? ` · ${esc(R.deadline_text)}` : ""}</span></div>` : ""}</div>
+    <div class="capcap"><span><b>${amt(R.load)}</b> in: ${amt(R.cost)} of work${R.buffer ? ` + ${amt(R.buffer)} buffer` : ""}</span><span>value ${R.value} of ${R.value_total}</span></div>
+    <div class="legend">${groups.map((x, i) => `<span><i class="g${i % 6}"></i>${esc(x.label)}</span>`).join("")}</div>`;
+
+  // ---- the levers: built once, so a redraw never touches a slider in the hand ----
+  const sig = JSON.stringify(levers.map((l) => [l.id, l.min, l.max, l.step, l.label, l.unit]));
+  if ($("levers").dataset.sig !== sig) {
+    $("levers").dataset.sig = sig;
+    $("levers").innerHTML = levers.map((l) => `<div class="lever" id="lever-${esc(l.id)}"><div class="lv"><b></b><span>${esc(l.unit || "")}</span></div>
+      <label for="lever-${esc(l.id)}-input">${esc(l.label || l.id)}</label>
+      <div class="track"><input type="range" id="lever-${esc(l.id)}-input" data-lever="${esc(l.id)}" min="${l.min}" max="${l.max}" step="${l.step || 1}"><i class="ghost" hidden></i></div>
+      <div class="ends"><span>${l.min}</span><span>${l.max}</span></div></div>`).join("");
+  }
+  for (const l of levers) {
+    const box = $(`lever-${l.id}`), input = box.querySelector("input"), tick = box.querySelector(".ghost");
+    box.querySelector("b").textContent = n1(l.value);
+    if (drag?.id !== l.id) input.value = l.value;
+    input.disabled = !!state.locked || !model;
+    const r = rec?.levers?.[l.id];
+    box.classList.toggle("moved", r != null && r !== l.value);
+    tick.hidden = r == null;
+    if (r != null) { tick.style.left = `calc(9px + (100% - 18px) * ${(r - l.min) / (l.max - l.min || 1)})`; tick.title = `${rec.by}'s cut: ${r}`; }
+  }
+
+  // ---- value against cost ----
+  const W = 460, H = 380, L = 30, B = 34, T = 30, Rt = 12;
+  const maxCost = Math.max(1, ...items.map((i) => i.cost || 0)), minCost = Math.min(maxCost, ...items.map((i) => i.cost || 0));
+  // Small costs are where the crowd is, so the scale gives them the room.
+  const x = (c) => L + 30 + ((Math.sqrt(c) - Math.sqrt(minCost)) / (Math.sqrt(maxCost) - Math.sqrt(minCost) || 1)) * (W - L - Rt - 70), y = (val) => H - B - ((val - 0.5) / 5) * (H - B - T);
+  const placed = [];
+  const pts = [...items].sort((a, b) => a.cost - b.cost || b.value - a.value).map((it) => {
+    const label = name(it.id), w = Math.max(26, 12 + label.length * 6.8), h = 20;
+    let px = x(it.cost || 0), py = y(it.value || 1);
+    const hits = (ax, ay) => placed.some((p) => Math.abs(p.x - ax) < (p.w + w) / 2 + 3 && Math.abs(p.y - ay) < h + 1);
+    // Same cost and value would sit on top of each other. Each value has two rows:
+    // take a free one, stepping right when both are taken, so value still reads true.
+    const rows = [-12, 12];
+    place: for (let k = 0; k < 8; k++) for (const dy of rows) {
+      const ax = px + k * 14;
+      if (!hits(ax, py + dy)) { px = ax; py += dy; break place; }
+    }
+    px = Math.min(W - Rt - w / 2, Math.max(L + w / 2, px));
+    placed.push({ x: px, y: py, w });
+    return `<g class="pt ${g(it)} ${st(it)}${diff(it) ? " diff" : ""}" id="dot-${esc(it.id)}" data-item="${esc(it.id)}"><title>${esc(it.label)}: ${amt(it.cost)}, value ${it.value}</title>
+      <rect x="${px - w / 2}" y="${py - h / 2}" width="${w}" height="${h}" rx="10"/><text x="${px}" y="${py + 4}" text-anchor="middle">${esc(label)}</text></g>`;
+  });
+  const ticks = [...new Set([maxCost / 4, maxCost / 2, maxCost].map((c) => Math.round(c * 2) / 2))].filter(Boolean);
+  $("chart").innerHTML = [1, 2, 3, 4, 5].map((val) => `<line class="grid" x1="${L}" x2="${W - Rt}" y1="${y(val - 0.5)}" y2="${y(val - 0.5)}"/><text x="${L - 8}" y="${y(val) + 4}" text-anchor="end">${val === 5 ? "↑ 5" : val}</text>`).join("")
+    + ticks.map((c) => `<text x="${x(c)}" y="${H - B + 16}" text-anchor="middle">${amt(c)}</text>`).join("")
+    + `<text class="hint" x="${L + 6}" y="${T - 12}">worth a lot, costs little</text><text class="hint" x="${W - Rt}" y="${H - B - 8}" text-anchor="end">costs a lot, worth less</text>
+       <text x="${W - Rt}" y="${H - 4}" text-anchor="end">cost →</text>` + pts.join("");
+
+  // ---- every item, best value for its cost first ----
+  const order = [...items].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || (b.value / (b.cost || 0.1)) - (a.value / (a.cost || 0.1)));
+  const word = { in: "in ✓", out: "out", done: "done ✓" };
+  $("tiles").innerHTML = order.map((it) => { const s = st(it), d = diff(it);
+    return `<button class="tile ${g(it)} ${s}" id="i-${esc(it.id)}" data-item="${esc(it.id)}"${it.done ? "" : ` aria-pressed="${s === "in"}"`} title="${esc(it.why || "")}">
+      <span class="top"><span class="short">${esc(it.short || it.id)}</span><span class="state">${s === "fell" ? `out with ${esc(name(fell[it.id]))}` : word[s]}</span></span>
+      <span class="label">${esc(it.label)}</span>
+      ${it.why ? `<span class="why">${esc(it.why)}</span>` : ""}
+      <span class="meta"><span class="dots" title="value ${it.value} of 5">${"●".repeat(it.value)}<s>${"●".repeat(Math.max(0, 5 - it.value))}</s></span><span class="cost">${amt(it.cost)}</span>${it.was && it.was.cost !== it.cost ? `<span class="was">${amt(it.was.cost)}</span>` : ""}
+        ${(it.needs || []).length ? `<span>needs ${it.needs.map(name).map(esc).join(", ")}</span>` : ""}${d ? `<span class="flag">you ${d}</span>` : mine.has(it.id) && !v?.same ? `<span title="in ${esc(rec.by)}'s cut">★</span>` : ""}</span>
+      <i class="costbar" style="width:${((it.cost || 0) / maxCost) * 100}%"></i></button>`; }).join("");
+
+  // ---- lock ----
+  const lk = state.locked;
+  $("lockbar").innerHTML = `<div class="in"><div class="txt"><b>${lk ? `Locked by ${esc(who(lk.by))}` : R.fits ? "This fits" : `${amt(R.spare)} over: take something out or move a lever`}</b><span>${esc(R.summary || "")}</span></div>
+    ${lk ? `<button class="quiet" id="unlock-btn">Unlock</button>` : `<button id="lock-btn"${R.fits && R.in.length ? "" : " disabled"}>Lock this plan</button>`}</div>`;
+  if (focused && $(focused) && document.activeElement !== $(focused)) $(focused).focus({ preventScroll: true });
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button, [data-item]");
+  if (!b) return;
+  if (b.id === "lock-btn") return call("lock");
+  if (b.id === "unlock-btn") return call("unlock");
+  if (b.id === "reset-btn") return call("reset");
+  const id = b.dataset.item;
+  if (!id) return;
+  const state = jelly.state, it = (state.items || []).find((i) => i.id === id), R = result(state);
+  if (!it || it.done) return;
+  if (state.locked) return say("The plan is locked. Unlock it to change it.");
+  call("put", { item: id, in: !R.in.includes(id) });
+});
+// A slider redraws everything live while it moves and calls the verb once, on release.
+document.addEventListener("input", (e) => {
+  if (!e.target.dataset?.lever) return;
+  drag = { id: e.target.dataset.lever, value: Number(e.target.value) };
+  draw();
+});
+document.addEventListener("change", (e) => {
+  const id = e.target.dataset?.lever;
+  if (!id) return;
+  const value = Number(e.target.value), l = (jelly.state.levers || []).find((l) => l.id === id);
+  const settle = () => { if (drag?.id === id) drag = null; draw(); };
+  if (l && l.value === value) return settle();
+  jelly.call("lever", { id, value }).then(settle, (err) => { settle(); say(err.message); });
+});
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(draw);
+jelly.onAttention?.(draw);
+// New verbs can bring a new model.
+jelly.events?.((ev) => { if (ev.jelly === jelly.name && ev.kind === "reshape") loadModel(); });
+loadModel();
+</script>
+</body>
+</html>
