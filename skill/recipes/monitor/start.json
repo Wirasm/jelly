@@ -1,0 +1,19 @@
+{
+  "title": "What the anchor check costs",
+  "about": "40 asks with --at against a running daemon: how long each takes, and whether the reply is right.",
+  "status": "ready",
+  "total": 40,
+  "done": 0,
+  "headline": "latency",
+  "phases": [
+    { "id": "warm", "label": "Warm up (5)" },
+    { "id": "measure", "label": "Measure (35)" },
+    { "id": "wrap", "label": "Summarise" }
+  ],
+  "metrics": [
+    { "id": "latency", "label": "Time per ask", "unit": "ms", "better": "lower", "threshold": { "value": 1000, "by": "agent", "at_ms": 0, "seq": 0 } },
+    { "id": "browsers", "label": "Headless browsers alive", "unit": "", "better": "lower" },
+    { "id": "memory", "label": "Daemon memory", "unit": "MB", "better": "lower" }
+  ],
+  "control": { "seq": 0 }
+}

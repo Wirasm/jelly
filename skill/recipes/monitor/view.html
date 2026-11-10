@@ -1,0 +1,395 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>monitor</title>
+<style>
+  /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
+  :root {
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
+    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --term: #17141c; --term-ink: #e9e4ee;
+    color-scheme: light;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
+    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    --term: #0d0b11;
+    color-scheme: dark;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 22px 20px 60px; }
+  h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+  h2 { font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 26px 0 8px; }
+  #about { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+  header { display: flex; gap: 12px 20px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+  header > div:first-child { flex: 1 1 280px; min-width: 0; }
+
+  /* ---- status and the three things the person can ask of the run ---- */
+  #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { display: inline-flex; gap: 7px; align-items: center; font-weight: 700; font-size: 13px; padding: 6px 12px; border-radius: 99px; background: var(--soft); --c: var(--idle); }
+  .pill i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+  .running { --c: var(--good); } .paused, .stopping { --c: var(--warn); } .failed { --c: var(--bad); } .done { --c: var(--good); } .stopped, .ready { --c: var(--idle); }
+  .pill.running i { animation: beat 1.4s infinite; } @keyframes beat { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c) 25%, transparent); } }
+  #controls button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 8px 16px; font-weight: 600; }
+  #controls button.stop { color: var(--bad); } #controls button.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #request { margin-top: 10px; font-size: 14px; border-radius: 10px; padding: 8px 12px; background: var(--soft); display: flex; gap: 9px; align-items: center; }
+  #request:empty { display: none; }
+  #request i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--idle)); }
+  #request.unseen { background: var(--warn-soft); --c: var(--warn); } #request.unseen i { animation: beat 1s infinite; }
+  #request.seen { --c: var(--good); } #request.stale { background: var(--warn-soft); --c: var(--bad); }
+
+  /* ---- the picture: one number, how far along, which phase ---- */
+  #hero { display: grid; grid-template-columns: 1fr auto; gap: 16px; margin-top: 18px; align-items: stretch; }
+  #headline, #progress { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); padding: 16px 20px; }
+  #headline .lab { font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #headline .big { font-size: 64px; line-height: 1.05; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  #headline .big.text { font-size: 34px; line-height: 1.15; }
+  #headline .big small { font-size: 22px; font-weight: 600; color: var(--muted); letter-spacing: 0; margin-left: 6px; }
+  #headline .trend { font-weight: 600; font-size: 14px; color: var(--muted); } #headline .trend.up { color: var(--good); } #headline .trend.down { color: var(--bad); }
+  #headline .sub { color: var(--ink-2); margin-top: 2px; }
+  #progress { display: flex; gap: 16px; align-items: center; min-width: 270px; }
+  #progress svg { flex: none; } #progress circle { fill: none; stroke-width: 9; }
+  #progress .bg { stroke: var(--line); } #progress .fg { stroke: var(--c, var(--good)); stroke-linecap: round; transition: stroke-dasharray .5s; }
+  #progress .of { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; } #progress .eta { color: var(--muted); font-size: 14px; }
+  #phases { list-style: none; display: flex; gap: 4px; padding: 0; margin: 14px 0 0; }
+  #phases li { flex: 1; min-width: 0; padding: 7px 10px; font-size: 13px; font-weight: 600; background: var(--soft); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 4px solid var(--line); }
+  #phases li:first-child { border-radius: 10px 0 0 10px; } #phases li:last-child { border-radius: 0 10px 10px 0; }
+  #phases li.was { border-color: var(--good); color: var(--ink-2); } #phases li.now { border-color: var(--accent); color: var(--ink); background: var(--card); box-shadow: inset 0 0 0 1.5px var(--line); }
+  #items-row { margin-top: 14px; } #items-row:has(#items:empty) { display: none; }
+  #items { display: flex; flex-wrap: wrap; gap: 3px; }
+  #items i { width: 12px; height: 12px; border-radius: 3px; background: var(--good); animation: pop .35s; } @keyframes pop { from { transform: scale(0); } }
+  #items i.fail { background: var(--bad); } #items i.slow { background: var(--warn); }
+  #tally { font-size: 13px; color: var(--muted); margin-top: 5px; } #tally b.fail { color: var(--bad); } #tally b.slow { color: var(--warn); }
+
+  /* ---- a chart per metric ---- */
+  #charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; margin-top: 16px; }
+  .chart { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); padding: 14px 16px 12px; min-width: 0; }
+  .chart.main { grid-column: 1 / -1; }
+  .ch { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .ch b { font-size: 14px; } .ch .now { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; } .ch .now small { font-size: 13px; color: var(--muted); font-weight: 600; margin-left: 3px; }
+  .plot { position: relative; height: 120px; margin-top: 8px; } .chart.main .plot { height: 170px; }
+  .plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .plot path { vector-effect: non-scaling-stroke; }
+  .plot .line { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linejoin: round; transition: d .45s ease; }
+  .plot .area { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; transition: d .45s ease; }
+  .plot .ax { position: absolute; left: 0; font: 11px ui-monospace, Menlo, monospace; color: var(--muted); background: color-mix(in srgb, var(--card) 80%, transparent); padding: 0 3px; pointer-events: none; }
+  .plot .ax.hi { top: 0; } .plot .ax.lo { bottom: 0; }
+  .dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--bad); pointer-events: none; }
+  .dot.last { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; background: var(--accent); border: 2px solid var(--card); transition: left .45s ease, top .45s ease; }
+  .live .dot.last { animation: beat2 1.4s infinite; } @keyframes beat2 { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent); } }
+  .dot.flag { all: unset; position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--warn); color: #fff; font: 700 11px/18px -apple-system, sans-serif; text-align: center; cursor: pointer; z-index: 2; }
+  .limit { position: absolute; left: 0; right: 0; height: 22px; margin-top: -11px; cursor: ns-resize; touch-action: none; }
+  .limit::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; border-top: 2px dashed var(--bad); }
+  .limit span { position: absolute; right: 0; top: -9px; font: 600 11px ui-monospace, Menlo, monospace; background: var(--bad); color: #fff; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+  .limit.unseen span { background: var(--warn); } .limit.drag::before { border-top-style: solid; }
+  .cf { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cf .lim { display: flex; gap: 5px; align-items: center; }
+  .cf button { border: 1.5px solid var(--line); background: var(--card); border-radius: 9px; min-width: 32px; height: 30px; padding: 0 9px; font-weight: 600; font-size: 13px; }
+  .cf .over { color: var(--bad); font-weight: 600; }
+
+  /* ---- what the agent flagged, and the latest lines ---- */
+  #anomalies, #earlier[open] { display: grid; gap: 10px; } #earlier summary { cursor: pointer; color: var(--muted); font-size: 14px; } #anomalies:empty::after { content: "Nothing flagged."; color: var(--muted); font-size: 14px; }
+  .flagcard { background: var(--card); border: 1.5px solid var(--line); border-left: 6px solid var(--c, var(--warn)); border-radius: var(--r); padding: 12px 16px; scroll-margin-top: 16px; }
+  .flagcard.expected { --c: var(--idle); } .flagcard.look { --c: var(--bad); }
+  .flagcard .top { display: flex; gap: 10px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+  .flagcard h3 { margin: 0; font-size: 16px; } .flagcard .when { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+  .flagcard p { margin: 3px 0 0; color: var(--ink-2); }
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; } .hero.one { grid-template-columns: 1fr; }
+  .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); } .pane.after { border-color: var(--warn); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; background: var(--idle); color: #fff; } .pane.after > b { background: var(--warn); color: var(--bg); }
+  .pane pre { margin: 0; padding: 10px 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, Menlo, monospace; }
+  .pane img { display: block; width: 100%; }
+  .cap2 { font-size: 13px; color: var(--muted); margin-top: 5px; }
+  .act { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .act button { border: 1.5px solid var(--line); background: var(--card); border-radius: 11px; padding: 7px 14px; font-weight: 600; font-size: 14px; }
+  .act .verdict { font-weight: 700; } .act .undo { border: 0; background: none; color: var(--muted); font-weight: 500; text-decoration: underline; padding: 7px 4px; }
+  .act .seen { font-size: 12.5px; color: var(--muted); }
+  #log { margin: 0; background: var(--term); color: var(--term-ink); border-radius: var(--r); padding: 12px 14px; font: 12.5px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
+  #log:empty::after { content: "No lines yet."; opacity: .5; }
+  #log .t { opacity: .5; } #log .warn { color: #ffcf3f; } #log .bad { color: #ff7a70; }
+  @media (max-width: 640px) {
+    #hero { grid-template-columns: 1fr; } #headline .big { font-size: 52px; } #progress { min-width: 0; }
+    #phases li { padding: 6px 7px; font-size: 12px; } .hero { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1 id="title"></h1><p id="about"></p></div>
+    <div id="controls"></div>
+  </header>
+  <div id="request"></div>
+  <section id="hero">
+    <div id="headline"></div>
+    <div id="progress"></div>
+  </section>
+  <ol id="phases"></ol>
+  <div id="items-row"><div id="items"></div><div id="tally"></div></div>
+  <div id="charts"></div>
+  <h2>Flagged by the agent</h2>
+  <div id="anomalies"></div>
+  <h2>Latest</h2>
+  <pre id="log"></pre>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const OVER = ["done", "failed", "stopped"];
+const STATUS = { ready: "Not started", running: "Running", paused: "Paused", stopping: "Stopping", done: "Done", failed: "Failed", stopped: "Stopped" };
+const fmt = (v) => v == null || !isFinite(v) ? "–" : Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en") : Math.abs(v) >= 10 ? (+v.toFixed(1)).toLocaleString("en") : String(+v.toFixed(2));
+const span = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`; };
+const clock = (t) => new Date(t).toTimeString().slice(0, 8);
+const who = (by) => (by === "person" ? "You" : by);
+const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span style="opacity:.55">$</span>${l.slice(1)}` : l)).join("\n");
+// A round step for nudging a limit, and a round value near x.
+const nice = (x) => { if (!(x > 0)) return 1; const p = 10 ** Math.floor(Math.log10(x)), f = x / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; };
+const fail = (e) => /read-only/.test(e.message) || alert(e.message);
+
+// Only what is in the middle of happening lives here; the rest is state.
+let drag = null;   // { id, value, lo, hi } while a limit is being dragged
+let armed = 0;     // when Stop was first tapped; a second tap within 4 s sends it
+const drawn = {};  // per metric: how many points were drawn, to animate new ones in
+const seen = (s, seq) => OVER.includes(s.status) || (s.control?.acked?.seq || 0) >= (seq || 0);
+
+// ---- the top: status, controls, request, headline, progress, phases ----
+function above(s) {
+  const st = s.status || "ready", want = s.control?.requested?.want, over = OVER.includes(st);
+  $("title").textContent = s.title || "Run";
+  $("about").textContent = s.about || "";
+  const btn = over || want === "stop" ? "" : (want === "pause" ? `<button data-do="resume">▶ Resume</button>` : `<button data-do="pause">❙❙ Pause</button>`)
+    + `<button class="stop${Date.now() - armed < 4000 ? " armed" : ""}" data-do="stop">${Date.now() - armed < 4000 ? "Tap again to stop" : "■ Stop"}</button>`;
+  const html = `<span class="pill ${st}"><i></i>${STATUS[st] || esc(st)}</span>${btn}`;
+  if ($("controls").dataset.sig !== html) { $("controls").dataset.sig = html; $("controls").innerHTML = html; }
+
+  const main = (s.metrics || []).find((m) => m.id === s.headline) || (s.metrics || [])[0];
+  let head = `<div class="lab">${esc(main?.label || "")}</div><div class="big">–</div>`;
+  if (over && s.result?.headline) head = `<div class="lab">${STATUS[st]}</div><div class="big text">${esc(s.result.headline)}</div><div class="sub">${esc(s.result.text)}</div>`;
+  else if (main?.n) {
+    const pts = main.points || [], rec = pts.slice(-5), old = pts.slice(-25, -5), avg = (a) => a.reduce((n, p) => n + p[1], 0) / a.length;
+    let trend = "";
+    if (rec.length && old.length >= 3) {
+      const d = (avg(rec) - avg(old)) / (Math.abs(avg(old)) || 1), good = main.better === "higher" ? d > 0 : d < 0;
+      trend = Math.abs(d) < 0.03 ? `<span class="trend">● steady</span>` : `<span class="trend ${good ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${Math.round(Math.abs(d) * 100)}% against earlier</span>`;
+    }
+    head = `<div class="lab">${esc(main.label)} · latest</div><div class="big">${fmt(main.last)}<small>${esc(main.unit || "")}</small></div>${trend}
+      <div class="sub">mean ${fmt(main.sum / main.n)} · min ${fmt(main.min)} · max ${fmt(main.max)}${main.unit ? " " + esc(main.unit) : ""} over ${main.n}</div>`;
+  }
+  if ($("headline").dataset.sig !== head) { $("headline").dataset.sig = head; $("headline").innerHTML = head; }
+
+  const C = 2 * Math.PI * 34, part = s.total ? Math.min(1, (s.done || 0) / s.total) : 0;
+  if (!$("progress").firstChild) $("progress").innerHTML = `<svg width="86" height="86" viewBox="0 0 86 86" role="img"><circle class="bg" cx="43" cy="43" r="34"/><circle class="fg" cx="43" cy="43" r="34" transform="rotate(-90 43 43)"/><text x="43" y="49" text-anchor="middle" font-size="17" font-weight="700" fill="currentColor"></text></svg><div><div class="of"></div><div class="eta" id="eta"></div></div>`;
+  $("progress").className = st;
+  $("progress").querySelector(".fg").setAttribute("stroke-dasharray", `${C * part} ${C}`);
+  $("progress").querySelector("text").textContent = s.total ? `${Math.round(part * 100)}%` : fmt(s.done || 0);
+  $("progress").querySelector("svg").setAttribute("aria-label", s.total ? `${s.done || 0} of ${s.total}` : `${s.done || 0} done`);
+  $("progress").querySelector(".of").textContent = s.total ? `${fmt(s.done || 0)} of ${fmt(s.total)}` : `${fmt(s.done || 0)} done`;
+
+  const at = (s.phases || []).findIndex((p) => p.id === s.phase);
+  const ph = (s.phases || []).map((p, i) => `<li id="p-${esc(p.id)}" class="${i < at || (over && st === "done") ? "was" : i === at ? "now" : ""}" title="${esc(p.label)}">${i < at || (over && st === "done") ? "✓ " : ""}${esc(p.label)}</li>`).join("");
+  if ($("phases").dataset.sig !== ph) { $("phases").dataset.sig = ph; $("phases").innerHTML = ph; $("phases").hidden = !ph; }
+  tick();
+}
+
+// The parts that change with the clock: the request line and the estimate.
+function tick() {
+  const s = jelly.state, st = s.status || "ready", over = OVER.includes(st), now = Date.now(), req = s.control?.requested, ack = s.control?.acked;
+  let cls = "", msg = "";
+  const WANT = { pause: "pause", run: "resume", stop: "stop" };
+  if (req && !over) {
+    if ((ack?.seq || 0) < req.seq) { cls = "unseen"; msg = `${who(req.by)} asked it to ${WANT[req.want]} ${span(now - req.at_ms)} ago. The run has not seen that yet.`; }
+    else if (req.want !== "run" || now - ack.at_ms < 15000) { cls = "seen"; msg = `${who(req.by)} asked it to ${WANT[req.want]}. The run saw that after ${span(ack.at_ms - req.at_ms)}${ack.note ? `: ${ack.note}` : "."}`; }
+  }
+  if (!msg && st === "running" && s.updated_ms && now - s.updated_ms > Math.max(30000, 5 * (s.beat_ms || 0))) { cls = "stale"; msg = `No data for ${span(now - s.updated_ms)}. The run may have died.`; }
+  if (!msg && st === "stopped" && req?.want === "stop") { cls = "seen"; msg = `${who(req.by)} stopped it.`; }
+  $("request").className = cls;
+  const html = msg ? `<i></i><span>${esc(msg)}</span>` : "";
+  if ($("request").innerHTML !== html) $("request").innerHTML = html;
+
+  let eta = "";
+  const t = s.ticks || [];
+  if (over) eta = s.started_ms && s.finished_ms ? `took ${span(s.finished_ms - s.started_ms)}` : "";
+  else if (st === "paused") eta = "paused";
+  else if (st === "running" && s.total && t.length >= 2 && t[t.length - 1][1] > t[0][1]) {
+    const rate = (t[t.length - 1][1] - t[0][1]) / (t[t.length - 1][0] - t[0][0]);
+    const left = (s.total - s.done) / rate - (now - t[t.length - 1][0]);
+    eta = s.done >= s.total ? "finishing" : left > 0 ? `about ${span(left)} left` : "any moment";
+  } else if (st === "running") eta = s.started_ms ? `running ${span(now - s.started_ms)}` : "";
+  if ($("eta") && $("eta").textContent !== eta) $("eta").textContent = eta;
+  if (armed && now - armed >= 4000) { armed = 0; above(s); }
+}
+
+// ---- per-item results: one square each, new ones pop in ----
+function items(s) {
+  const list = s.items || [], box = $("items"), t = s.tally || {}, total = (t.pass || 0) + (t.fail || 0) + (t.slow || 0);
+  const first = total - list.length; // items before this were dropped from state
+  if (+box.dataset.first !== first || box.children.length > list.length) { box.innerHTML = ""; box.dataset.first = first; }
+  for (let i = box.children.length; i < list.length; i++) {
+    const el = document.createElement("i");
+    el.className = list[i].r; el.title = list[i].label || list[i].r;
+    box.appendChild(el);
+  }
+  $("tally").innerHTML = total ? [`${t.pass || 0} passed`, t.slow ? `<b class="slow">${t.slow} slow</b>` : "", t.fail ? `<b class="fail">${t.fail} failed</b>` : ""].filter(Boolean).join(" · ") + (first > 0 ? ` · showing the last ${list.length}` : "") : "";
+}
+
+// ---- charts ----
+function charts(s) {
+  const ms = s.metrics || [], ids = ms.map((m) => m.id).join(" ");
+  if ($("charts").dataset.ids !== ids) {
+    $("charts").dataset.ids = ids;
+    $("charts").innerHTML = ms.map((m) => `<section class="chart${m.id === (s.headline || ms[0]?.id) && ms.length !== 2 ? " main" : ""}" id="m-${esc(m.id)}" data-metric="${esc(m.id)}">
+      <div class="ch"><b></b><span class="now"></span></div>
+      <div class="plot"><svg viewBox="0 0 1000 100" preserveAspectRatio="none"><path class="area"/><path class="line"/></svg><div class="marks"></div><i class="dot last" hidden></i>
+        <div class="limit" hidden><span></span></div><span class="ax hi"></span><span class="ax lo"></span></div>
+      <div class="cf"><span class="stats"></span><span class="lim"></span></div></section>`).join("");
+    for (const k in drawn) delete drawn[k];
+  }
+  for (const m of ms) chart(s, m);
+}
+function scale(m) {
+  const pts = m.points || [], vs = pts.map((p) => p[1]);
+  if (m.threshold) vs.push(m.threshold.value);
+  let lo = Math.min(...vs), hi = Math.max(...vs);
+  if (!vs.length) { lo = 0; hi = 1; }
+  if (lo >= 0 && lo < hi * 0.6) lo = 0; // start at zero unless that would flatten the line
+  const pad = (hi - lo || Math.abs(hi) || 1) * 0.12;
+  return { lo: lo === 0 ? 0 : lo - pad, hi: hi + pad };
+}
+function chart(s, m) {
+  const el = $(`m-${m.id}`), pts = m.points || [], dragging = drag?.id === m.id;
+  const { lo, hi } = dragging ? drag : scale(m);
+  const t0 = pts[0]?.[0] || 0, t1 = pts[pts.length - 1]?.[0] || 1, X = (t) => (t1 === t0 ? 500 : ((t - t0) / (t1 - t0)) * 1000), Y = (v) => 100 - ((v - lo) / (hi - lo)) * 100;
+  el.classList.toggle("live", s.status === "running");
+  el.querySelector(".ch b").textContent = m.label || m.id;
+  el.querySelector(".now").innerHTML = m.n ? `${fmt(m.last)}<small>${esc(m.unit || "")}</small>` : "";
+  el.querySelector(".ax.hi").textContent = fmt(hi); el.querySelector(".ax.lo").textContent = fmt(lo);
+  el.querySelector(".stats").innerHTML = m.n ? `mean ${fmt(m.sum / m.n)} · min ${fmt(m.min)} · max ${fmt(m.max)}${m.over ? ` · <span class="over">${m.over} over the limit</span>` : ""}` : "no points yet";
+
+  // New points start where the last one was and slide out to their place.
+  const path = (list) => list.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(2)}`).join(" ");
+  const xy = pts.map((p) => [X(p[0]), Y(p[1])]), was = drawn[m.id] || 0, line = el.querySelector(".line"), area = el.querySelector(".area");
+  const d = (list) => [path(list), list.length ? `${path(list)} L${list[list.length - 1][0].toFixed(1)},100 L${list[0][0].toFixed(1)},100 Z` : ""];
+  const [dl, da] = d(xy);
+  if (line.getAttribute("d") !== dl) {
+    if (was && xy.length > was && xy.length - was <= 5 && !dragging) {
+      const [fl, fa] = d(xy.map((p, i) => (i >= was ? xy[was - 1] : p)));
+      line.style.transition = area.style.transition = "none";
+      line.setAttribute("d", fl); area.setAttribute("d", fa);
+      line.getBoundingClientRect(); // let the starting shape land before moving on
+      line.style.transition = area.style.transition = "";
+    }
+    line.setAttribute("d", dl); area.setAttribute("d", da);
+  }
+  drawn[m.id] = xy.length;
+  const last = el.querySelector(".dot.last");
+  last.hidden = !xy.length;
+  if (xy.length) { last.style.left = xy[xy.length - 1][0] / 10 + "%"; last.style.top = xy[xy.length - 1][1] + "%"; }
+
+  // Points over the limit, and the anomalies flagged on this metric.
+  const lim = dragging ? drag.value : m.threshold?.value;
+  const marks = (lim == null ? [] : pts.map((p, i) => [p, i]).filter(([p]) => p[1] > lim).slice(-60).map(([p, i]) => `<i class="dot" style="left:${xy[i][0] / 10}%;top:${xy[i][1]}%"></i>`))
+    .concat((s.anomalies || []).filter((a) => a.metric === m.id && a.t >= t0 && a.t <= t1 && a.v != null).map((a) => `<button class="dot flag" data-goto="a-${esc(a.id)}" style="left:${X(a.t) / 10}%;top:${Math.max(8, Y(a.v))}%" title="${esc(a.title)}">!</button>`)).join("");
+  const mk = el.querySelector(".marks");
+  if (mk.dataset.sig !== marks) { mk.dataset.sig = marks; mk.innerHTML = marks; }
+
+  const bar = el.querySelector(".limit"), over = OVER.includes(s.status);
+  bar.hidden = lim == null;
+  if (lim != null) {
+    bar.style.top = Math.min(100, Math.max(0, Y(lim))) + "%";
+    const unseen = !dragging && !seen(s, m.threshold?.seq);
+    bar.className = `limit${dragging ? " drag" : ""}${unseen ? " unseen" : ""}`;
+    bar.querySelector("span").textContent = `limit ${fmt(lim)}${m.unit ? " " + m.unit : ""}${dragging ? "" : unseen ? " · not seen by the run yet" : m.threshold.by === "person" ? " · yours" : ""}`;
+  }
+  // A suggested limit, so the person reacts to a number instead of typing one.
+  const mean = m.n ? m.sum / m.n : 0, sd = Math.sqrt(pts.reduce((n, p) => n + (p[1] - mean) ** 2, 0) / (pts.length || 1));
+  const guess = nice(mean + 2 * sd || mean * 1.5 || 1);
+  const html = over ? "" : lim == null ? (m.n >= 3 ? `<button data-limit="${guess}">Set a limit at ${fmt(guess)}${m.unit ? " " + esc(m.unit) : ""}</button>` : "")
+    : `<button data-nudge="-1" aria-label="Lower the limit">−</button><button data-nudge="1" aria-label="Raise the limit">+</button><button data-limit="null" aria-label="Remove the limit">✕</button>`;
+  const box = el.querySelector(".lim");
+  if (box.dataset.sig !== html) { box.dataset.sig = html; box.innerHTML = html; }
+}
+
+// ---- anomalies and the log ----
+function hero(show, id) {
+  if (Array.isArray(show)) return show.map((x, i) => hero(x, `${id}-${i + 1}`)).join("");
+  if (!show) return "";
+  const [lb, la] = show.labels || ["usual", "this one"];
+  const pane = (side, label, v) => v == null ? "" : `<div class="pane ${side}" id="${id}-${side}"><b>${esc(label)}</b>${show.kind === "image" ? `<img src="${esc(v)}" alt="${esc(label)}">` : `<pre>${term(v)}</pre>`}</div>`;
+  return `<div class="hero${show.before != null && show.after != null ? "" : " one"}">${pane("before", lb, show.before)}${pane("after", la, show.after)}</div>${show.caption ? `<div class="cap2">${esc(show.caption)}</div>` : ""}`;
+}
+function below(s) {
+  const cards = (s.anomalies || []).slice().reverse().map((a) => {
+    const v = a.verdict, m = (s.metrics || []).find((m) => m.id === a.metric);
+    const act = v ? `<span class="verdict">${v.kind === "expected" ? "✓ Expected" : "⚑ Look into this"}</span><span class="seen">${seen(s, v.seq) ? "seen by the run" : "not seen by the run yet"}</span><button class="undo" data-judge="">Take back</button>`
+      : `<button data-judge="expected">✓ Expected</button><button data-judge="look">⚑ Look into this</button>`;
+    return `<section class="flagcard ${v?.kind || ""}" id="a-${esc(a.id)}" data-anomaly="${esc(a.id)}">
+      <div class="top"><h3>${esc(a.title)}</h3><span class="when">${a.v != null ? `${fmt(a.v)}${m?.unit ? " " + esc(m.unit) : ""} · ` : ""}${clock(a.t || a.at_ms)}</span></div>
+      ${a.text ? `<p>${esc(a.text)}</p>` : ""}${hero(a.show, `a-${a.id}`)}<div class="act">${act}</div></section>`;
+  });
+  // The newest few are open; the rest wait behind one line.
+  const an = cards.slice(0, 3).join("") + (cards.length > 3 ? `<details id="earlier"><summary>${cards.length - 3} earlier</summary>${cards.slice(3).join("")}</details>` : "");
+  if ($("anomalies").dataset.sig !== an) { const open = $("earlier")?.open; $("anomalies").dataset.sig = an; $("anomalies").innerHTML = an; if (open && $("earlier")) $("earlier").open = true; }
+  const log = (s.log || []).map((l) => `<span class="t">${clock(l.t)}</span> <span class="${esc(l.level || "")}">${esc(l.text)}</span>`).join("\n");
+  if ($("log").dataset.sig !== log) { const end = $("log").scrollTop + $("log").clientHeight >= $("log").scrollHeight - 8; $("log").dataset.sig = log; $("log").innerHTML = log; if (end) $("log").scrollTop = $("log").scrollHeight; }
+}
+
+function render(s) { above(s); items(s); charts(s); below(s); }
+
+// ---- what the person can do ----
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.goto) { const c = $(b.dataset.goto); if (c?.closest("details")) c.closest("details").open = true; return c?.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  if (b.dataset.do === "stop" && Date.now() - armed >= 4000) { armed = Date.now(); return above(jelly.state); }
+  if (b.dataset.do) { armed = 0; return jelly.call(b.dataset.do).catch(fail); }
+  const id = b.closest("[data-metric]")?.dataset.metric, m = id && jelly.state.metrics.find((m) => m.id === id);
+  if (m && b.dataset.limit) return jelly.call("threshold", { metric: id, value: JSON.parse(b.dataset.limit) }).catch(fail);
+  if (m && b.dataset.nudge) {
+    const { lo, hi } = scale(m), step = nice((hi - lo) / 20);
+    return jelly.call("threshold", { metric: id, value: +(Math.round((m.threshold.value + step * b.dataset.nudge) / step) * step).toPrecision(6) }).catch(fail);
+  }
+  const a = b.closest("[data-anomaly]")?.dataset.anomaly;
+  if (a && b.dataset.judge !== undefined) return jelly.call("judge", { anomaly: a, kind: b.dataset.judge || null }).catch(fail);
+});
+// Drag a limit. The chart's scale holds still while it moves, and pushes that
+// arrive meanwhile do not pull the line back.
+document.addEventListener("pointerdown", (e) => {
+  const bar = e.target.closest(".limit"), id = bar?.closest("[data-metric]")?.dataset.metric, m = id && jelly.state.metrics.find((m) => m.id === id);
+  if (!m?.threshold || OVER.includes(jelly.state.status)) return;
+  e.preventDefault();
+  bar.setPointerCapture(e.pointerId);
+  drag = { id, value: m.threshold.value, ...scale(m) };
+  const plot = bar.parentElement, step = nice((drag.hi - drag.lo) / 100);
+  const move = (ev) => {
+    const r = plot.getBoundingClientRect(), f = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+    drag.value = +(Math.round((drag.hi - f * (drag.hi - drag.lo)) / step) * step).toPrecision(6);
+    chart(jelly.state, jelly.state.metrics.find((m) => m.id === id));
+  };
+  const up = () => {
+    bar.removeEventListener("pointermove", move); bar.removeEventListener("pointerup", up); bar.removeEventListener("pointercancel", up);
+    const value = drag.value, same = value === m.threshold.value;
+    const done = () => { drag = null; render(jelly.state); };
+    same ? done() : jelly.call("threshold", { metric: id, value }).then(done, (err) => { done(); fail(err); });
+  };
+  bar.addEventListener("pointermove", move); bar.addEventListener("pointerup", up); bar.addEventListener("pointercancel", up);
+});
+
+// The project's DESIGN.md tokens, when this is served by the daemon.
+if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
+  l.onerror = () => l.remove();
+  document.head.appendChild(l);
+}
+jelly.onState(render);
+jelly.onAttention?.(() => render(jelly.state));
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

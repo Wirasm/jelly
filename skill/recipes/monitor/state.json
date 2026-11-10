@@ -1,0 +1,914 @@
+{
+  "about": "40 asks with --at against a running daemon: how long each takes, and whether the reply is right.",
+  "anomalies": [
+    {
+      "at_ms": 1794269828724,
+      "by": "agent",
+      "id": "a1",
+      "metric": "latency",
+      "show": {
+        "after": "it shows on the page below #nope",
+        "before": "#nope matches nothing on the page, so it shows at the top",
+        "labels": [
+          "should say",
+          "said"
+        ]
+      },
+      "t": 1794269828724,
+      "text": "It answered in 8 ms, about an anchor that does not exist. Later wrong replies are in the log.",
+      "title": "Run 2: the reply was wrong",
+      "v": 8
+    },
+    {
+      "at_ms": 1794269830315,
+      "by": "agent",
+      "id": "a2",
+      "metric": "latency",
+      "show": {
+        "after": "724 ms\nit shows on the page below #list",
+        "before": "5 ms",
+        "labels": [
+          "the runs before",
+          "run 19"
+        ]
+      },
+      "t": 1794269830315,
+      "text": "The 18 runs before it had a median of 5 ms.",
+      "title": "Run 19 took 724 ms",
+      "v": 724
+    }
+  ],
+  "control": {
+    "seq": 0
+  },
+  "done": 40,
+  "finished_ms": 1794269847321,
+  "headline": "latency",
+  "items": [
+    {
+      "label": "run 1 · --at #list · 5 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 2 · --at #nope · 8 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 3 · --at #list · 4 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 4 · --at #nope · 4 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 5 · --at #list · 4 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 6 · --at #nope · 5 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 7 · --at #list · 5 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 8 · --at #nope · 5 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 9 · --at #list · 4 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 10 · --at #nope · 5 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 11 · --at #list · 6 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 12 · --at #nope · 5 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 13 · --at #list · 4 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 14 · --at #nope · 6 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 15 · --at #list · 5 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 16 · --at #nope · 6 ms",
+      "r": "fail"
+    },
+    {
+      "label": "run 17 · --at #list · 7 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 18 · --at #nope · 4 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 19 · --at #list · 724 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 20 · --at #nope · 722 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 21 · --at #list · 734 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 22 · --at #nope · 776 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 23 · --at #list · 721 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 24 · --at #nope · 721 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 25 · --at #list · 723 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 26 · --at #nope · 734 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 27 · --at #list · 728 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 28 · --at #nope · 779 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 29 · --at #list · 725 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 30 · --at #nope · 774 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 31 · --at #list · 722 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 32 · --at #nope · 779 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 33 · --at #list · 773 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 34 · --at #nope · 722 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 35 · --at #list · 779 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 36 · --at #nope · 722 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 37 · --at #list · 692 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 38 · --at #nope · 776 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 39 · --at #list · 775 ms",
+      "r": "pass"
+    },
+    {
+      "label": "run 40 · --at #nope · 829 ms",
+      "r": "pass"
+    }
+  ],
+  "log": [
+    {
+      "level": "",
+      "t": 1794269828627,
+      "text": "started: 40 asks, odd runs at #list (there), even runs at #nope (not there)"
+    },
+    {
+      "level": "bad",
+      "t": 1794269828730,
+      "text": "run 2: wrong reply in 8 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "bad",
+      "t": 1794269828813,
+      "text": "run 4: wrong reply in 4 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "",
+      "t": 1794269828867,
+      "text": "5 of 40 · median 4 ms · last 4 ms"
+    },
+    {
+      "level": "bad",
+      "t": 1794269828926,
+      "text": "run 6: wrong reply in 5 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "bad",
+      "t": 1794269829023,
+      "text": "run 8: wrong reply in 5 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "bad",
+      "t": 1794269829113,
+      "text": "run 10: wrong reply in 5 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "",
+      "t": 1794269829121,
+      "text": "10 of 40 · median 5 ms · last 5 ms"
+    },
+    {
+      "level": "bad",
+      "t": 1794269829218,
+      "text": "run 12: wrong reply in 5 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "bad",
+      "t": 1794269829327,
+      "text": "run 14: wrong reply in 6 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "",
+      "t": 1794269829383,
+      "text": "15 of 40 · median 5 ms · last 5 ms"
+    },
+    {
+      "level": "bad",
+      "t": 1794269829445,
+      "text": "run 16: wrong reply in 6 ms: it shows on the page below #nope"
+    },
+    {
+      "level": "warn",
+      "t": 1794269830325,
+      "text": "run 19: 724 ms, the median before it was 5 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269831122,
+      "text": "20 of 40 · median 724 ms · last 722 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269835081,
+      "text": "25 of 40 · median 722 ms · last 723 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269839112,
+      "text": "30 of 40 · median 725 ms · last 774 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269843179,
+      "text": "35 of 40 · median 725 ms · last 779 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269847256,
+      "text": "40 of 40 · median 728 ms · last 829 ms"
+    },
+    {
+      "level": "",
+      "t": 1794269847303,
+      "text": "finished: median 721 ms, fastest 4 ms, slowest 829 ms, 8 wrong"
+    }
+  ],
+  "metrics": [
+    {
+      "better": "lower",
+      "id": "latency",
+      "label": "Time per ask",
+      "last": 829,
+      "max": 829,
+      "min": 4,
+      "n": 40,
+      "points": [
+        [
+          1794269828671,
+          5
+        ],
+        [
+          1794269828717,
+          8
+        ],
+        [
+          1794269828772,
+          4
+        ],
+        [
+          1794269828807,
+          4
+        ],
+        [
+          1794269828858,
+          4
+        ],
+        [
+          1794269828919,
+          5
+        ],
+        [
+          1794269828970,
+          5
+        ],
+        [
+          1794269829013,
+          5
+        ],
+        [
+          1794269829064,
+          4
+        ],
+        [
+          1794269829106,
+          5
+        ],
+        [
+          1794269829165,
+          6
+        ],
+        [
+          1794269829211,
+          5
+        ],
+        [
+          1794269829265,
+          4
+        ],
+        [
+          1794269829315,
+          6
+        ],
+        [
+          1794269829374,
+          5
+        ],
+        [
+          1794269829436,
+          6
+        ],
+        [
+          1794269829492,
+          7
+        ],
+        [
+          1794269829533,
+          4
+        ],
+        [
+          1794269830303,
+          724
+        ],
+        [
+          1794269831107,
+          722
+        ],
+        [
+          1794269831913,
+          734
+        ],
+        [
+          1794269832738,
+          776
+        ],
+        [
+          1794269833511,
+          721
+        ],
+        [
+          1794269834291,
+          721
+        ],
+        [
+          1794269835070,
+          723
+        ],
+        [
+          1794269835872,
+          734
+        ],
+        [
+          1794269836655,
+          728
+        ],
+        [
+          1794269837489,
+          779
+        ],
+        [
+          1794269838271,
+          725
+        ],
+        [
+          1794269839100,
+          774
+        ],
+        [
+          1794269839889,
+          722
+        ],
+        [
+          1794269840721,
+          779
+        ],
+        [
+          1794269841553,
+          773
+        ],
+        [
+          1794269842330,
+          722
+        ],
+        [
+          1794269843167,
+          779
+        ],
+        [
+          1794269843951,
+          722
+        ],
+        [
+          1794269844695,
+          692
+        ],
+        [
+          1794269845525,
+          776
+        ],
+        [
+          1794269846357,
+          775
+        ],
+        [
+          1794269847243,
+          829
+        ]
+      ],
+      "sum": 16522,
+      "threshold": {
+        "at_ms": 0,
+        "by": "agent",
+        "seq": 0,
+        "value": 1000
+      },
+      "unit": "ms"
+    },
+    {
+      "better": "lower",
+      "id": "browsers",
+      "label": "Headless browsers alive",
+      "last": 0,
+      "max": 2,
+      "min": 0,
+      "n": 40,
+      "points": [
+        [
+          1794269828671,
+          0
+        ],
+        [
+          1794269828717,
+          0
+        ],
+        [
+          1794269828772,
+          0
+        ],
+        [
+          1794269828807,
+          0
+        ],
+        [
+          1794269828858,
+          0
+        ],
+        [
+          1794269828919,
+          0
+        ],
+        [
+          1794269828970,
+          0
+        ],
+        [
+          1794269829013,
+          0
+        ],
+        [
+          1794269829064,
+          0
+        ],
+        [
+          1794269829106,
+          0
+        ],
+        [
+          1794269829165,
+          0
+        ],
+        [
+          1794269829211,
+          0
+        ],
+        [
+          1794269829265,
+          0
+        ],
+        [
+          1794269829315,
+          0
+        ],
+        [
+          1794269829374,
+          0
+        ],
+        [
+          1794269829436,
+          0
+        ],
+        [
+          1794269829492,
+          0
+        ],
+        [
+          1794269829533,
+          0
+        ],
+        [
+          1794269830303,
+          0
+        ],
+        [
+          1794269831107,
+          0
+        ],
+        [
+          1794269831913,
+          0
+        ],
+        [
+          1794269832738,
+          0
+        ],
+        [
+          1794269833511,
+          2
+        ],
+        [
+          1794269834291,
+          0
+        ],
+        [
+          1794269835070,
+          0
+        ],
+        [
+          1794269835872,
+          0
+        ],
+        [
+          1794269836655,
+          0
+        ],
+        [
+          1794269837489,
+          0
+        ],
+        [
+          1794269838271,
+          0
+        ],
+        [
+          1794269839100,
+          0
+        ],
+        [
+          1794269839889,
+          1
+        ],
+        [
+          1794269840721,
+          0
+        ],
+        [
+          1794269841553,
+          0
+        ],
+        [
+          1794269842330,
+          2
+        ],
+        [
+          1794269843167,
+          0
+        ],
+        [
+          1794269843951,
+          0
+        ],
+        [
+          1794269844695,
+          2
+        ],
+        [
+          1794269845525,
+          0
+        ],
+        [
+          1794269846357,
+          0
+        ],
+        [
+          1794269847243,
+          0
+        ]
+      ],
+      "sum": 7,
+      "unit": ""
+    },
+    {
+      "better": "lower",
+      "id": "memory",
+      "label": "Daemon memory",
+      "last": 25.1,
+      "max": 25.1,
+      "min": 15.4,
+      "n": 40,
+      "points": [
+        [
+          1794269828671,
+          15.4
+        ],
+        [
+          1794269828717,
+          15.4
+        ],
+        [
+          1794269828772,
+          15.4
+        ],
+        [
+          1794269828807,
+          15.4
+        ],
+        [
+          1794269828858,
+          15.4
+        ],
+        [
+          1794269828919,
+          15.4
+        ],
+        [
+          1794269828970,
+          15.4
+        ],
+        [
+          1794269829013,
+          15.4
+        ],
+        [
+          1794269829064,
+          15.4
+        ],
+        [
+          1794269829106,
+          15.5
+        ],
+        [
+          1794269829165,
+          16
+        ],
+        [
+          1794269829211,
+          16.2
+        ],
+        [
+          1794269829265,
+          16.3
+        ],
+        [
+          1794269829315,
+          16.7
+        ],
+        [
+          1794269829374,
+          16.9
+        ],
+        [
+          1794269829436,
+          17
+        ],
+        [
+          1794269829492,
+          17.1
+        ],
+        [
+          1794269829533,
+          17.5
+        ],
+        [
+          1794269830303,
+          18.1
+        ],
+        [
+          1794269831107,
+          18.9
+        ],
+        [
+          1794269831913,
+          19.2
+        ],
+        [
+          1794269832738,
+          19.4
+        ],
+        [
+          1794269833511,
+          19.7
+        ],
+        [
+          1794269834291,
+          19.8
+        ],
+        [
+          1794269835070,
+          19.9
+        ],
+        [
+          1794269835872,
+          20
+        ],
+        [
+          1794269836655,
+          20.1
+        ],
+        [
+          1794269837489,
+          21
+        ],
+        [
+          1794269838271,
+          21.1
+        ],
+        [
+          1794269839100,
+          21.2
+        ],
+        [
+          1794269839889,
+          21.9
+        ],
+        [
+          1794269840721,
+          22
+        ],
+        [
+          1794269841553,
+          23.2
+        ],
+        [
+          1794269842330,
+          23.4
+        ],
+        [
+          1794269843167,
+          23.5
+        ],
+        [
+          1794269843951,
+          24.1
+        ],
+        [
+          1794269844695,
+          24.4
+        ],
+        [
+          1794269845525,
+          24.4
+        ],
+        [
+          1794269846357,
+          25.1
+        ],
+        [
+          1794269847243,
+          25.1
+        ]
+      ],
+      "sum": 763.3,
+      "unit": "MB"
+    }
+  ],
+  "phase": "wrap",
+  "phases": [
+    {
+      "id": "warm",
+      "label": "Warm up (5)"
+    },
+    {
+      "id": "measure",
+      "label": "Measure (35)"
+    },
+    {
+      "id": "wrap",
+      "label": "Summarise"
+    }
+  ],
+  "result": {
+    "at_ms": 1794269847321,
+    "by": "agent",
+    "headline": "8 of 40 replies were wrong",
+    "text": "40 asks with --at: median 721 ms, fastest 4 ms, slowest 829 ms. Before the anchor check an ask took about 4 ms."
+  },
+  "started_ms": 1794269828671,
+  "status": "failed",
+  "tally": {
+    "fail": 8,
+    "pass": 32,
+    "slow": 0
+  },
+  "ticks": [
+    [
+      1794269838271,
+      29
+    ],
+    [
+      1794269839100,
+      30
+    ],
+    [
+      1794269839889,
+      31
+    ],
+    [
+      1794269840721,
+      32
+    ],
+    [
+      1794269841553,
+      33
+    ],
+    [
+      1794269842330,
+      34
+    ],
+    [
+      1794269843167,
+      35
+    ],
+    [
+      1794269843951,
+      36
+    ],
+    [
+      1794269844695,
+      37
+    ],
+    [
+      1794269845525,
+      38
+    ],
+    [
+      1794269846357,
+      39
+    ],
+    [
+      1794269847243,
+      40
+    ]
+  ],
+  "title": "What the anchor check costs",
+  "total": 40,
+  "updated_ms": 1794269847272
+}
