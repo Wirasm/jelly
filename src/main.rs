@@ -671,14 +671,16 @@ fn report(ev: Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Where an ask or look shows on the page, as the daemon found it: `anchored`
-/// is whether its `--at` matched something, and is absent when nothing could check.
+/// Where an ask or look shows on the page, as the daemon found it: `anchor`
+/// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
-    match (ev["args"]["anchor"]["selector"].as_str(), ev["anchored"].as_bool()) {
-        (None, _) => "it shows at the top of the page".into(),
-        (Some(at), Some(true)) => format!("it shows on the page below {at}"),
-        (Some(at), Some(false)) => format!("{at} matches nothing on the page, so it shows at the top"),
-        (Some(at), None) => format!("it shows below {at} if that matches something, else at the top: not checked ({})",
+    let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
+    match ev["anchor"].as_str() {
+        Some("below") => format!("it shows on the page below {at}"),
+        Some("missing") => format!("{at} matches nothing on the page, so it shows at the top"),
+        Some("floating") => format!("{at} is in a fixed or sticky part of the page, so it shows at the top"),
+        Some("hidden") => format!("it shows below {at}, which is not on screen right now"),
+        _ => format!("it shows below {at} if that matches something, else at the top: not checked ({})",
             ev["anchor_unchecked"].as_str().unwrap_or("no snapshot")),
     }
 }
@@ -700,6 +702,9 @@ fn read(p: &PathBuf) -> Result<String, String> {
 
 /// Adds files beside a jelly; `jelly` is its API address.
 fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<(), String> {
+    // Add every file before printing anything: a reader that closes the pipe
+    // early (`| head -1`) must not leave the jelly with half its assets.
+    let mut added = Vec::new();
     for f in files {
         let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
         let bytes = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
@@ -707,7 +712,10 @@ fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<(), String> {
             .set("content-type", "application/octet-stream")
             .send_bytes(&bytes)
             .map_err(describe)?;
-        println!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024));
+        added.push(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)));
+    }
+    for line in added {
+        println!("{line}");
     }
     Ok(())
 }
@@ -760,8 +768,10 @@ mod tests {
             ev.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             placement(&ev)
         };
-        assert_eq!(at(json!({"anchored": true})), "it shows on the page below #list");
-        assert_eq!(at(json!({"anchored": false})), "#list matches nothing on the page, so it shows at the top");
+        assert_eq!(at(json!({"anchor": "below"})), "it shows on the page below #list");
+        assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
+        assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
+        assert_eq!(at(json!({"anchor": "hidden"})), "it shows below #list, which is not on screen right now");
         let unchecked = at(json!({"anchor_unchecked": "no Chrome found"}));
         assert!(unchecked.contains("not checked (no Chrome found)") && !unchecked.starts_with("it shows on the page below"));
         assert_eq!(placement(&json!({"args": {"anchor": null}})), "it shows at the top of the page");
