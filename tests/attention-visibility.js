@@ -191,6 +191,7 @@ async page => {
     document.querySelector(`#dock-list [data-goto="${groupedName}"][data-item="${groupedId}"]`).click();
   }, {name,id:twin.args.id,groupedName,groupedId});
   frame = await (await page.locator('#full iframe').elementHandle()).contentFrame();
+  await frame.waitForURL(`${base}/j/${encodeURIComponent(groupedName)}/`, {waitUntil:'load'});
   await frame.waitForFunction(id => window.jelly?.items.find(a => a.id === id) && document.activeElement.matches('[data-pick]'), groupedId);
   // Shared snapshots allow the same view to register the hook inertly.
   const shared = await page.request.get(`${base}/api/jellies/${name}/share`);
