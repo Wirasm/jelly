@@ -17,6 +17,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const UNDO_DEPTH: usize = 100;
 
+pub fn resolve_name<'a>(name: &str, project: &str, identities: impl IntoIterator<Item = &'a str>) -> String {
+    if name.contains(':') || name == PAGE { return name.into(); }
+    let preferred = format!("{project}:{name}");
+    let hits: Vec<&str> = identities.into_iter()
+        .filter(|id| id.split_once(':').is_some_and(|(_, short)| short == name)).collect();
+    if !project.is_empty() && hits.contains(&preferred.as_str()) { return preferred; }
+    if hits.len() == 1 { hits[0].into() } else { name.into() }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Jelly {
     pub name: String,

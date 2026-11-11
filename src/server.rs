@@ -400,6 +400,7 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
         let mut store = app.store.lock().expect("store lock");
         let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
         if let Some(preferred) = &q.project_jelly {
+            let (project, short) = preferred.split_once(':').unwrap_or(("", preferred));
             let mut identities = std::collections::BTreeSet::new();
             let mut line = String::new();
             while reader.read_line(&mut line).map_err(history_error)? != 0 {
@@ -410,7 +411,7 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
                         identities.remove(from);
                     }
                 }
-                if ev.jelly.rsplit(':').next() == preferred.rsplit(':').next() {
+                if ev.jelly.split_once(':').map_or(ev.jelly.as_str(), |(_, short)| short) == short {
                     if ev.kind == crate::store::EventKind::Remove {
                         identities.remove(&ev.jelly);
                     } else {
@@ -419,15 +420,9 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
                 }
                 line.clear();
             }
-            let short = preferred.split_once(':').map_or(preferred.as_str(), |(_, short)| short);
-            q.jelly = Some(if identities.contains(preferred) {
-                preferred.clone()
-            } else {
-                let hits: Vec<String> = identities.into_iter()
-                    .filter(|name| name.split_once(':').is_some_and(|(_, name)| name == short))
-                    .collect();
-                if hits.len() == 1 { hits[0].clone() } else { short.to_string() }
-            });
+            if !identities.is_empty() {
+                q.jelly = Some(crate::store::resolve_name(short, project, identities.iter().map(String::as_str)));
+            }
             std::io::Seek::rewind(&mut reader).map_err(history_error)?;
         }
         if let Some(ev) = recorded_change(&mut reader, &q)? {

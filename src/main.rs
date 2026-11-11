@@ -316,24 +316,9 @@ fn run(cli: Cli) -> Result<(), String> {
         if name.contains(':') || name == store::PAGE {
             return name.into();
         }
-        let p = project();
-        if !p.is_empty() {
-            let q = format!("{p}:{name}");
-            if ureq::get(&api(&format!("/{q}/state"))).call().is_ok() {
-                return q;
-            }
-        }
-        // Outside a repo: a short name that exists in exactly one project means that one.
-        if let Ok(list) = get(&api("")) {
-            let hits: Vec<String> = list.as_array().into_iter().flatten()
-                .filter_map(|j| j["name"].as_str())
-                .filter(|n| n.split_once(':').is_some_and(|(_, short)| short == name))
-                .map(String::from).collect();
-            if hits.len() == 1 {
-                return hits[0].clone();
-            }
-        }
-        name.into()
+        let list = get(&api("")).unwrap_or(Value::Null);
+        store::resolve_name(name, &project(), list.as_array().into_iter().flatten()
+            .filter_map(|j| j["name"].as_str()))
     };
     match cli.cmd {
         Cmd::Serve { port, home } => {
@@ -461,7 +446,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Wait { name, timeout, since } => {
             let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
-                .and_then(|n| { let p = project(); (!p.is_empty()).then(|| format!("{p}:{n}")) });
+                .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n));
             if let Some(SequenceToken(seq)) = since {
                 let mut req = ureq::get(&format!("{}/api/wait", cli.url))
