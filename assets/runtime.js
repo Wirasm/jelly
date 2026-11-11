@@ -437,6 +437,10 @@
     }
     return true;
   }
+  // Hiding a subtree can blur its control before the placement observer runs.
+  let lastCardControl = null;
+  addEventListener("focusin", (e) => { lastCardControl = e.target.matches?.(".jf-ask") ? e.target.shadowRoot?.activeElement : null; });
+  addEventListener("focusout", (e) => { if (lastCardControl && available(e.target)) lastCardControl = null; });
   let topStack = null;
   function atTop(host) {
     if (!topStack?.isConnected) {
@@ -459,8 +463,8 @@
     host.toggleAttribute("data-exposed", rescued);
   }
   function drawAttention() {
-    const focusedHost = document.hasFocus() ? [...cards.values()].find((h) => h.shadowRoot.activeElement) : null;
-    const focused = focusedHost?.shadowRoot.activeElement;
+    const focusedHost = document.hasFocus() ? [...cards.values()].find((h) => h.shadowRoot.activeElement || (h.shadowRoot.contains(lastCardControl) && !available(h))) : null;
+    const focused = focusedHost?.shadowRoot.activeElement || (focusedHost ? lastCardControl : null);
     const selection = focused?.tagName === "TEXTAREA" ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
     const oldParent = focusedHost?.parentElement;
     const items = inline() ? [] : shownItems();

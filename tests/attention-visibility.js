@@ -65,9 +65,9 @@ async page => {
   }, id);
   await rescued(frame, id, false);
   assert(await frame.evaluate(() => savedHost === document.querySelector('#tucked').nextElementSibling && savedHost.shadowRoot.activeElement?.value === 'keep this draft' && savedHost.shadowRoot.activeElement.selectionStart === 2 && savedHost.shadowRoot.activeElement.selectionEnd === 7 && document.body.getBoundingClientRect().height === originalHeight), 'reveal preserves host, draft, selection and focus');
-  await frame.evaluate(() => document.getElementById('details').hidden = true);
+  await frame.evaluate(() => { document.getElementById('details').hidden = true; void document.getElementById('details').offsetHeight; });
   await rescued(frame, id, true);
-  assert(await frame.evaluate(() => savedHost.shadowRoot.activeElement?.value === 'keep this draft'), 'hide keeps focus');
+  assert(await frame.evaluate(() => savedHost.shadowRoot.activeElement?.value === 'keep this draft' && savedHost.shadowRoot.activeElement.selectionStart === 2 && savedHost.shadowRoot.activeElement.selectionEnd === 7), 'hide keeps focus and selection');
   // Existing frames receive one callback; subscribers can reveal synchronously.
   await frame.evaluate(() => { reveal = 'immediate'; });
   frame = await dock(name, id);
