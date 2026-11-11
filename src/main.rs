@@ -123,6 +123,7 @@ enum Cmd {
         state: bool,
     },
     /// Open the jelly page (this project's, if any), or one jelly, in the browser.
+    /// Always prints the address, even if the browser cannot be opened.
     Open { name: Option<String> },
     /// Ask the person something: one question on a jelly, or a set of them.
     ///
@@ -588,11 +589,37 @@ fn run(cli: Cli) -> Result<(), String> {
                 (None, "") => format!("{}/", cli.url),
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
-            std::process::Command::new("open").arg(&url).status().map_err(|e| e.to_string())?;
             println!("{url}");
+            if let Err(e) = open_browser(&url) {
+                eprintln!("jelly: could not open a browser ({e}); open the address above manually.");
+            }
             Ok(())
         }
     }
+}
+
+fn open_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(not(target_os = "windows"))]
+    command.arg(url);
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("cmd.exe");
+        // Delayed expansion keeps URL characters out of cmd's command parsing.
+        command.args(["/d", "/v:on", "/c"])
+            .raw_arg("start \"\" \"!JELLY_OPEN_URL!\"")
+            .env("JELLY_OPEN_URL", url);
+        command
+    };
+
+    let opener = command.get_program().to_string_lossy().into_owned();
+    let status = command.status().map_err(|e| format!("{opener}: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("{opener}: {status}")) }
 }
 
 /// If the repo has a DESIGN.md, give it to the project so views can use it.
