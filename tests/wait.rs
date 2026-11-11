@@ -247,3 +247,21 @@ fn reading_through_an_intervening_change_reaches_the_answer() {
     assert_eq!(next["kind"], "answer");
     assert_eq!(next["args"]["id"], "a1");
 }
+
+#[test]
+fn an_unrelated_cursor_cannot_override_the_current_project() {
+    for remove_local in [false, true] {
+        let daemon = Daemon::start();
+        daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
+        daemon.ok(&["ask", "test:remote", "Which?"]);
+        let cursor = daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
+        let answer = daemon.post("/api/jellies/test:remote/attention/a1/answer", json!({"text": "local answer", "by": "person"}));
+        if remove_local {
+            ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
+        }
+        daemon.post("/api/jellies/other:remote/attention", json!({"title": "Other question?", "by": "person"}));
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", &format!("seq:{}", cursor["seq"]), "--timeout", "0"])).unwrap();
+        assert_eq!(result["seq"], answer["seq"]);
+        assert_eq!(result["jelly"], "test:remote");
+    }
+}

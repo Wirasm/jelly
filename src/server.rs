@@ -355,7 +355,7 @@ async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Str
 struct WaitQ {
     since: u64,
     by: String,
-    /// Resolve short names against the starting event and identity at that point.
+    /// Resolve short names against the jellies present at the starting sequence.
     project_jelly: Option<String>,
     jelly: Option<String>,
     timeout: Option<u64>,
@@ -400,23 +400,27 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
         let mut store = app.store.lock().expect("store lock");
         let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
         if let Some(preferred) = &q.project_jelly {
-            let mut found = false;
-            let mut token_identity = None;
+            let mut identities = std::collections::BTreeSet::new();
             let mut line = String::new();
             while reader.read_line(&mut line).map_err(history_error)? != 0 {
                 let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
                 if ev.seq > q.since { break; }
-                if ev.jelly == *preferred {
-                    found = ev.kind != crate::store::EventKind::Remove;
+                if ev.kind == crate::store::EventKind::Move {
+                    if let Some(from) = ev.args.as_ref().and_then(|args| args["from"].as_str()) {
+                        identities.remove(from);
+                    }
                 }
-                if ev.seq == q.since && ev.jelly.rsplit(':').next() == preferred.rsplit(':').next() {
-                    token_identity = Some(ev.jelly);
-                    break;
+                if ev.jelly.rsplit(':').next() == preferred.rsplit(':').next() {
+                    if ev.kind == crate::store::EventKind::Remove {
+                        identities.remove(&ev.jelly);
+                    } else {
+                        identities.insert(ev.jelly);
+                    }
                 }
                 line.clear();
             }
-            if let Some(identity) = token_identity { q.jelly = Some(identity); }
-            else if found { q.jelly = Some(preferred.clone()); }
+            if identities.contains(preferred) { q.jelly = Some(preferred.clone()); }
+            else if identities.len() == 1 { q.jelly = identities.into_iter().next(); }
             std::io::Seek::rewind(&mut reader).map_err(history_error)?;
         }
         if let Some(ev) = recorded_change(&mut reader, &q)? {
