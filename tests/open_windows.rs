@@ -65,7 +65,11 @@ fn open_delivers_the_printed_address_to_the_windows_handler() {
         ("repro", None, "/p/repro"),
         ("", None, "/"),
         ("repro", Some("other:plan"), "/j/other:plan/"),
-        ("a&b!c%d^e(f)", None, "/p/a&b!c%d^e(f)"),
+        (
+            "repro",
+            Some("other:a&b!c%d^e(f)"),
+            "/j/other:a&b!c%d^e(f)/",
+        ),
     ] {
         let url = format!("{base}{path}");
         let mut command = Command::new(env!("CARGO_BIN_EXE_jelly"));
