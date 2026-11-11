@@ -172,18 +172,17 @@ async page => {
     const old = await (await page.request.get(`${base}/api/jellies/${name}`)).json();
     let seenStale;
     const staleReady = new Promise(resolve => { seenStale = resolve; });
-    let openingRefresh = false, missingId;
+    let openingRefresh = false, withdrawn = false, missingId;
     const failRefresh = async route => {
       if (route.request().frame() !== frame) return route.continue();
       if (!openingRefresh) { await route.fulfill({json:old}); seenStale(); return; }
       if (outcome === 'http') return route.fulfill({status:503,body:'temporarily unavailable'});
       if (outcome === 'network') return route.abort('failed');
-      if (outcome === 'withdrawn') {
+      if (outcome === 'withdrawn' && !withdrawn) {
+        withdrawn = true;
         await post(`/api/jellies/${name}/attention/${missingId}/withdraw`, {});
-        const result = await (await page.request.get(showUrl)).json();
-        return route.fulfill({json:result});
       }
-      return route.fulfill({json:old});
+      return outcome === 'withdrawn' ? route.continue() : route.fulfill({json:old});
     };
     await page.route(showUrl, failRefresh);
     const missing = await ask('#tucked', 'look');
@@ -221,7 +220,7 @@ async page => {
   assert(stable === 0, 'stable destination order must not cause observer redraws');
   // Built-in grouped rounds use their existing inline question and focus a pick.
   const groupedName = `visibility:group-${Date.now()}`;
-  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'design:mobile',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'design.mobile[wide]',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
+  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'',question:'Empty ID?',options:[{id:'y',label:'Yes'}]},{id:'design:mobile',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'design.mobile[wide]',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
   await page.locator('#dock-list [data-goto="'+groupedName+'"]').waitFor({state:'attached'});
   let groupedId = await page.locator('#dock-list [data-goto="'+groupedName+'"]').getAttribute('data-item');
   assert(!!groupedId, 'grouped row carries an item id');
@@ -232,24 +231,24 @@ async page => {
   }, groupedId);
   const inlineItems = await frame.evaluate(() => jelly.items.map(a => ({id:a.id,selector:a.anchor.selector})));
   for (const item of inlineItems) {
+    await page.locator(`#dock-list [data-goto="${groupedName}"][data-item="${item.id}"]`).waitFor({state:'attached'});
     await frame.evaluate(selector => { location.hash = selector; document.activeElement.blur(); }, item.selector);
-    frame = await dock(groupedName, groupedId);
+    frame = await dock(groupedName, item.id);
     await frame.waitForFunction(id => {
       const item = jelly.items.find(a => a.id === id);
       return document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
-    }, groupedId);
+    }, item.id);
+    groupedId = item.id;
+    if (item !== inlineItems.at(-1)) await frame.locator(`[data-pick="${item.id}|y"]`).click();
   }
-  await frame.locator(`[data-pick="${groupedId}|y"]`).click();
-  const remaining = inlineItems.find(item => item.id !== groupedId);
-  await page.locator(`#dock-list [data-goto="${groupedName}"][data-item="${remaining.id}"]`).waitFor({state:'attached'});
-  groupedId = remaining.id;
-  frame = await dock(groupedName, groupedId);
-  // Same-document navigation also retains view callbacks for ordinary cards.
+  // History changes the URL without replacing the loaded view.
   frame = await dock(name, twin.args.id);
-  await frame.evaluate(() => { location.hash = '#tucked'; document.activeElement.blur(); });
-  frame = await dock(name, twin.args.id);
-  await focused(frame, twin.args.id);
-  assert(await frame.locator('.jf-ask').count() > 0, 'ordinary cards survive hash navigation');
+  for (const [method,url] of [['pushState','#tucked'],['pushState','?tab=details'],['replaceState','?tab=other'],['pushState','/visibility-stage']]) {
+    await frame.evaluate(({method,url}) => { history[method]({},'',url); document.activeElement.blur(); }, {method,url});
+    frame = await dock(name, twin.args.id);
+    await focused(frame, twin.args.id);
+  }
+  assert(await frame.locator('.jf-ask').count() > 0, 'ordinary cards survive history navigation');
   frame = await dock(groupedName, groupedId);
   assert(await frame.locator('.jf-ask').count() === 0, 'inline view has no duplicate cards');
   // Hold an earlier local write before committing it; wait for both response
@@ -307,6 +306,39 @@ async page => {
     assert(await page.locator('#full iframe').getAttribute('title') === groupedName, `external focus selects its frame after local ${operation}`);
     await page.unroute(focusUrl, holdResponse);
   }
+  // Failed opens and closes explain the rollback, and the same action can retry.
+  // The CLI runner yields on native dialogs, even when a listener accepts them.
+  await page.evaluate(() => {
+    window.savedAlert = window.alert;
+    window.focusFailures = [];
+    window.alert = message => focusFailures.push(message);
+  });
+  for (const failure of ['http','network']) {
+    for (const prior of [null, groupedName]) {
+      await post('/api/jellies/surface/call', {verb:'focus',args:{name:prior}});
+      await page.waitForFunction(prior => full === prior && pendingFocusWrites === 0, prior);
+      const failFocus = async route => {
+        if (route.request().postDataJSON().verb !== 'focus') return route.continue();
+        return failure === 'http' ? route.fulfill({status:503,json:{error:'focus unavailable'}}) : route.abort('failed');
+      };
+      await page.route(focusUrl, failFocus);
+      const before = await page.evaluate(() => focusFailures.length);
+      await page.evaluate(({name,id}) => document.querySelector(`#dock-list [data-goto="${name}"][data-item="${id}"]`).click(), {name,id:twin.args.id});
+      await page.waitForFunction(prior => pendingFocusWrites === 0 && full === prior, prior);
+      assert(await page.evaluate(before => focusFailures.length === before + 1 && focusFailures.at(-1).includes('Could not save your view selection. Try the action again.'), before), `visible ${failure} open failure from ${prior}`);
+      await page.unroute(focusUrl, failFocus);
+      frame = await dock(name, twin.args.id);
+      await page.waitForFunction(name => pendingFocusWrites === 0 && jelly.state.focus === name && full === name, name);
+      await page.route(focusUrl, failFocus);
+      await page.locator('#back').click();
+      await page.waitForFunction(name => pendingFocusWrites === 0 && full === name, name);
+      assert(await page.evaluate(before => focusFailures.length === before + 2, before), `visible ${failure} close failure`);
+      await page.unroute(focusUrl, failFocus);
+      await page.locator('#back').click();
+      await page.waitForFunction(() => pendingFocusWrites === 0 && full === null && jelly.state.focus === null);
+    }
+  }
+  const focusFailures = await page.evaluate(() => { window.alert = savedAlert; return window.focusFailures; });
   // Shared snapshots allow the same view to register the hook inertly.
   const shared = await page.request.get(`${base}/api/jellies/${name}/share`);
   const snapshot = await page.context().newPage();
@@ -318,5 +350,5 @@ async page => {
   await snapshot.close();
   page.off('pageerror', onError);
   assert(pageErrors.length === 0, `browser errors: ${pageErrors}`);
-  return {measurement,cases,callbacks:'once, immediate/delayed reveal, unsubscribe and failure',draft:'preserved and persisted',grouped:'focused inline',rapid:'newest frame and focused control after delayed writes',externalFocus:'local open and close responses delayed',refresh:'HTTP, network, absent and withdrawn messages visible and focused',hash:'inline and runtime cards',snapshot:'inert subscription'};
+  return {measurement,cases,callbacks:'once, immediate/delayed reveal, unsubscribe and failure',draft:'preserved and persisted',grouped:'focused inline',rapid:'newest frame and focused control after delayed writes',externalFocus:'local open and close responses delayed',refresh:'HTTP, network, absent and withdrawn messages visible and focused',history:'hash, push-query, replace-query and push-path',focusFailures:focusFailures.length,snapshot:'inert subscription'};
 }

@@ -125,7 +125,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const L = (i) => String.fromCharCode(65 + i);
-const qid = (a) => (a.anchor?.selector || "").replace(/^#q-/, "") || a.id;
+const qid = (a) => a.anchor?.selector?.replace(/^#q-/, "") ?? a.id;
 const big = new Set(); // previews opened large are rendered once
 const drafts = {};     // unsent note text per question, kept across re-renders
 

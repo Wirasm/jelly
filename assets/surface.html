@@ -464,7 +464,7 @@
         pendingAttend = request;
         const send = () => {
           if (pendingAttend !== request || iframe !== $("full").querySelector("iframe")) { iframe.removeEventListener("load", send); return; }
-          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentDocument.URL.split("#")[0] !== iframe.src.split("#")[0]) return;
+          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentWindow.jelly?.name !== g.dataset.goto) return;
           pendingAttend = null;
           iframe.removeEventListener("load", send);
           iframe.contentWindow.postMessage({ type: "jelly:attend", id: request.itemId }, location.origin);
@@ -520,7 +520,7 @@
   let focusWrites = Promise.resolve(), pendingFocusWrites = 0;
   function writeFocus(name) {
     pendingFocusWrites++;
-    focusWrites = focusWrites.then(() => jelly.call("focus", { name })).catch(() => {}).finally(() => {
+    focusWrites = focusWrites.then(() => jelly.call("focus", { name })).catch((err) => alert("Could not save your view selection. Try the action again.\n" + err.message)).finally(() => {
       pendingFocusWrites--;
       if (!pendingFocusWrites) applyFocus(jelly.state);
     });
