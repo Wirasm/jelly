@@ -430,8 +430,8 @@ impl Store {
             working: None,
             notes: Vec::new(),
         };
-        self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
-        self.commit(name, EventKind::New, by, None, None, vec![String::new()])
+        let previous_entry = self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
+        self.commit(name, EventKind::New, by, None, None, vec![String::new()], previous_entry)
     }
 
     pub fn call(&mut self, name: &str, verb: &str, args: Value, by: &str) -> Result<Event, Error> {
@@ -440,6 +440,7 @@ impl Store {
 
     /// A verb call that also records the element the person used.
     pub fn call_from(&mut self, name: &str, verb: &str, args: Value, by: &str, source: Option<Value>) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
@@ -447,7 +448,7 @@ impl Store {
         snapshot(entry);
         entry.jelly.state = next;
         self.source = source;
-        self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed)
+        self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed, previous_entry)
     }
 
     /// Replaces the view and/or verbs while keeping state. `about` alone only
@@ -459,6 +460,7 @@ impl Store {
         if let Some(src) = &verbs_src {
             verbs::check(src).map_err(|e| Error::Invalid(format!("new verbs rejected, jelly unchanged: {e}")))?;
         }
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         if let Some(a) = about {
             entry.jelly.about = a.trim().into();
@@ -473,13 +475,14 @@ impl Store {
             }
             entry.jelly.view_rev += 1;
         }
-        self.commit(name, EventKind::Reshape, by, None, None, Vec::new())
+        self.commit(name, EventKind::Reshape, by, None, None, Vec::new(), previous_entry)
     }
 
     /// Writes state directly, outside the verbs: an agent fixing its own
     /// content or starting over. An empty pointer means the whole state;
     /// `value: None` removes what is at the pointer. Undoable like a verb call.
     pub fn set_state(&mut self, name: &str, pointer: &str, value: Option<Value>, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let mut next = entry.jelly.state.clone();
         set_at(&mut next, pointer, value).map_err(Error::Invalid)?;
@@ -487,10 +490,11 @@ impl Store {
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
         snapshot(entry);
         entry.jelly.state = next;
-        self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed)
+        self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed, previous_entry)
     }
 
     pub fn undo(&mut self, name: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let snap = entry.undo.pop().ok_or_else(|| Error::Invalid(format!("{name} has nothing to undo")))?;
         let mut changed = Vec::new();
@@ -503,7 +507,7 @@ impl Store {
             // version must notice and reload.
             entry.jelly.view_rev += 1;
         }
-        self.commit(name, EventKind::Undo, by, None, None, changed)
+        self.commit(name, EventKind::Undo, by, None, None, changed, previous_entry)
     }
 
     /// Pins a comment to part of the view.
@@ -512,18 +516,20 @@ impl Store {
         if text.is_empty() {
             return Err(Error::Invalid("empty comment".into()));
         }
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let id = format!("c{}", entry.jelly.comments.len() + 1);
         entry.jelly.comments.push(Comment { id: id.clone(), anchor: anchor.clone(), text: text.into(), by: by.into(), at_ms: now_ms(), resolved: false, replies: Vec::new() });
         let args = serde_json::json!({"id": id, "anchor": anchor, "text": text});
-        self.commit(name, EventKind::Comment, by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Comment, by, None, Some(args), Vec::new(), previous_entry)
     }
 
     pub fn resolve(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let f = entry.jelly.comments.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
         f.resolved = true;
-        self.commit(name, EventKind::Resolve, by, None, Some(Value::String(id.into())), Vec::new())
+        self.commit(name, EventKind::Resolve, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
     }
 
     /// Answers on a comment's thread. A reply leaves the thread resolved only
@@ -534,12 +540,13 @@ impl Store {
         if text.is_empty() {
             return Err(Error::Invalid("empty reply".into()));
         }
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let f = entry.jelly.comments.iter_mut().find(|f| f.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no comment {id}")))?;
         f.replies.push(Reply { text: text.into(), by: by.into(), at_ms: now_ms() });
         f.resolved = resolve;
         let args = serde_json::json!({"id": id, "text": text, "resolved": resolve, "anchor": f.anchor, "comment": f.text});
-        self.commit(name, EventKind::Reply, by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Reply, by, None, Some(args), Vec::new(), previous_entry)
     }
 
     /// Moves a jelly to another project ("" for none). Its id changes from
@@ -556,8 +563,8 @@ impl Store {
         }
         let mut entry = self.jellies.get(name).ok_or_else(|| Error::NotFound(name.into()))?.clone();
         entry.jelly.name = id.clone();
-        self.jellies.insert(id.clone(), entry);
-        let ev = self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new())?;
+        let previous_entry = self.jellies.insert(id.clone(), entry);
+        let ev = self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new(), previous_entry)?;
         self.jellies.remove(name);
         let _ = fs::remove_file(self.path(name));
         if self.asset_dir(name).exists() {
@@ -583,8 +590,9 @@ impl Store {
     }
 
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.archived = archived;
-        self.commit(name, if archived { EventKind::Archive } else { EventKind::Restore }, by, None, None, Vec::new())
+        self.commit(name, if archived { EventKind::Archive } else { EventKind::Restore }, by, None, None, Vec::new(), previous_entry)
     }
 
     /// An agent's note for the next agent.
@@ -593,8 +601,9 @@ impl Store {
         if text.is_empty() {
             return Err(Error::Invalid("empty note".into()));
         }
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.notes.push(serde_json::json!({"text": text, "by": by, "at_ms": now_ms()}));
-        self.commit(name, EventKind::Note, by, None, Some(Value::String(text.into())), Vec::new())
+        self.commit(name, EventKind::Note, by, None, Some(Value::String(text.into())), Vec::new(), previous_entry)
     }
 
     /// Where a project keeps its DESIGN.md.
@@ -614,6 +623,7 @@ impl Store {
     pub fn put_asset(&mut self, name: &str, file: &str, bytes: &[u8], by: &str) -> Result<Event, Error> {
         valid_file(file)?;
         let dir = self.asset_dir(name);
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?;
         let path = dir.join(file);
         let previous = match fs::read(&path) {
@@ -622,7 +632,7 @@ impl Store {
             Err(e) => return Err(Error::Invalid(format!("could not read {file} before saving: {e}"))),
         };
         fs::create_dir_all(&dir).and_then(|_| write_atomic(&path, bytes)).map_err(|e| Error::Invalid(format!("could not save {file}: {e}")))?;
-        let result = self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new());
+        let result = self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new(), previous_entry);
         if let Err(error) = &result {
             let rollback = match previous {
                 Some(bytes) => write_atomic(&path, &bytes),
@@ -646,8 +656,9 @@ impl Store {
         let n = self.get(name)?.attention.len();
         let item = attention_from(&spec, format!("a{}", n + 1), by)?;
         let args = serde_json::to_value(&item).expect("serializes");
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.attention.push(item);
-        self.commit(name, EventKind::Attention, by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Attention, by, None, Some(args), Vec::new(), previous_entry)
     }
 
     /// One round of an ask: a set of questions the person answers together, on
@@ -693,8 +704,9 @@ impl Store {
             events.push(self.call(&id, "setup", setup, by)?);
             for item in items {
                 let args = serde_json::to_value(&item).expect("serializes");
+                let previous_entry = self.jellies.get(&id).cloned();
                 self.entry(&id)?.jelly.attention.push(item);
-                events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new())?);
+                events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new(), previous_entry)?);
             }
             Ok(())
         })();
@@ -707,6 +719,7 @@ impl Store {
     /// The person answers an item, or changes their answer: an option id,
     /// text, or both. A look can be answered with nothing, meaning "seen".
     pub fn answer(&mut self, name: &str, id: &str, option: Option<&str>, text: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
         if item.withdrawn.is_some() {
@@ -723,26 +736,29 @@ impl Store {
         }
         item.answer = Some(Answer { option: option.map(String::from), text: text.into(), by: by.into(), at_ms: now_ms() });
         let args = serde_json::json!({"id": id, "kind": item.kind, "title": item.title, "option": option, "text": text, "group": item.group});
-        self.commit(name, EventKind::Answer, by, None, Some(args), Vec::new())
+        self.commit(name, EventKind::Answer, by, None, Some(args), Vec::new(), previous_entry)
     }
 
     /// The agent takes an item back, for example because it no longer applies.
     pub fn withdraw(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
         item.withdrawn = Some(Stamp { by: by.into(), at_ms: now_ms() });
-        self.commit(name, EventKind::Withdraw, by, None, Some(Value::String(id.into())), Vec::new())
+        self.commit(name, EventKind::Withdraw, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
     }
 
     /// `Some("rebuilding the header")` while an agent works on the jelly, `None` when done.
     pub fn set_working(&mut self, name: &str, what: Option<&str>, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.working = what.map(|w| serde_json::json!({"what": w, "by": by, "at_ms": now_ms()}));
-        self.commit(name, EventKind::Working, by, None, what.map(|w| Value::String(w.into())), Vec::new())
+        self.commit(name, EventKind::Working, by, None, what.map(|w| Value::String(w.into())), Vec::new(), previous_entry)
     }
 
     pub fn pin(&mut self, name: &str, pinned: bool, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.pinned = pinned;
-        self.commit(name, EventKind::Pin, by, None, Some(Value::Bool(pinned)), Vec::new())
+        self.commit(name, EventKind::Pin, by, None, Some(Value::Bool(pinned)), Vec::new(), previous_entry)
     }
 
     pub fn remove(&mut self, name: &str, by: &str) -> Result<Event, Error> {
@@ -760,6 +776,7 @@ impl Store {
     }
 
     /// Bumps the version, saves the jelly, logs the event and returns it with state attached.
+    #[allow(clippy::too_many_arguments)]
     fn commit(
         &mut self,
         name: &str,
@@ -768,6 +785,7 @@ impl Store {
         verb: Option<String>,
         args: Option<Value>,
         changed: Vec<String>,
+        previous: Option<Entry>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
         if kind != EventKind::New {
@@ -779,27 +797,30 @@ impl Store {
         }
         let bytes = serde_json::to_vec(entry).expect("a jelly serializes");
         let jelly = entry.jelly.clone();
-        let previous = match fs::read(self.path(name)) {
-            Ok(bytes) => Some(bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(Error::Invalid(format!("could not read {name} before saving: {e}"))),
-        };
-        write_atomic(&self.path(name), &bytes).map_err(|e| Error::Invalid(format!("could not save {name}: {e}")))?;
+        if let Err(error) = write_atomic(&self.path(name), &bytes) {
+            self.restore_entry(name, previous);
+            return Err(Error::Invalid(format!("could not save {name}: {error}")));
+        }
         let mut ev = self.event(&jelly, kind, by, verb, args, changed);
         if let Err(error) = self.log(&ev) {
-            let rollback = if let Some(bytes) = previous {
-                let entry = serde_json::from_slice(&bytes).expect("previously saved entry");
-                self.jellies.insert(name.into(), entry);
-                write_atomic(&self.path(name), &bytes)
-            } else {
-                self.jellies.remove(name);
-                fs::remove_file(self.path(name))
+            let bytes = previous.as_ref().map(|entry| serde_json::to_vec(entry).expect("a jelly serializes"));
+            self.restore_entry(name, previous);
+            let rollback = match bytes {
+                Some(bytes) => write_atomic(&self.path(name), &bytes),
+                None => fs::remove_file(self.path(name)),
             };
             rollback.map_err(|e| Error::Invalid(format!("{error}; could not restore {name}: {e}")))?;
             return Err(error);
         }
         ev.state = Some(jelly.state);
         Ok(ev)
+    }
+
+    fn restore_entry(&mut self, name: &str, previous: Option<Entry>) {
+        match previous {
+            Some(entry) => { self.jellies.insert(name.into(), entry); }
+            None => { self.jellies.remove(name); }
+        }
     }
 
     fn event(&mut self, j: &Jelly, kind: EventKind, by: &str, verb: Option<String>, args: Option<Value>, changed: Vec<String>) -> Event {
@@ -1015,6 +1036,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(dir.path()).unwrap();
         (dir, s)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_saved_entries_can_commit_and_roll_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, mut s) = store();
+        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.attend("j", json!({"title": "Which?"}), "agent").unwrap();
+        s.call("j", "label", json!({"id": "one", "value": "kept"}), "agent").unwrap();
+        let path = s.path("j");
+        let before = fs::read(&path).unwrap();
+        for operation in ["answer", "call", "undo"] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
+            assert!(fs::read(&path).is_err(), "fixture must deny snapshot reads");
+            s.log_failure = Some((s.seq + 1, 10));
+            let result = match operation {
+                "answer" => s.answer("j", "a1", None, "yes", "person"),
+                "call" => s.call("j", "label", json!({"id": "one", "value": "lost"}), "person"),
+                "undo" => s.undo("j", "person"),
+                _ => unreachable!(),
+            };
+            assert!(result.unwrap_err().to_string().contains("could not record event"));
+            assert_eq!(serde_json::to_vec(s.jellies.get("j").unwrap()).unwrap(), before);
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        s.log_failure = None;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
+        let answer = s.answer("j", "a1", None, "yes", "person").unwrap();
+        s.note("j", "later change", "agent").unwrap();
+        assert!(s.get("j").unwrap().attention[0].answer.is_some());
+        let history = fs::read_to_string(s.events_path()).unwrap();
+        let answers: Vec<Event> = history.lines().map(|line| serde_json::from_str::<Event>(line).unwrap())
+            .filter(|event| event.kind == EventKind::Answer).collect();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].seq, answer.seq);
     }
 
     #[test]
