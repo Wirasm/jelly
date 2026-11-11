@@ -375,6 +375,21 @@ async (page) => {
           if(!screens.at(-1).below.includes('focus '+items[0].anchor.selector)) throw Error(kind+' escaped focus measurement '+JSON.stringify(whitespace));
         },{kind,whitespace});
       }
+      // Escapes past U+10FFFF become U+FFFD; the forgiving list keeps its valid branch.
+      for (const hex of ['0','10ffff','110000','ffffff']) for (const focus of ['',':focus-within']) {
+        await page.evaluate(({kind,hex,focus})=>{
+          items[0].anchor.selector=':is(:\\'+hex+' , #'+kind+')'+focus+(kind==='table'?' tbody > tr:first-child':' > :first-child');
+          if (!document.querySelector(items[0].anchor.selector)) throw Error(kind+' native out-of-range escape '+hex);
+          refresh();
+        },{kind,hex,focus});
+        await settle();
+        await page.evaluate(({kind,hex,focus})=>{
+          const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+          const host=document.getElementById('jf-q-focus');
+          if(host.closest('.jf-slot').previousElementSibling!==parent.firstElementChild) throw Error(kind+' escaped code point '+hex+focus);
+          if(!screens.at(-1).below.includes('focus '+items[0].anchor.selector)) throw Error(kind+' escaped code point measurement '+hex+focus);
+        },{kind,hex,focus});
+      }
       for (const pseudo of ['focus-within','focus','focus-visible']) {
         await page.evaluate(({kind,pseudo})=>{
           const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;

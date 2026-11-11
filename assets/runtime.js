@@ -558,7 +558,11 @@
     }));
     // Structural selectors need owned siblings absent, but detachment clears
     // focus pseudos. Match saved elements by their paths in the original tree.
-    const identifier = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\*[\s\S]*?\*\/|\\(?:[\da-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[^\r\n\f])|:(?:[\w-]|\\(?:[\da-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[^\r\n\f]))+/g;
+    // A style rule's selectorText is the browser's own serialization: escapes
+    // resolved, names lowercased, invalid forgiving arguments dropped.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("*{}");
+    const rule = sheet.cssRules[0];
     const elementPath = (el) => {
       const path = [];
       for (let node = el; node.parentElement; node = node.parentElement) {
@@ -576,13 +580,15 @@
       const focusSelectors = focusStates.map(({ pseudo, elements }) => ({
         pseudo, selector: elements.map(elementPath).join(",") || ":not(*)",
       }));
-      const selectorWithFocus = (selector) => selector.replace(identifier, (token) => {
-        if (!token.startsWith(":")) return token;
-        const name = token.slice(1).replace(/\\([\da-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/g,
-          (_, hex, char) => hex ? String.fromCodePoint(parseInt(hex, 16) || 0xfffd) : char).toLowerCase();
-        const state = focusSelectors.find((state) => state.pseudo === name);
-        return state ? `:is(${state.selector})` : token;
-      });
+      const selectorWithFocus = (selector) => {
+        // An invalid selector leaves selectorText as it was, so reject it first.
+        document.createDocumentFragment().querySelector(selector);
+        rule.selectorText = selector;
+        return rule.selectorText.replace(/"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|:[\w-]+/g, (token) => {
+          const state = focusSelectors.find((state) => `:${state.pseudo}` === token);
+          return state ? `:is(${state.selector})` : token;
+        });
+      };
       return items.map((a) => {
         try { return a.anchor?.selector ? document.querySelector(selectorWithFocus(a.anchor.selector)) : null; } catch { return null; }
       });
