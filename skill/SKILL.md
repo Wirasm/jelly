@@ -112,6 +112,8 @@ One question on an existing jelly, about one part of it:
 jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
   --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
   --why "Calmer, and the button stands out more" --at "#hero"
+# If that ask printed "since seq:42", copy its token into wait:
+jelly wait plan --since seq:42 --timeout 60
 jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
@@ -121,6 +123,10 @@ Several related questions, with options laid out side by side, make an ask page:
 ```bash
 jelly ask sharing --spec spec.json   # asking again starts a new round; open questions are withdrawn
 ```
+
+Its JSON reply includes `jelly`, `round`, `since` (for example, `"seq:57"`) and
+`next`, with a concrete `jelly wait sharing --since seq:57` command. Use the
+actual jelly name and token from that reply.
 
 ```json
 {
@@ -155,9 +161,26 @@ the start of your turn ("The person acted on your jellies…"). Act on it. Other
 jelly inbox                  # what they did in this project since you last asked
 jelly attention              # what still waits on them
 jelly see plan               # includes their answers and recent actions
-jelly wait [plan]            # block until someone other than you changes something
+jelly wait plan --since seq:42 --timeout 60  # use the token from your ask
+jelly wait [plan]            # future events only; includes live state
 jelly events [plan]          # stream every event as JSON lines
 ```
+
+`ask`, `look`, `call` and `reshape` print `since seq:N` from their own change.
+Copy that token when you wait: even an answer completed before wait connects is
+returned. `--since` returns the earliest recorded event strictly after N, by
+someone other than your `--as` / `JELLY_AS` identity. Leave NAME out to read across
+jellies, excluding the jelly page's own changes. Explicitly naming `surface`
+includes those changes.
+
+This mode prints a recorded event, without `state`. Read answers from `args`
+(`option` and `text`; an empty look answer means "seen"). For current state,
+run `jelly state NAME` separately. To continue after a result with `"seq": 58`,
+wait again with `--since seq:58`. Tokens use this daemon's retained history,
+survive restarts and jelly replacement, and do not belong to another home.
+`seq:0` reads from the beginning; a token beyond the current sequence waits for
+a later event. Without `--since`, wait only hears future live events. A timeout
+exits 2 with no event on stdout; no timeout means wait indefinitely.
 
 Comments: the person can Option-click any element of any jelly and say what should
 change. Answer on the same thread, and change the jelly if they asked for it:

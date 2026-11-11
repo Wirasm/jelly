@@ -216,8 +216,11 @@ enum Cmd {
     /// Say you are done changing a jelly.
     Done { name: String },
     /// Block until someone other than you changes the jelly, then print that
-    /// event and the state. This is how an agent waits for the person.
+    /// live event and state. With --since, print the first recorded change without state.
     Wait {
+        /// Exclusive starting point from a mutation (seq:N). Replays recorded events, without state.
+        #[arg(long)]
+        since: Option<SequenceToken>,
         /// Leave out to wait on every jelly (the jelly page's own changes are skipped).
         name: Option<String>,
         /// Give up after this many seconds (exit 2).
@@ -272,6 +275,22 @@ enum Cmd {
         #[arg(long)]
         resolve: bool,
     },
+}
+
+
+#[derive(Clone, Debug)]
+struct SequenceToken(u64);
+
+impl std::str::FromStr for SequenceToken {
+    type Err = String;
+
+    fn from_str(token: &str) -> Result<Self, Self::Err> {
+        token.strip_prefix("seq:")
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|n| n.parse().ok())
+            .map(Self)
+            .ok_or_else(|| "use seq:N from a mutation's output (N is an unsigned 64-bit sequence)".into())
+    }
 }
 
 
@@ -437,10 +456,24 @@ fn run(cli: Cli) -> Result<(), String> {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
             let r = send("POST", &api(&format!("/{}/ask", id(&name))), json!({"spec": spec, "project": project(), "by": by}))?;
             let jelly = r["jelly"].as_str().unwrap_or(&name).to_string();
-            print(json!({"jelly": jelly, "round": r["state"]["round"], "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}))
+            let since = format!("seq:{}", r["seq"]);
+            print(json!({"jelly": jelly, "round": r["state"]["round"], "since": since, "next": format!("jelly wait {jelly} --since {since}: the answers arrive as answer events")}))
         }
-        Cmd::Wait { name, timeout } => {
+        Cmd::Wait { name, timeout, since } => {
             let name = name.map(|n| id(&n));
+            if let Some(SequenceToken(seq)) = since {
+                let mut req = ureq::get(&format!("{}/api/wait", cli.url))
+                    .query("since", &seq.to_string()).query("by", &by);
+                if let Some(n) = &name { req = req.query("jelly", n); }
+                if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
+                let resp = req.call().map_err(describe)?;
+                if resp.status() == 204 {
+                    let what = name.as_deref().unwrap_or("any jelly");
+                    eprintln!("jelly: nobody changed {what} in time");
+                    std::process::exit(2);
+                }
+                return print(resp.into_json().map_err(|e| e.to_string())?);
+            }
             let filter = name.as_deref().map(|n| format!("?jelly={}", encode(n))).unwrap_or_default();
             let mut req = ureq::get(&format!("{}/api/events{filter}", cli.url));
             if let Some(t) = timeout {
@@ -667,7 +700,7 @@ fn report(ev: Value) -> Result<(), String> {
     };
     let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
     let changed = match changed.len() { 0 => String::new(), 1..=6 => format!(" · changed {}", changed.join(" ")), n => format!(" · changed {n} places") };
-    println!("{} v{}: {what}{changed}", s(&ev["jelly"]), ev["version"]);
+    println!("{} v{}: {what}{changed} · since seq:{}", s(&ev["jelly"]), ev["version"], ev["seq"]);
     Ok(())
 }
 

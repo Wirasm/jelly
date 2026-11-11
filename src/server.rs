@@ -13,8 +13,12 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
@@ -41,7 +45,7 @@ impl App {
         for ev in &evs {
             let _ = self.events.send(ev.clone());
         }
-        Ok(Json(json!({"jelly": evs.last().map(|e| e.jelly.clone()), "events": evs.len(), "state": evs.last().and_then(|e| e.state.clone())})))
+        Ok(Json(json!({"jelly": evs.last().map(|e| e.jelly.clone()), "events": evs.len(), "seq": evs.last().map(|e| e.seq), "state": evs.last().and_then(|e| e.state.clone())})))
     }
 
     /// Runs one store change and broadcasts its event. The store lock is what
@@ -88,6 +92,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         // A project's page is the same page, showing only that project's jellies.
         .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
         .route("/api/events", get(events))
+        .route("/api/wait", get(wait))
         .route("/api/ws", get(ws))
         .route("/api/jellies", get(list).post(create))
         .route("/api/jellies/{name}", get(show).delete(remove))
@@ -128,6 +133,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     axum::serve(listener, router).await
 }
 
+#[derive(Debug)]
 struct ApiError(Error);
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
@@ -338,6 +344,83 @@ async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Str
         SseEvent::default().json_data(&ev).ok().map(Ok)
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(Deserialize)]
+struct WaitQ {
+    since: u64,
+    by: String,
+    jelly: Option<String>,
+    timeout: Option<u64>,
+}
+
+async fn wait(State(app): State<Shared>, Query(q): Query<WaitQ>) -> Result<Response, ApiError> {
+    by(Some(q.by.clone()))?;
+    match wait_since(&app, &q).await? {
+        Some(ev) => Ok(Json(ev).into_response()),
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+    }
+}
+
+fn history_error(e: impl std::fmt::Display) -> Error {
+    Error::Invalid(format!("could not read event history: {e}"))
+}
+
+fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>, Error> {
+    let mut line = String::new();
+    while reader.read_line(&mut line).map_err(history_error)? != 0 {
+        let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
+        if ev.seq > q.since && ev.by != q.by
+            && q.jelly.as_ref().map_or(ev.jelly != PAGE, |j| *j == ev.jelly)
+        {
+            return Ok(Some(ev));
+        }
+        line.clear();
+    }
+    Ok(None)
+}
+
+async fn wait_since(app: &App, q: &WaitQ) -> Result<Option<Event>, Error> {
+    let rx = app.events.subscribe();
+    let deadline = q.timeout.map(|t| Instant::now().checked_add(Duration::from_secs(t))
+        .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
+    let mut reader = {
+        let store = app.store.lock().expect("store lock");
+        let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
+        if let Some(ev) = recorded_change(&mut reader, q)? {
+            return Ok(Some(ev));
+        }
+        if let Some(name) = &q.jelly { store.get(name)?; }
+        reader
+    };
+    wait_for_record(app, q, &mut reader, rx, deadline).await
+}
+
+async fn wait_for_record(
+    app: &App,
+    q: &WaitQ,
+    reader: &mut BufReader<File>,
+    mut rx: broadcast::Receiver<Event>,
+    deadline: Option<Instant>,
+) -> Result<Option<Event>, Error> {
+    loop {
+        let notification = if let Some(end) = deadline {
+            if Instant::now() >= end { return Ok(None); }
+            match tokio::time::timeout_at(end, rx.recv()).await {
+                Ok(result) => result,
+                Err(_) => return Ok(None),
+            }
+        } else {
+            rx.recv().await
+        };
+        // Commits are ordered under the store lock; broadcasts happen after it
+        // is released, so notifications only wake the reader, never choose a result.
+        let _store = app.store.lock().expect("store lock");
+        if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
+        if matches!(notification, Err(broadcast::error::RecvError::Closed)) {
+            return Err(Error::Invalid("the event stream ended".into()));
+        }
+    }
 }
 
 /// Browsers get events over one WebSocket per page. Server-sent events would
@@ -926,4 +1009,150 @@ struct AskReq {
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    fn fixture(capacity: usize) -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        for name in ["j", "other", PAGE] {
+            store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
+        }
+        let (events, _) = broadcast::channel(capacity);
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default() })
+    }
+
+    fn query(jelly: Option<&str>, since: u64) -> WaitQ {
+        WaitQ { since, by: "agent".into(), jelly: jelly.map(String::from), timeout: Some(0) }
+    }
+
+    fn note(app: &App, jelly: &str, who: &str) -> Event {
+        app.change(|s| s.note(jelly, "changed", who)).unwrap().0
+    }
+
+    #[tokio::test]
+    async fn history_is_exclusive_ordered_and_filtered_by_author_and_jelly() {
+        let (_dir, app) = fixture(16);
+        let start = note(&app, "j", "person");
+        note(&app, "j", "agent");
+        let surface = note(&app, PAGE, "person");
+        let other = note(&app, "other", "helper");
+        let first = note(&app, "j", "helper");
+        note(&app, "j", "person");
+        assert_eq!(wait_since(&app, &query(Some("j"), start.seq)).await.unwrap().unwrap().seq, first.seq);
+        assert_eq!(wait_since(&app, &query(None, start.seq)).await.unwrap().unwrap().seq, other.seq);
+        assert_eq!(wait_since(&app, &query(Some(PAGE), start.seq)).await.unwrap().unwrap().seq, surface.seq);
+        assert!(wait_since(&app, &query(None, u64::MAX)).await.unwrap().is_none());
+        assert!(matches!(wait_since(&app, &query(Some("missing"), 0)).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn history_survives_replacement_removal_and_restart() {
+        let (dir, mut app) = fixture(16);
+        let start = note(&app, "j", "agent");
+        let replacement = app.change(|s| s.create("j", "".into(), "const verbs = {};".into(), json!({}), "person", true, "", "")).unwrap().0;
+        assert!(replacement.version < start.version);
+        let removed = app.change(|s| s.remove("j", "person")).unwrap().0;
+        app.store = Mutex::new(Store::open(dir.path()).unwrap());
+        assert_eq!(wait_since(&app, &query(Some("j"), start.seq)).await.unwrap().unwrap().seq, replacement.seq);
+        assert_eq!(wait_since(&app, &query(Some("j"), replacement.seq)).await.unwrap().unwrap().seq, removed.seq);
+    }
+
+    #[tokio::test]
+    async fn eof_handoff_and_lag_recover_the_first_committed_answer() {
+        for lag in [false, true] {
+            let (dir, mut app) = fixture(1);
+            let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+            let q = query(Some("j"), ask.seq);
+            let rx = app.events.subscribe();
+            let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
+            assert!(recorded_change(&mut reader, &q).unwrap().is_none());
+            let answer = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap().0;
+            if lag { for _ in 0..4 { note(&app, "j", "agent"); } }
+            let result = wait_for_record(&app, &q, &mut reader, rx, Some(Instant::now() + Duration::from_secs(1))).await.unwrap().unwrap();
+            assert_eq!(result.seq, answer.seq);
+            assert_eq!(result.args.unwrap()["text"], "yes");
+            assert!(result.state.is_none());
+            app.store = Mutex::new(Store::open(dir.path()).unwrap());
+            assert_eq!(wait_since(&app, &q).await.unwrap().unwrap().seq, answer.seq);
+        }
+    }
+
+    #[tokio::test]
+    async fn notification_order_does_not_override_commit_order() {
+        let (_dir, app) = fixture(4);
+        let rx = app.events.subscribe();
+        let q = query(Some("j"), 0);
+        let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
+        assert!(recorded_change(&mut reader, &q).unwrap().is_none());
+        let (first, second) = {
+            let mut s = app.store.lock().unwrap();
+            (s.note("j", "first", "helper").unwrap(), s.note("j", "second", "person").unwrap())
+        };
+        app.events.send(second).unwrap();
+        let result = wait_for_record(&app, &q, &mut reader, rx, None).await.unwrap().unwrap();
+        assert_eq!(result.seq, first.seq);
+    }
+
+    #[tokio::test]
+    async fn ignored_activity_stays_pending_until_an_eligible_change() {
+        let (_dir, app) = fixture(8);
+        let mut q = query(Some("j"), 0);
+        q.timeout = None;
+        let future = wait_since(&app, &q);
+        tokio::pin!(future);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        note(&app, "j", "agent");
+        note(&app, "other", "person");
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        let expected = note(&app, "j", "helper");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
+    }
+
+    #[tokio::test]
+    async fn ignored_notifications_do_not_extend_the_deadline() {
+        let (_dir, app) = fixture(8);
+        let q = WaitQ { timeout: Some(1), ..query(Some("j"), 0) };
+        let producer = async {
+            loop {
+                note(&app, "j", "agent");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        let start = Instant::now();
+        tokio::select! {
+            result = wait_since(&app, &q) => assert!(result.unwrap().is_none()),
+            _ = producer => unreachable!(),
+            _ = tokio::time::sleep(Duration::from_secs(3)) => panic!("timeout was extended"),
+        }
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn ask_summary_keeps_its_batch_sequence_after_a_person_answers() {
+        let (_dir, app) = fixture(8);
+        let summary = app.change_many(|s| s.ask_round("sharing", &json!({"question": "Which?"}), ASK_VIEW, ASK_VERBS, "", "agent")).unwrap().0;
+        let seq = summary["seq"].as_u64().unwrap();
+        let answer = app.change(|s| s.answer("sharing", "a1", None, "quiet", "person")).unwrap().0;
+        assert!(answer.seq > seq);
+        let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
+        let q = WaitQ { by: "person".into(), ..query(Some("sharing"), seq - 1) };
+        let last = recorded_change(&mut reader, &q).unwrap().unwrap();
+        assert_eq!(last.seq, seq);
+        assert_eq!(last.kind, crate::store::EventKind::Attention);
+        assert_eq!(summary["state"]["round"], 1);
+    }
+
+    #[tokio::test]
+    async fn unreadable_or_malformed_history_is_an_error() {
+        let (_dir, app) = fixture(4);
+        let path = app.store.lock().unwrap().events_path();
+        std::fs::write(&path, "invalid json\n").unwrap();
+        assert!(wait_since(&app, &query(None, 0)).await.unwrap_err().to_string().contains("event history"));
+        std::fs::remove_file(path).unwrap();
+        assert!(wait_since(&app, &query(None, 0)).await.is_err());
+    }
 }
