@@ -287,18 +287,6 @@ fn main() -> ExitCode {
     }
 }
 
-fn preflight(cli: &Cli, start: impl FnOnce(bool) -> Result<(), String>) -> Result<bool, String> {
-    if matches!(cli.cmd, Cmd::Serve { .. }) || cli.url != startup::DEFAULT_URL {
-        return Ok(true);
-    }
-    let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true });
-    match start(quiet) {
-        Ok(()) => Ok(true),
-        Err(_) if quiet => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
 fn daemon_command() -> Result<std::process::Command, String> {
     let mut command = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
     command.arg("serve");
@@ -306,8 +294,15 @@ fn daemon_command() -> Result<std::process::Command, String> {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
-    if !preflight(&cli, |quiet| startup::ensure_running(&cli.url, quiet, daemon_command()?))? {
-        return Ok(());
+    run_with_start(cli, |url, quiet| startup::ensure_running(url, quiet, daemon_command()?))
+}
+
+fn run_with_start(cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), String> {
+    if !matches!(cli.cmd, Cmd::Serve { .. }) && cli.url == startup::DEFAULT_URL {
+        let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true });
+        if let Err(e) = start(&cli.url, quiet) {
+            return if quiet { Ok(()) } else { Err(e) };
+        }
     }
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone();
@@ -788,24 +783,38 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn startup_precedes_every_client_except_explicit_targets_and_serve() {
-        use super::{preflight, Cli};
+    fn startup_precedes_dispatch_and_hooks_suppress_its_errors() {
+        use super::{run_with_start, Cli};
         use clap::Parser;
         let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap();
         let command = super::daemon_command().unwrap();
         assert_eq!(command.get_program(), std::env::current_exe().unwrap());
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["serve"]);
         assert_eq!(command.get_envs().count(), 0, "inherit home and other environment defaults");
-        let mut cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "open"]);
-        assert!(preflight(&cli, |quiet| { assert!(!quiet); Ok(()) }).unwrap());
-        cli.url = "http://127.0.0.1:9999".into();
-        assert!(preflight(&cli, |_| panic!("custom URL must bypass startup")).unwrap());
-        let cli = parse(&["jelly", "serve"]);
-        assert!(preflight(&cli, |_| panic!("serve must bypass startup")).unwrap());
-        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "inbox", "--hook"]);
-        assert!(!preflight(&cli, |quiet| { assert!(quiet); Err("startup failed".into()) }).unwrap());
-        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "ls"]);
-        assert_eq!(preflight(&cli, |_| Err("startup failed".into())), Err("startup failed".into()));
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "open"]);
+        let result = run_with_start(cli, |url, quiet| {
+            assert_eq!(url, super::startup::DEFAULT_URL);
+            assert!(!quiet);
+            Err("startup failed before opening a browser".into())
+        });
+        assert_eq!(result, Err("startup failed before opening a browser".into()));
+        for project in ["", "test"] {
+            let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "inbox", "--hook"]);
+            assert_eq!(run_with_start(cli, |_, quiet| {
+                assert!(quiet);
+                Err("startup failed".into())
+            }), Ok(()));
+        }
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", "", "inbox", "--hook"]);
+        let mut called = false;
+        assert_eq!(run_with_start(cli, |_, quiet| { called = true; assert!(quiet); Ok(()) }), Ok(()));
+        assert!(called, "outside-project hook must start before its early return");
+
+        let home = tempfile::NamedTempFile::new().unwrap();
+        let cli = parse(&["jelly", "serve", "--port", "0", "--home", home.path().to_str().unwrap()]);
+        assert!(run_with_start(cli, |_, _| panic!("serve must bypass startup")).is_err());
+        let cli = parse(&["jelly", "--url", "http://127.0.0.1:9999", "--project", "", "inbox", "--hook"]);
+        assert_eq!(run_with_start(cli, |_, _| panic!("custom URL must bypass startup")), Ok(()));
     }
 
     #[test]
