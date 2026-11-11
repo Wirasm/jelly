@@ -553,35 +553,41 @@
       place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
   }
   function attentionAnchors(items, restoreFocus) {
-    const focusStates = ["focus", "focus-visible", "focus-within"].map((pseudo) => {
-      const attribute = `data-jf-${pseudo}`;
-      const elements = [...document.querySelectorAll(`:${pseudo}`)].filter((el) => !isOurs(el));
-      return { pseudo, attribute, elements: elements.map((el) => [el, el.getAttribute(attribute)]) };
-    });
+    const focusStates = ["focus", "focus-visible", "focus-within"].map((pseudo) => ({
+      pseudo, elements: [...document.querySelectorAll(`:${pseudo}`)].filter((el) => !isOurs(el)),
+    }));
     // Structural selectors need owned siblings absent, but detachment clears
-    // focus pseudos. Match their saved state while querying the original nodes.
-    const identifier = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\*[\s\S]*?\*\/|\\(?:[\da-fA-F]{1,6}\s?|[^\r\n\f])|:(?:[\w-]|\\(?:[\da-fA-F]{1,6}\s?|[^\r\n\f]))+/g;
-    const selectorWithFocus = (selector) => selector.replace(identifier, (token) => {
-      if (!token.startsWith(":")) return token;
-      const name = token.slice(1).replace(/\\([\da-fA-F]{1,6})\s?|\\([^\r\n\f])/g,
-        (_, hex, char) => hex ? String.fromCodePoint(parseInt(hex, 16) || 0xfffd) : char).toLowerCase();
-      const state = focusStates.find((state) => state.pseudo === name);
-      return state ? `[${state.attribute}]` : token;
-    });
+    // focus pseudos. Match saved elements by their paths in the original tree.
+    const identifier = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\*[\s\S]*?\*\/|\\(?:[\da-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[^\r\n\f])|:(?:[\w-]|\\(?:[\da-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[^\r\n\f]))+/g;
+    const elementPath = (el) => {
+      const path = [];
+      for (let node = el; node.parentElement; node = node.parentElement) {
+        let index = 1;
+        for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) index++;
+        path.unshift(`:nth-child(${index})`);
+      }
+      return [":root", ...path].join(" > ");
+    };
     const owned = [...document.querySelectorAll(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work")]
       .filter((el) => !el.parentElement || !isOurs(el.parentElement));
     const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
     try {
-      for (const state of focusStates) for (const [el] of state.elements) el.setAttribute(state.attribute, "");
       for (const el of owned) el.remove();
+      const focusSelectors = focusStates.map(({ pseudo, elements }) => ({
+        pseudo, selector: elements.map(elementPath).join(",") || ":not(*)",
+      }));
+      const selectorWithFocus = (selector) => selector.replace(identifier, (token) => {
+        if (!token.startsWith(":")) return token;
+        const name = token.slice(1).replace(/\\([\da-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f])/g,
+          (_, hex, char) => hex ? String.fromCodePoint(parseInt(hex, 16) || 0xfffd) : char).toLowerCase();
+        const state = focusSelectors.find((state) => state.pseudo === name);
+        return state ? `:is(${state.selector})` : token;
+      });
       return items.map((a) => {
         try { return a.anchor?.selector ? document.querySelector(selectorWithFocus(a.anchor.selector)) : null; } catch { return null; }
       });
     } finally {
       for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
-      for (const state of focusStates) for (const [el, value] of state.elements) {
-        if (value === null) el.removeAttribute(state.attribute); else el.setAttribute(state.attribute, value);
-      }
       restoreFocus();
     }
   }

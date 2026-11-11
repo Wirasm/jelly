@@ -359,6 +359,65 @@ async (page) => {
         const originals=[...parent.children].filter(el=>!el.classList.contains('jf-ask'));
         if(host.closest('.jf-slot').previousElementSibling!==originals.at(-2)) throw Error(kind+' escaped focus pseudo and literal attribute');
       },kind);
+      for (const whitespace of ['', ' ', '\t', '\n', '\r', '\f', '\r\n']) {
+        await page.evaluate(({kind,whitespace})=>{
+          items[0].anchor.selector=kind==='table'
+            ? '#table:fo\\63'+whitespace+'us-within tbody > tr:first-child'
+            : '#'+kind+':fo\\63'+whitespace+'us-within > :first-child';
+          if (!document.querySelector(items[0].anchor.selector)) throw Error(kind+' native escaped focus selector');
+          refresh();
+        },{kind,whitespace});
+        await settle();
+        await page.evaluate(({kind,whitespace})=>{
+          const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+          const anchor=parent.firstElementChild, host=document.getElementById('jf-q-focus');
+          if(host.closest('.jf-slot').previousElementSibling!==anchor) throw Error(kind+' escaped focus whitespace '+JSON.stringify(whitespace));
+          if(!screens.at(-1).below.includes('focus '+items[0].anchor.selector)) throw Error(kind+' escaped focus measurement '+JSON.stringify(whitespace));
+        },{kind,whitespace});
+      }
+      for (const pseudo of ['focus-within','focus','focus-visible']) {
+        await page.evaluate(({kind,pseudo})=>{
+          const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+          const anchor=parent.firstElementChild;
+          const decoy=group.cloneNode(true);
+          decoy.querySelectorAll('.jf-ask').forEach(el=>el.remove());
+          decoy.removeAttribute('id');
+          decoy.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
+          group.before(decoy);
+          window.focusDecoy=decoy;
+          const target=pseudo==='focus-within'?group:anchor;
+          const falseTarget=pseudo==='focus-within'?decoy:decoy.querySelector(kind==='table'?'tr':':scope > :first-child');
+          target.classList.add('focus-target'); falseTarget.classList.add('focus-target');
+          for(const name of ['focus','focus-visible','focus-within']) falseTarget.setAttribute('data-jf-'+name,'view-owned');
+          anchor.tabIndex=0; anchor.focus();
+          const suffix=pseudo==='focus-within'?(kind==='table'?' tbody > tr:first-child':' > :first-child'):'';
+          items[0].anchor.selector='.focus-target:'+pseudo+suffix;
+          if(document.querySelector(items[0].anchor.selector)!==anchor) throw Error(kind+' native focus identity '+pseudo);
+          refresh();
+        },{kind,pseudo});
+        await settle();
+        await page.evaluate(({kind,pseudo})=>{
+          const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+          const host=document.getElementById('jf-q-focus');
+          if(host.closest('.jf-slot').previousElementSibling!==parent.firstElementChild) throw Error(kind+' view marker collision '+pseudo);
+          const suffix=pseudo==='focus-within'?(kind==='table'?' tbody > tr:first-child':' > :first-child'):'';
+          items[0].anchor.selector='.focus-target:not([data-jf-'+pseudo+']):'+pseudo+suffix;
+          if(document.querySelector(items[0].anchor.selector)!==parent.firstElementChild) throw Error(kind+' native attribute selector '+pseudo);
+          refresh();
+        },{kind,pseudo});
+        await settle();
+        await page.evaluate(({kind,pseudo})=>{
+          if(!screens.at(-1).below.includes('focus '+items[0].anchor.selector)) throw Error(kind+' view attribute semantics '+pseudo);
+          const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+          const target=pseudo==='focus-within'?group:parent.firstElementChild;
+          for(const name of ['focus','focus-visible','focus-within']) {
+            if(target.hasAttribute('data-jf-'+name)) throw Error(kind+' temporary attribute leaked');
+            if(focusDecoy.querySelector('.focus-target')?.getAttribute('data-jf-'+name)!=='view-owned' && focusDecoy.getAttribute('data-jf-'+name)!=='view-owned') throw Error(kind+' view attribute changed');
+          }
+          target.classList.remove('focus-target');
+          focusDecoy.remove();
+        },{kind,pseudo});
+      }
     }
     if(errors.length) throw Error(errors.join('\n'));
     page.off('pageerror',onError);
