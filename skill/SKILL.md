@@ -50,6 +50,12 @@ jelly.read("other"); jelly.watch("other", fn);  // another jelly's state
 jelly.focus("other");                           // open another jelly
 jelly.asset("shot.png");                        // URL of a file added with jelly asset
 jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a question about #thumbs
+const stop = jelly.onAttend(item => {             // when the dock opens this question
+  if (item.anchor?.selector === "#details-title") {
+    document.querySelector("#details").hidden = false;
+  }
+});
+// stop() unsubscribes; registration does not call the handler.
 ```
 
 Keep data in state, not in page variables or localStorage, so you and the person
@@ -95,7 +101,8 @@ the jelly or ask about it. `see` lists the errors your page threw (`error` lines
 and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
 `jelly look` say in their reply where the card landed: below the element, at the
 top because nothing matched or the element is in a fixed or sticky part, or below
-an element that is not on screen right now. Clear your own
+an element that is not on screen right now. If adjacent placement is unavailable,
+the card is shown at the top and the reply says so after the browser measures it. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
@@ -104,7 +111,16 @@ its own, and the jelly page uses it as the thumbnail.
 Attention is everything you need from the person. Each question shows as a card
 in the page itself, right below the element `--at` points to (or at the top), and
 in their attention dock on the jelly page. They answer in place; an answered card
-shrinks to one line they can change.
+shrinks to one line they can change. If its anchor or adjacent card is hidden or
+clipped, the same card appears at the top with a line naming the part it is about.
+It returns beside the anchor when that part appears, keeping the draft and focus.
+
+`jelly.onAttend(fn)` notifies the view synchronously with the attention item before
+placement and focus, so it can reveal the part identified by `item.anchor.selector`.
+It returns an unsubscribe function. The runtime shows a fallback immediately;
+asynchronous reveals never delay it, and later DOM changes relocate the card.
+A presentation-only reveal can change the DOM as above; persistent selection
+changes still go through a verb with `jelly.call`.
 
 One question on an existing jelly, about one part of it:
 

@@ -675,6 +675,9 @@ fn report(ev: Value) -> Result<(), String> {
 /// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
     let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
+    if ev["anchor_exposed"] == true {
+        return format!("{at} is in a part that is unavailable right now, so the question is shown at the top");
+    }
     match ev["anchor"].as_str() {
         Some("below") => format!("it shows on the page below {at}"),
         Some("missing") => format!("{at} matches nothing on the page, so it shows at the top"),
@@ -772,6 +775,7 @@ mod tests {
         assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "hidden"})), "it shows below #list, which is not on screen right now");
+        assert_eq!(at(json!({"anchor": "hidden", "anchor_exposed": true})), "#list is in a part that is unavailable right now, so the question is shown at the top");
         let unchecked = at(json!({"anchor_unchecked": "no Chrome found"}));
         assert!(unchecked.contains("not checked (no Chrome found)") && !unchecked.starts_with("it shows on the page below"));
         assert_eq!(placement(&json!({"args": {"anchor": null}})), "it shows at the top of the page");

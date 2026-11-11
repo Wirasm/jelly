@@ -6,6 +6,7 @@
 //   jelly.read(name)            another jelly's state ("plan" means plan in this project)
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
 //   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
+//   jelly.onAttend(fn)          fn(item) when the dock opens a question; returns unsubscribe
 //   jelly.itemsAt("#thumbs")    questions asked about that element; .answer.option is the pick
 //
 // Comments anywhere: hold Option (Alt) and click any element, or press the
@@ -31,6 +32,7 @@
   let comments = boot.comments || boot.feedback || [];
   let attention = boot.attention || [];
   const attentionSubs = [];
+  const attendSubs = new Set();
   let working = boot.working || null;
   const subs = [];
   const enc = encodeURIComponent;
@@ -150,6 +152,7 @@
     itemsAt: (selector) => attention.filter((a) => a.anchor?.selector === selector && !a.withdrawn).reverse(),
     /** fn() now and whenever attention items or comments change. */
     onAttention(fn) { attentionSubs.push(fn); fn(); },
+    onAttend(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
     /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
     answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
     asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
@@ -318,6 +321,9 @@
     .rec b { color: var(--accent-ink); }
     .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
     .o { all: unset; box-sizing: border-box; cursor: pointer; padding: 11px 13px; border: 1.5px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); }
+    button:focus-visible, textarea:focus-visible, .c:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .exposure { color: var(--soft); font-size: 12px; margin-bottom: 8px; }
+    .exposure:empty { display: none; }
     .o:hover { border-color: var(--accent); }
     .o b { display: block; font-size: 15px; font-weight: 650; }
     .o span { display: block; font-size: 13px; color: var(--soft); margin-top: 2px; } .o span:empty { display: none; }
@@ -369,13 +375,15 @@
     const draft = root.querySelector("textarea")?.value || "";
     root.innerHTML = `<style>${CARD_CSS}</style><div class="c${answered ? " answered" : ""}"></div>`;
     const c = root.querySelector(".c");
+    c.tabIndex = -1;
+    c.setAttribute("aria-label", a.title);
     if (answered) {
       const o = opts.find((x) => x.id === a.answer.option);
       c.innerHTML = `<div class="done"><span class="q"></span><span class="a"></span><span class="n"></span><button class="chg">Change</button></div>`;
       c.querySelector(".q").textContent = a.title;
       c.querySelector(".a").textContent = "✓ " + (o ? o.label || o.id : a.kind === "look" ? "Seen" : "Answered");
       c.querySelector(".n").textContent = a.answer.text || "";
-      c.querySelector(".chg").onclick = () => { editing.add(a.id); renderCard(host, a); };
+      c.querySelector(".chg").onclick = () => { editing.add(a.id); drawAttention(); };
       return;
     }
     const rec = opts.find((o) => o.id === a.recommend);
@@ -411,13 +419,55 @@
     go.onclick = () => send(undefined);
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(undefined); } };
   }
+  function anchorElement(a) {
+    try { return a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch { return null; }
+  }
+  function available(el, whole = false) {
+    if (!el?.isConnected || el.closest("[inert]")) return false;
+    if (getComputedStyle(el).display === "contents") return [...el.children].some((c) => available(c, whole));
+    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const cs = getComputedStyle(p), b = p.getBoundingClientRect();
+      const left = b.left + p.clientLeft, top = b.top + p.clientTop;
+      const right = left + p.clientWidth, bottom = top + p.clientHeight;
+      if (["hidden", "clip"].includes(cs.overflowX) && (whole ? r.left < left - 1 || r.right > right + 1 : r.right <= left || r.left >= right)) return false;
+      if (["hidden", "clip"].includes(cs.overflowY) && (whole ? r.top < top - 1 || r.bottom > bottom + 1 : r.bottom <= top || r.top >= bottom)) return false;
+    }
+    return true;
+  }
   let topStack = null;
+  function atTop(host) {
+    if (!topStack?.isConnected) {
+      topStack = document.createElement("div");
+      topStack.className = "jf-ask jf-ask-top";
+      topStack.style.cssText = "display:block;grid-column:1/-1;flex-basis:100%;box-sizing:border-box;width:100%;min-width:0;max-width:calc(100vw - 32px);margin:14px 0";
+    }
+    if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
+    if (host.parentElement !== topStack) topStack.appendChild(host);
+  }
+  function exposureLabel(host, a, rescued) {
+    let label = host.shadowRoot.querySelector(".exposure");
+    if (!label) {
+      label = document.createElement("div");
+      label.className = "exposure";
+      host.shadowRoot.querySelector(".c").prepend(label);
+    }
+    const text = rescued ? `About ${a.anchor?.quote || a.anchor?.selector} · This part is hidden; the question is shown here.` : "";
+    if (label.textContent !== text) label.textContent = text;
+    host.toggleAttribute("data-exposed", rescued);
+  }
   function drawAttention() {
+    const focusedHost = document.hasFocus() ? [...cards.values()].find((h) => h.shadowRoot.activeElement) : null;
+    const focused = focusedHost?.shadowRoot.activeElement;
+    const selection = focused?.tagName === "TEXTAREA" ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+    const oldParent = focusedHost?.parentElement;
     const items = inline() ? [] : shownItems();
     const keep = new Set(items.map((a) => a.id));
     for (const [id, host] of cards) if (!keep.has(id)) { host.remove(); cards.delete(id); }
     if (!document.body) return;
-    const dark = pageIsDark();
+    const dark = pageIsDark(), tails = new Map();
     for (const a of items) {
       let host = cards.get(a.id);
       if (!host) {
@@ -430,35 +480,66 @@
       host.toggleAttribute("dark", dark);
       const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
-      const after = placeAfter(a);
-      if (after) { if (after.nextElementSibling !== host) after.after(host); }
-      else {
-        if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
-        if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
-        // Line up with the page's own content column.
-        const first = [...document.body.children].find((c) => !c.classList.contains("jf-ask") && c.getBoundingClientRect().width > 0);
-        const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
-        topStack.style.cssText = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
-        if (host.parentElement !== topStack) topStack.appendChild(host);
+      const after = placeAfter(a), anchor = anchorElement(a);
+      let rescued = !!after && !available(anchor);
+      if (after && !rescued) {
+        exposureLabel(host, a, false);
+        const previous = tails.get(after) || after;
+        if (previous.nextElementSibling !== host) previous.after(host);
+        rescued = !available(host, true);
+        if (!rescued) tails.set(after, host);
       }
+      if (!after || rescued) {
+        atTop(host);
+        const previous = tails.get(topStack);
+        if (previous && previous.nextElementSibling !== host) previous.after(host);
+        else if (!previous && topStack.firstElementChild !== host) topStack.prepend(host);
+        tails.set(topStack, host);
+      }
+      exposureLabel(host, a, rescued);
     }
     if (topStack && !topStack.children.length) topStack.remove();
+    if (focused?.isConnected) {
+      if (focusedHost.shadowRoot.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+        if (selection) focused.setSelectionRange(...selection);
+      }
+      if (oldParent !== focusedHost.parentElement) focused.scrollIntoView({ block: "nearest" });
+    }
+    postSnapshot();
   }
-  // Pages re-render; put cards back when a render drops or moves them.
   let drawQueued = false;
   const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawAttention(); }); } };
-  new MutationObserver((ms) => { if (ms.some((m) => ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && n.classList?.contains("jf-ask")))) queueDraw(); })
-    .observe(document.documentElement, { childList: true, subtree: true });
-  // The jelly page's dock opens a jelly on one item: scroll to its card.
-  addEventListener("message", (e) => {
-    if (e.origin !== location.origin || e.data?.type !== "jelly:attend") return;
+  new MutationObserver((ms) => {
+    if (ms.some((m) => !isOurs(m.target) && (m.type === "attributes" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "open", "class", "style", "inert"] });
+  for (const type of ["resize", "transitionend", "animationend"]) addEventListener(type, queueDraw);
+
+  let opening = 0;
+  async function openAttention(id) {
+    const request = ++opening;
+    let item = attention.find((a) => a.id === id);
+    if (!item) {
+      await refreshThreads();
+      if (request !== opening) return;
+      item = attention.find((a) => a.id === id);
+    }
+    if (!item || item.withdrawn) return;
+    for (const fn of attendSubs) { try { fn(item); } catch (e) { console.error(e); } }
     drawAttention();
-    const host = cards.get(e.data.id);
+    const host = inline() ? anchorElement(item) : cards.get(id);
     if (!host) return;
-    host.scrollIntoView({ block: "center", behavior: "smooth" });
-    const c = host.shadowRoot.querySelector(".c");
-    c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash");
-    host.shadowRoot.querySelector("textarea")?.focus({ preventScroll: true });
+    const root = host.shadowRoot || host;
+    const control = root.querySelector("button.o:not(:disabled), [data-pick]") || root.querySelector("textarea:not(:disabled)") || root.querySelector("button:not(:disabled)") || root.querySelector(".c") || host;
+    if (!control.hasAttribute("tabindex") && control === host) control.tabIndex = -1;
+    host.scrollIntoView({ block: "center" });
+    control.focus({ preventScroll: true });
+    control.scrollIntoView({ block: "nearest" });
+    const c = root.querySelector(".c");
+    if (c) { c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash"); }
+  }
+  addEventListener("message", (e) => {
+    if (e.origin === location.origin && e.data?.type === "jelly:attend") openAttention(e.data.id).catch(console.error);
   });
 
   // A page that shows its own questions (the ask page) opts out:
@@ -513,7 +594,7 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, missing: deadAnchors(), floating: anchorsThat("floating"), hidden: anchorsThat("hidden") }) }).catch(() => {});
+          page_height: document.documentElement.scrollHeight, missing: deadAnchors(), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"), exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id) }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   // Questions whose --at matches nothing on the page (they fall back to the top).
@@ -522,14 +603,14 @@
   }
   // Questions whose anchor is there but whose card is not where the agent thinks:
   // "floating" anchors sit in a fixed or sticky part, so the card went to the top;
-  // "hidden" anchors are not shown right now, so neither is the card below them.
+  // "hidden" describes the anchor independently of rescued card placement.
   function anchorsThat(kind) {
     return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => {
       let el = null;
       try { el = document.querySelector(a.anchor.selector); } catch {}
       if (!el) return false;
       const top = !placeAfter(a);
-      return kind === "floating" ? top : !top && el.getClientRects().length === 0;
+      return kind === "floating" ? top : !top && !available(el);
     }).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   addEventListener("load", postSnapshot);

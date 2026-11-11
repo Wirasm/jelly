@@ -497,7 +497,10 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
         match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
-            Ok(place) => out["anchor"] = json!(place),
+            Ok((place, exposed)) => {
+                out["anchor"] = json!(place);
+                if exposed { out["anchor_exposed"] = json!(true); }
+            },
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
     }
@@ -507,12 +510,9 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 /// How long an ask waits for a browser before it answers "not checked".
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Where an open item's card lands, from a snapshot taken after it was asked
-/// (one rendered now, or an open view's): "below" its anchor, or at the top
-/// because the anchor is "missing" or "floating" (in a fixed or sticky part),
-/// or below an anchor that is "hidden" right now. `Err` says why it could not
-/// be checked.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<&'static str, String> {
+/// Anchor classification and measured card exposure, from a snapshot taken
+/// after the item was asked. `Err` says why the browser could not check.
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<(&'static str, bool), String> {
     let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
@@ -524,7 +524,7 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version && s.at_ms >= asked).cloned();
         if let Some(s) = snap {
             let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-            return Ok(if lists(&s.missing) { "missing" } else if lists(&s.floating) { "floating" } else if lists(&s.hidden) { "hidden" } else { "below" });
+            return Ok((if lists(&s.missing) { "missing" } else if lists(&s.floating) { "floating" } else if lists(&s.hidden) { "hidden" } else { "below" }, s.exposed.iter().any(|id| id == item)));
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
@@ -636,6 +636,9 @@ struct Screen {
     /// Open questions whose anchor is on the page but not shown right now.
     #[serde(default)]
     hidden: Vec<String>,
+    /// Cards measured at the top because adjacent placement was unavailable.
+    #[serde(default)]
+    exposed: Vec<String>,
     #[serde(default)]
     page_height: u32,
 }
@@ -926,4 +929,17 @@ struct AskReq {
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
+}
+
+#[cfg(test)]
+mod screen_tests {
+    use super::Screen;
+
+    #[test]
+    fn older_screens_have_no_exposed_cards() {
+        let screen: Screen = serde_json::from_value(serde_json::json!({
+            "text": "page", "width": 1280, "height": 900, "version": 1
+        })).unwrap();
+        assert!(screen.exposed.is_empty());
+    }
 }
