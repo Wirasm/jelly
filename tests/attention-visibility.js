@@ -68,6 +68,14 @@ async page => {
   await frame.evaluate(() => { document.getElementById('details').hidden = true; void document.getElementById('details').offsetHeight; });
   await rescued(frame, id, true);
   assert(await frame.evaluate(() => savedHost.shadowRoot.activeElement?.value === 'keep this draft' && savedHost.shadowRoot.activeElement.selectionStart === 2 && savedHost.shadowRoot.activeElement.selectionEnd === 7), 'hide keeps focus and selection');
+  await frame.evaluate(() => { details.hidden = false; });
+  await rescued(frame, id, false);
+  await frame.evaluate(() => {
+    savedHost.shadowRoot.querySelector('button.o').focus();
+    details.hidden = true; void details.offsetHeight;
+  });
+  await rescued(frame, id, true);
+  assert(await frame.evaluate(() => savedHost.shadowRoot.activeElement?.matches('button.o')), 'hide preserves the latest control selected inside the shadow root');
   // Existing frames receive one callback; subscribers can reveal synchronously.
   await frame.evaluate(() => { reveal = 'immediate'; });
   frame = await dock(name, id);
