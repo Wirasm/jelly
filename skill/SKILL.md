@@ -174,9 +174,19 @@ jellies, excluding the jelly page's own changes. Explicitly naming `surface`
 includes those changes.
 
 This mode prints one recorded event, without `state`. Other changes can arrive
-before the answer. Check for `kind: "answer"` and the question's `args.id` (and
-`args.group` for a spec round); read its `args.option` and `args.text`. An empty
-look answer means "seen". If an event is not the answer you need, handle it and
+before the answer. Check for `kind: "answer"` and the attention item's `args.id`;
+read its `args.option` and `args.text`. For a spec round, also match `args.group`
+to `round-N` using the `round` returned by `ask --spec`.
+
+The spec question ID is an anchor, not the answer ID: `host` becomes `#q-host`.
+Run `jelly show sharing` and find the entry in `attention` whose
+`anchor.selector` is `#q-host` and whose `group` is the returned round, such as
+`round-1`. Copy that entry's `id`, such as `a1`, to match the answer's `args.id`.
+`jelly see sharing` also shows IDs and anchors for questions still waiting;
+`show` includes already answered items too. IDs advance across rounds, so obtain
+this mapping for each new round.
+
+An empty look answer means "seen". If an event is not the answer you need, handle it and
 wait again using its `seq`: after `"seq": 58`, use `--since seq:58`. Continue
 until the relevant answer arrives (all required answers for a spec round) or your
 time budget expires. Each invocation's `--timeout` starts a new timeout, so use

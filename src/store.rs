@@ -218,7 +218,7 @@ struct Snapshot {
     view_rev: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Entry {
     jelly: Jelly,
     undo: Vec<Snapshot>,
@@ -341,12 +341,24 @@ impl fmt::Display for Error {
     }
 }
 
+#[derive(Debug)]
+pub struct BatchError {
+    pub events: Vec<Event>,
+    pub error: Error,
+}
+
+impl From<Error> for BatchError {
+    fn from(error: Error) -> Self { Self { events: Vec::new(), error } }
+}
+
 pub struct Store {
     dir: PathBuf,
     jellies: BTreeMap<String, Entry>,
     seq: u64,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
+    #[cfg(test)]
+    pub log_failure: Option<(u64, usize)>,
 }
 
 impl Store {
@@ -368,7 +380,7 @@ impl Store {
         let seq = fs::read_to_string(dir.join("events.jsonl")).ok()
             .and_then(|t| t.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()?["seq"].as_u64()))
             .unwrap_or(0);
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None })
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None, #[cfg(test)] log_failure: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -542,14 +554,16 @@ impl Store {
         if self.jellies.contains_key(&id) {
             return Err(Error::Exists(id));
         }
-        let mut entry = self.jellies.remove(name).ok_or_else(|| Error::NotFound(name.into()))?;
+        let mut entry = self.jellies.get(name).ok_or_else(|| Error::NotFound(name.into()))?.clone();
         entry.jelly.name = id.clone();
         self.jellies.insert(id.clone(), entry);
+        let ev = self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new())?;
+        self.jellies.remove(name);
         let _ = fs::remove_file(self.path(name));
         if self.asset_dir(name).exists() {
             let _ = fs::rename(self.asset_dir(name), self.asset_dir(&id));
         }
-        self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new())
+        Ok(ev)
     }
 
     /// Archives unpinned jellies nobody touched for `idle_ms`, unless they still
@@ -601,8 +615,22 @@ impl Store {
         valid_file(file)?;
         let dir = self.asset_dir(name);
         self.entry(name)?;
-        fs::create_dir_all(&dir).and_then(|_| write_atomic(&dir.join(file), bytes)).map_err(|e| Error::Invalid(format!("could not save {file}: {e}")))?;
-        self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new())
+        let path = dir.join(file);
+        let previous = match fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(Error::Invalid(format!("could not read {file} before saving: {e}"))),
+        };
+        fs::create_dir_all(&dir).and_then(|_| write_atomic(&path, bytes)).map_err(|e| Error::Invalid(format!("could not save {file}: {e}")))?;
+        let result = self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "bytes": bytes.len()})), Vec::new());
+        if let Err(error) = &result {
+            let rollback = match previous {
+                Some(bytes) => write_atomic(&path, &bytes),
+                None => fs::remove_file(&path),
+            };
+            rollback.map_err(|e| Error::Invalid(format!("{error}; could not restore {file}: {e}")))?;
+        }
+        result
     }
 
     pub fn assets(&self, name: &str) -> Vec<String> {
@@ -627,11 +655,11 @@ impl Store {
     /// exist). Asking again starts a new round and withdraws what the last
     /// round left open. All or nothing: a bad question changes nothing.
     #[allow(clippy::too_many_arguments)]
-    pub fn ask_round(&mut self, name: &str, spec: &Value, view: &str, verbs_src: &str, project: &str, by: &str) -> Result<Vec<Event>, Error> {
+    pub fn ask_round(&mut self, name: &str, spec: &Value, view: &str, verbs_src: &str, project: &str, by: &str) -> Result<Vec<Event>, BatchError> {
         let single = spec.get("questions").is_none();
         let questions: Vec<Value> = if single { vec![spec.clone()] } else { spec["questions"].as_array().cloned().unwrap_or_default() };
         if questions.is_empty() {
-            return Err(Error::Invalid("an ask needs at least one question".into()));
+            return Err(Error::Invalid("an ask needs at least one question".into()).into());
         }
         let title = spec["title"].as_str().or(spec["question"].as_str()).unwrap_or("").to_string();
         let id = if project.is_empty() || name.contains(':') { name.to_string() } else { format!("{project}:{name}") };
@@ -651,23 +679,29 @@ impl Store {
             items.push(attention_from(&q, format!("a{}", start + i + 1), by)?);
         }
         let mut events = Vec::new();
-        if !exists {
-            events.push(self.create(&id, view.into(), verbs_src.into(), serde_json::json!({}), by, false, &title, "")?);
-        } else if self.get(&id)?.view != view {
-            events.push(self.reshape(&id, Some(view.into()), Some(verbs_src.into()), Some(title.clone()), by)?);
+        let result = (|| -> Result<(), Error> {
+            if !exists {
+                events.push(self.create(&id, view.into(), verbs_src.into(), serde_json::json!({}), by, false, &title, "")?);
+            } else if self.get(&id)?.view != view {
+                events.push(self.reshape(&id, Some(view.into()), Some(verbs_src.into()), Some(title.clone()), by)?);
+            }
+            let open: Vec<String> = self.get(&id)?.attention.iter().filter(|a| a.is_open()).map(|a| a.id.clone()).collect();
+            for a in open {
+                events.push(self.withdraw(&id, &a, by)?);
+            }
+            let setup = serde_json::json!({"title": title, "context": spec["context"], "round": round});
+            events.push(self.call(&id, "setup", setup, by)?);
+            for item in items {
+                let args = serde_json::to_value(&item).expect("serializes");
+                self.entry(&id)?.jelly.attention.push(item);
+                events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new())?);
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => Ok(events),
+            Err(error) => Err(BatchError { events, error }),
         }
-        let open: Vec<String> = self.get(&id)?.attention.iter().filter(|a| a.is_open()).map(|a| a.id.clone()).collect();
-        for a in open {
-            events.push(self.withdraw(&id, &a, by)?);
-        }
-        let setup = serde_json::json!({"title": title, "context": spec["context"], "round": round});
-        events.push(self.call(&id, "setup", setup, by)?);
-        for item in items {
-            let args = serde_json::to_value(&item).expect("serializes");
-            self.entry(&id)?.jelly.attention.push(item);
-            events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new())?);
-        }
-        Ok(events)
     }
 
     /// The person answers an item, or changes their answer: an option id,
@@ -712,11 +746,12 @@ impl Store {
     }
 
     pub fn remove(&mut self, name: &str, by: &str) -> Result<Event, Error> {
-        let entry = self.jellies.remove(name).ok_or_else(|| Error::NotFound(name.into()))?;
+        let jelly = self.get(name)?.clone();
+        let ev = self.event(&jelly, EventKind::Remove, by, None, None, Vec::new());
+        self.log(&ev)?;
+        self.jellies.remove(name);
         let _ = fs::remove_file(self.path(name));
         let _ = fs::remove_dir_all(self.asset_dir(name));
-        let ev = self.event(&entry.jelly, EventKind::Remove, by, None, None, Vec::new());
-        self.log(&ev)?;
         Ok(ev)
     }
 
@@ -744,9 +779,25 @@ impl Store {
         }
         let bytes = serde_json::to_vec(entry).expect("a jelly serializes");
         let jelly = entry.jelly.clone();
+        let previous = match fs::read(self.path(name)) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(Error::Invalid(format!("could not read {name} before saving: {e}"))),
+        };
         write_atomic(&self.path(name), &bytes).map_err(|e| Error::Invalid(format!("could not save {name}: {e}")))?;
         let mut ev = self.event(&jelly, kind, by, verb, args, changed);
-        self.log(&ev)?;
+        if let Err(error) = self.log(&ev) {
+            let rollback = if let Some(bytes) = previous {
+                let entry = serde_json::from_slice(&bytes).expect("previously saved entry");
+                self.jellies.insert(name.into(), entry);
+                write_atomic(&self.path(name), &bytes)
+            } else {
+                self.jellies.remove(name);
+                fs::remove_file(self.path(name))
+            };
+            rollback.map_err(|e| Error::Invalid(format!("{error}; could not restore {name}: {e}")))?;
+            return Err(error);
+        }
         ev.state = Some(jelly.state);
         Ok(ev)
     }
@@ -783,14 +834,20 @@ impl Store {
             }
             let mut line = serde_json::to_vec(ev).expect("an event serializes");
             line.push(b'\n');
-            if let Err(error) = file.write_all(&line) {
+            #[cfg(test)]
+            let write = if let Some((_, bytes)) = self.log_failure.filter(|(seq, _)| *seq == ev.seq) {
+                file.write_all(&line[..bytes.min(line.len())]).and_then(|()| Err(std::io::Error::other("injected partial append")))
+            } else { file.write_all(&line) };
+            #[cfg(not(test))]
+            let write = file.write_all(&line);
+            if let Err(error) = write {
                 // A failed append must not leave a fragment before the next event.
                 file.set_len(len).map_err(|rollback| std::io::Error::other(format!("{error}; could not remove partial record: {rollback}; repair events.jsonl before retrying")))?;
                 return Err(error);
             }
             Ok(())
         };
-        append().map_err(|e| Error::Invalid(format!("{} was already saved or removed, but could not record event: {e}; inspect the jelly before retrying", ev.jelly)))
+        append().map_err(|e| Error::Invalid(format!("could not record event for {}: {e}", ev.jelly)))
     }
 
     pub fn events_path(&self) -> PathBuf {
@@ -961,55 +1018,35 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_history_is_reported_by_every_mutation() {
-        for operation in ["create", "replace", "call", "call_from", "reshape", "set_state", "undo",
-            "comment", "resolve", "reply", "set_project", "archive", "restore", "note", "put_asset",
-            "attend", "ask_round", "answer", "withdraw", "working", "done", "pin", "remove", "sweep"] {
-            let (dir, mut s) = store();
-            s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-            s.call("j", "label", json!({"id": "x", "value": "x"}), "agent").unwrap();
-            s.comment("j", Value::Null, "Which?", "person").unwrap();
-            s.attend("j", json!({"title": "Which?"}), "agent").unwrap();
-            let path = dir.path().join("events.jsonl");
-            fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{").unwrap();
+    fn failed_log_restores_creation_replacement_move_and_assets() {
+        let (dir, mut s) = store();
+        let created = s.create("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        fs::create_dir_all(s.asset_dir("j")).unwrap();
+        fs::write(s.asset_dir("j").join("file.txt"), "kept").unwrap();
+        let path = s.events_path();
+        let original = fs::read(&path).unwrap();
+        for operation in ["create", "replace", "move", "new_asset", "replace_asset"] {
+            s.log_failure = Some((s.seq + 1, 10));
             let result = match operation {
                 "create" => s.create("new", "".into(), VERBS.into(), json!({}), "agent", false, "", ""),
-                "replace" => s.create("j", "".into(), VERBS.into(), json!({}), "agent", true, "", ""),
-                "call" => s.call("j", "label", json!({"id": "x", "value": "y"}), "agent"),
-                "call_from" => s.call_from("j", "label", json!({"id": "x", "value": "y"}), "person", Some(json!({"text": "click"}))),
-                "reshape" => s.reshape("j", Some("<p>new</p>".into()), None, None, "agent"),
-                "set_state" => s.set_state("j", "/new", Some(json!(true)), "agent"),
-                "undo" => s.undo("j", "agent"),
-                "comment" => s.comment("j", Value::Null, "More", "person"),
-                "resolve" => s.resolve("j", "c1", "agent"),
-                "reply" => s.reply("j", "c1", "Yes", "agent", true),
-                "set_project" => s.set_project("j", "other", "agent"),
-                "archive" => s.set_archived("j", true, "agent"),
-                "restore" => s.set_archived("j", false, "agent"),
-                "note" => s.note("j", "Note", "agent"),
-                "put_asset" => s.put_asset("j", "file.txt", b"hello", "agent"),
-                "attend" => s.attend("j", json!({"title": "Next?"}), "agent"),
-                "ask_round" => s.ask_round("new", &json!({"question": "Which?"}), "", VERBS, "", "agent").map(|mut events| events.pop().unwrap()),
-                "answer" => s.answer("j", "a1", None, "Yes", "person"),
-                "withdraw" => s.withdraw("j", "a1", "agent"),
-                "working" => s.set_working("j", Some("Editing"), "agent"),
-                "done" => s.set_working("j", None, "agent"),
-                "pin" => s.pin("j", true, "agent"),
-                "remove" => s.remove("j", "agent"),
-                "sweep" => {
-                    let j = &mut s.entry("j").unwrap().jelly;
-                    j.comments.clear();
-                    j.attention.clear();
-                    j.updated_ms = 0;
-                    assert!(s.sweep(0).is_empty());
-                    assert!(s.get("j").unwrap().archived);
-                    continue;
-                }
+                "replace" => s.create("j", "replacement".into(), VERBS.into(), json!({}), "agent", true, "", ""),
+                "move" => s.set_project("j", "other", "agent"),
+                "new_asset" => s.put_asset("j", "new.txt", b"new", "agent"),
+                "replace_asset" => s.put_asset("j", "file.txt", b"replacement", "agent"),
                 _ => unreachable!(),
             };
-            let error = result.unwrap_err().to_string();
-            assert!(error.contains("incomplete event history"), "{operation}: {error}");
-            assert!(error.contains("already saved or removed"), "{operation}: {error}");
+            assert!(result.is_err());
+            assert_eq!(s.get("j").unwrap().view, "original");
+            assert_eq!(s.get("j").unwrap().version, created.version);
+            assert!(s.get("new").is_err());
+            assert!(s.get("other:j").is_err());
+            let reopened = Store::open(dir.path()).unwrap();
+            assert_eq!(reopened.get("j").unwrap().view, "original");
+            assert!(reopened.get("new").is_err());
+            assert!(reopened.get("other:j").is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read_to_string(s.asset_dir("j").join("file.txt")).unwrap(), "kept");
+            assert!(!s.asset_dir("j").join("new.txt").exists());
         }
     }
 

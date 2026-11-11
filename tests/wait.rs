@@ -110,7 +110,17 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
         assert_eq!(output["jelly"], "test:sharing");
         assert_eq!(output["since"], format!("seq:{}", event["seq"]));
         assert!(output["next"].as_str().unwrap().contains(&format!("--since {}", output["since"].as_str().unwrap())));
-        if round == 2 { assert!(log.iter().any(|e| e["kind"] == "withdraw")); }
+        if round == 2 {
+            assert!(log.iter().any(|e| e["kind"] == "withdraw"));
+            let shown: Value = serde_json::from_str(&daemon.ok(&["show", "sharing"])).unwrap();
+            let item = shown["attention"].as_array().unwrap().iter().find(|a|
+                a["anchor"]["selector"] == "#q-one" && a["group"] == "round-2").unwrap();
+            assert_eq!(item["id"], "a2");
+            daemon.post(&format!("/api/jellies/test:sharing/attention/{}/answer", item["id"].as_str().unwrap()), json!({"option": "a", "by": "person"}));
+            let answer: Value = serde_json::from_str(&daemon.ok(&["wait", "sharing", "--since", output["since"].as_str().unwrap(), "--timeout", "0"])).unwrap();
+            assert_eq!(answer["args"]["id"], item["id"]);
+            assert_eq!(answer["args"]["group"], "round-2");
+        }
     }
     let bad_name = daemon.cli(&["wait", "missing", "--since", "seq:0", "--timeout", "10"]);
     assert_eq!(bad_name.status.code(), Some(1));
@@ -203,6 +213,23 @@ fn historical_short_names_still_fall_back_to_a_unique_existing_jelly() {
         let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
         let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
         assert_eq!(result["seq"], answer["seq"]);
+    }
+}
+
+#[test]
+fn a_later_local_jelly_cannot_redirect_a_fallback_wait() {
+    for remove_local in [false, true] {
+        let daemon = Daemon::start();
+        daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
+        let asked = daemon.ok(&["ask", "remote", "Which?"]);
+        daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
+        if remove_local {
+            ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
+        }
+        let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
+        assert_eq!(result["seq"], answer["seq"]);
+        assert_eq!(result["jelly"], "other:remote");
     }
 }
 

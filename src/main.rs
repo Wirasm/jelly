@@ -467,7 +467,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 let mut req = ureq::get(&format!("{}/api/wait", cli.url))
                     .query("since", &seq.to_string()).query("by", &by);
                 if let Some(n) = &name { req = req.query("jelly", n); }
-                if let Some(preferred) = project_jelly.filter(|p| Some(p) != name.as_ref()) {
+                if let Some(preferred) = project_jelly {
                     req = req.query("project_jelly", &preferred);
                 }
                 if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }

@@ -39,12 +39,17 @@ struct App {
 type Shared = Arc<App>;
 
 impl App {
-    /// Several store changes as one: every event is broadcast.
-    fn change_many(&self, f: impl FnOnce(&mut Store) -> Result<Vec<Event>, Error>) -> Result<Json<Value>, ApiError> {
-        let evs = f(&mut self.store.lock().expect("store lock"))?;
+    /// Broadcasts committed batch events even when a later change fails.
+    fn change_many(&self, f: impl FnOnce(&mut Store) -> Result<Vec<Event>, crate::store::BatchError>) -> Result<Json<Value>, ApiError> {
+        let result = f(&mut self.store.lock().expect("store lock"));
+        let (evs, error) = match result {
+            Ok(events) => (events, None),
+            Err(failed) => (failed.events, Some(failed.error)),
+        };
         for ev in &evs {
             let _ = self.events.send(ev.clone());
         }
+        if let Some(error) = error { return Err(error.into()); }
         Ok(Json(json!({"jelly": evs.last().map(|e| e.jelly.clone()), "events": evs.len(), "seq": evs.last().map(|e| e.seq), "state": evs.last().and_then(|e| e.state.clone())})))
     }
 
@@ -350,7 +355,7 @@ async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Str
 struct WaitQ {
     since: u64,
     by: String,
-    /// Prefer the current-project identity when it existed at the token or changed after it.
+    /// Resolve short names against the starting event and identity at that point.
     project_jelly: Option<String>,
     jelly: Option<String>,
     timeout: Option<u64>,
@@ -395,17 +400,23 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
         let mut store = app.store.lock().expect("store lock");
         let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
         if let Some(preferred) = &q.project_jelly {
-            let mut found = store.get(preferred).is_ok();
+            let mut found = false;
+            let mut token_identity = None;
             let mut line = String::new();
             while reader.read_line(&mut line).map_err(history_error)? != 0 {
                 let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
+                if ev.seq > q.since { break; }
                 if ev.jelly == *preferred {
-                    if ev.seq >= q.since { found = true; break; }
                     found = ev.kind != crate::store::EventKind::Remove;
+                }
+                if ev.seq == q.since && ev.jelly.rsplit(':').next() == preferred.rsplit(':').next() {
+                    token_identity = Some(ev.jelly);
+                    break;
                 }
                 line.clear();
             }
-            if found { q.jelly = Some(preferred.clone()); }
+            if let Some(identity) = token_identity { q.jelly = Some(identity); }
+            else if found { q.jelly = Some(preferred.clone()); }
             std::io::Seek::rewind(&mut reader).map_err(history_error)?;
         }
         if let Some(ev) = recorded_change(&mut reader, &q)? {
@@ -1176,7 +1187,7 @@ mod wait_tests {
     }
 
     #[test]
-    fn log_failures_are_reported_for_saved_changes_and_removal() {
+    fn log_failures_leave_answers_and_removals_uncommitted() {
         for failure in ["directory", "readonly", "partial"] {
             let (dir, app) = fixture(8);
             let _ = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap();
@@ -1204,18 +1215,14 @@ mod wait_tests {
                 let result = if remove {
                     app.change(|s| s.remove("j", "person"))
                 } else {
-                    app.change(|s| s.answer("j", "a1", None, "persisted despite log failure", "person"))
+                    app.change(|s| s.answer("j", "a1", None, "not accepted", "person"))
                 };
                 let error = result.unwrap_err().0.to_string();
-                assert!(error.contains("already saved or removed"), "{error}");
                 assert!(error.contains("could not record event"), "{error}");
                 assert!(rx.try_recv().is_err(), "failed changes must not be broadcast as accepted");
                 let reopened = Store::open(dir.path()).unwrap();
-                if remove {
-                    assert!(reopened.get("j").is_err());
-                } else {
-                    assert_eq!(reopened.get("j").unwrap().attention[0].answer.as_ref().unwrap().text, "persisted despite log failure");
-                }
+                assert!(reopened.get("j").unwrap().attention[0].answer.is_none());
+                assert!(app.store.lock().unwrap().get("j").unwrap().attention[0].answer.is_none());
             }
             if failure == "directory" {
                 std::fs::remove_dir(&path).unwrap();
@@ -1227,6 +1234,61 @@ mod wait_tests {
             let mut reader = BufReader::new(File::open(path).unwrap());
             assert_eq!(recorded_change(&mut reader, &query(Some("other"), 0)).unwrap().unwrap().seq, recovered.seq);
         }
+    }
+
+    #[tokio::test]
+    async fn partial_batches_publish_every_record_before_the_error() {
+        let spec = json!({"questions": [{"question": "First?"}, {"question": "Second?"}]});
+        for existing in [false, true] {
+            let count = if existing { 6 } else { 4 };
+            for successful in 0..count {
+                let (_dir, app) = fixture(16);
+                if existing {
+                    let _ = app.change_many(|s| s.ask_round("sharing", &spec, ASK_VIEW, ASK_VERBS, "", "agent")).unwrap();
+                    let _ = app.change(|s| s.reshape("sharing", Some("different view".into()), None, None, "agent")).unwrap();
+                }
+                let path = app.store.lock().unwrap().events_path();
+                let head = std::fs::read_to_string(&path).unwrap().lines().last()
+                    .map(|line| serde_json::from_str::<Event>(line).unwrap().seq).unwrap();
+                app.store.lock().unwrap().log_failure = Some((head + successful + 1, 10));
+                let mut rx = app.events.subscribe();
+                let q = WaitQ { by: "person".into(), timeout: Some(1), ..query(None, head) };
+                let waiting = wait_since(&app, &q);
+                tokio::pin!(waiting);
+                std::future::poll_fn(|cx| {
+                    assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+                    std::task::Poll::Ready(())
+                }).await;
+                assert!(app.change_many(|s| s.ask_round("sharing", &spec, ASK_VIEW, ASK_VERBS, "", "agent")).is_err());
+                for seq in head + 1..=head + successful {
+                    assert_eq!(rx.try_recv().unwrap().seq, seq);
+                }
+                assert!(rx.try_recv().is_err());
+                if successful > 0 {
+                    let event = waiting.await.unwrap().unwrap();
+                    assert_eq!(event.seq, head + 1);
+                    assert!(event.state.is_none());
+                }
+                let history = std::fs::read_to_string(path).unwrap();
+                assert_eq!(history.lines().last().map(|line| serde_json::from_str::<Event>(line).unwrap().seq), Some(head + successful));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_partial_append_restores_history_and_the_unanswered_item() {
+        let (dir, app) = fixture(8);
+        let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+        let path = app.store.lock().unwrap().events_path();
+        let original = std::fs::read(&path).unwrap();
+        app.store.lock().unwrap().log_failure = Some((ask.seq + 1, 10));
+        assert!(app.change(|s| s.answer("j", "a1", None, "yes", "person")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(app.store.lock().unwrap().get("j").unwrap().attention[0].answer.is_none());
+        assert!(Store::open(dir.path()).unwrap().get("j").unwrap().attention[0].answer.is_none());
+        app.store.lock().unwrap().log_failure = None;
+        let answer = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap().0;
+        assert_eq!(wait_since(&app, &query(Some("j"), ask.seq)).await.unwrap().unwrap().seq, answer.seq);
     }
 
     #[tokio::test]
