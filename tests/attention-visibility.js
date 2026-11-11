@@ -116,6 +116,17 @@ async page => {
     await rescued(frame, item.args.id, rescue);
     assert(!!item.anchor_exposed === rescue, `exposure diagnostic ${selector}`);
     if (selector === '#below') assert(item.anchor === 'below', 'offscreen anchors are scroll destinations');
+    if (selector === '#invisible') {
+      await frame.evaluate(() => document.querySelector('#invisible').parentElement.classList.remove('concealed'));
+      await rescued(frame, item.args.id, false);
+      await frame.evaluate(() => document.querySelector('#invisible').parentElement.classList.add('concealed'));
+      await rescued(frame, item.args.id, true);
+    }
+    const inViewport = await frame.locator(`#jf-q-${item.args.id}`).evaluate(h => {
+      const r = h.shadowRoot.activeElement.getBoundingClientRect();
+      return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+    });
+    assert(inViewport, `answer control in viewport ${selector}`);
     cases.push(selector);
   }
   // A reused frame can miss an update; opening an unknown id refreshes it once.
@@ -143,13 +154,16 @@ async page => {
   const twin = await ask('#tucked');
   frame = await dock(name, twin.args.id);
   await focused(frame, twin.args.id);
-  const stable = await frame.evaluate(async () => {
+  await frame.evaluate(() => { details.hidden = false; });
+  await rescued(frame, twin.args.id, false);
+  const stable = await frame.evaluate(async ids => {
     let moves = 0;
-    const o = new MutationObserver(ms => { moves += ms.filter(m => m.type === 'childList' && [...m.addedNodes,...m.removedNodes].some(n => n.classList?.contains('jf-ask'))).length; });
+    const o = new MutationObserver(ms => { moves += ms.filter(m => m.type === 'childList' && [...m.addedNodes,...m.removedNodes].some(n => ids.includes(n.id))).length; });
     o.observe(document.body, {childList:true,subtree:true});
+    dispatchEvent(new Event("resize"));
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     o.disconnect(); return moves;
-  });
+  }, [id,late.args.id,twin.args.id].map(id => `jf-q-${id}`));
   assert(stable === 0, 'stable destination order must not cause observer redraws');
   // Built-in grouped rounds use their existing inline question and focus a pick.
   const groupedName = `visibility:group-${Date.now()}`;
