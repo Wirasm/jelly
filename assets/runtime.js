@@ -297,7 +297,7 @@
     });
   }
   // ---- attention: questions sit on the page, right below what they are about ----
-  // Each question is a card in the page flow, after its anchor element (or at the
+  // Each question is a card in the page flow, after its anchor row (or at the
   // top when it has none). It lives in a shadow root so the page's CSS and ours
   // never touch. Answered questions shrink to one line for a day, with Change.
   const DAY_MS = 86400000;
@@ -324,7 +324,7 @@
     .o.rec-o b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
     .o.on { border-color: var(--accent); background: var(--tint); }
     .row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
-    textarea { flex: 1; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+    textarea { flex: 1; min-width: 0; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
     textarea:focus { outline: none; border-color: var(--accent); }
     .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent); color: #fff; white-space: nowrap; }
     .go[disabled] { opacity: .4; cursor: default; }
@@ -344,22 +344,98 @@
     const scheme = getComputedStyle(document.documentElement).colorScheme + " " + (document.querySelector('meta[name="color-scheme"]')?.content || "");
     return /dark/.test(scheme) && matchMedia("(prefers-color-scheme: dark)").matches;
   }
-  // Where a card goes: after its anchor, lifted out of grids, flex rows, lists and
-  // tables so it gets a full row; at the top when the anchor is missing or floats.
-  function placeAfter(a) {
-    let el = null;
-    try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
-    if (!el || el === document.body) return null;
-    if (el.closest(".jf-ask")) return null;
-    // A card cannot live inside a drawing: go below the whole SVG.
-    while (el.ownerSVGElement) el = el.ownerSVGElement;
-    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return null;
-    while (el.parentElement && el.parentElement !== document.body) {
+  function normalBoundary(el) {
+    while (el?.parentElement && el.parentElement !== document.body) {
       const p = el.parentElement, d = getComputedStyle(p).display;
-      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
+      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TFOOT", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
       else break;
     }
-    return el;
+    return el === document.body || el === document.documentElement ? null : el;
+  }
+  function fallback(group) {
+    return { kind: "block", after: normalBoundary(group), observe: group, status: "fallback", reason: "this layout cannot take a full-width question row" };
+  }
+  function rowPlacement(group, item) {
+    const cs = getComputedStyle(group), grid = cs.display.includes("grid");
+    if (cs.transform !== "none" || [...group.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) ||
+        cs.writingMode !== "horizontal-tb" || cs.direction !== "ltr" ||
+        (grid ? cs.gridAutoFlow !== "row" : cs.flexDirection !== "row" || cs.flexWrap !== "wrap")) return fallback(group);
+    const children = [...group.children].filter((el) => !isOurs(el) && el.getClientRects().length && !["absolute", "fixed"].includes(getComputedStyle(el).position));
+    const rows = [];
+    for (const el of children) {
+      const style = getComputedStyle(el), r = el.getBoundingClientRect();
+      if (style.order !== "0" || style.transform !== "none" || style.position === "relative" && [style.top, style.right, style.bottom, style.left].some((v) => v !== "auto" && parseFloat(v) !== 0) ||
+          (grid && [style.gridRowStart, style.gridRowEnd, style.gridColumnStart, style.gridColumnEnd].some((v) => v !== "auto"))) return fallback(group);
+      if (!r.width || !r.height) continue;
+      let row = rows.at(-1);
+      if (!row || r.top >= row.bottom - 1) { row = { top: r.top, bottom: r.bottom, members: [] }; rows.push(row); }
+      else if (r.bottom <= row.top + 1 || row.members.some((peer) => {
+        const pr = peer.getBoundingClientRect();
+        return r.left < pr.right - 1 && r.right > pr.left + 1;
+      })) return fallback(group);
+      row.top = Math.min(row.top, r.top); row.bottom = Math.max(row.bottom, r.bottom); row.members.push(el);
+    }
+    const i = rows.findIndex((row) => row.members.includes(item));
+    if (i < 0) return fallback(group);
+    return { kind: grid ? "grid" : "flex", group, after: rows[i].members.at(-1), peers: rows[i].members, later: rows.slice(i + 1).flatMap((row) => row.members) };
+  }
+  function tablePlacement(row) {
+    const table = row.closest("table"), rows = [...table.rows].filter((r) => !isOurs(r));
+    let occupied = [], rowGroup = null;
+    let columns = 0, crossing = false;
+    for (const r of rows) {
+      if (r.parentElement !== rowGroup) { occupied = []; rowGroup = r.parentElement; }
+      let col = 0;
+      for (const cell of r.cells) {
+        while (occupied[col] > 0) col++;
+        const span = cell.rowSpan || Infinity;
+        for (let i = 0; i < cell.colSpan; i++) occupied[col++] = span;
+      }
+      columns = Math.max(columns, occupied.length);
+      if (r === row) crossing = occupied.some((span) => span > 1);
+      for (let i = 0; i < occupied.length; i++) occupied[i] = Math.max(0, occupied[i] - 1);
+    }
+    return crossing ? fallback(table) : { kind: "table", group: table, after: row, columns, peers: [row], later: rows.slice(rows.indexOf(row) + 1) };
+  }
+  function listCanInsert(group) {
+    // Without an explicit start, a reversed list counts every li, including slots.
+    if (group.reversed && !group.hasAttribute("start")) return false;
+    return [...group.children].filter((el) => !isOurs(el)).every((el) => {
+      const increment = getComputedStyle(el).counterIncrement;
+      return ["none", "list-item 1", "list-item -1"].includes(increment) &&
+        ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(el, pseudo).content));
+    });
+  }
+  function resolvePlacement(a) {
+    let el = null;
+    try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
+    if (!el) return { kind: "block", after: null, status: a.anchor?.selector ? "missing" : "direct" };
+    if (el === document.body || el === document.documentElement || isOurs(el)) return { kind: "block", after: null, status: "floating" };
+    const hidden = el.getClientRects().length === 0;
+    const svg = !!el.ownerSVGElement;
+    while (el.ownerSVGElement) el = el.ownerSVGElement;
+    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return { kind: "block", after: null, status: "floating" };
+    if (hidden) return { kind: "block", after: normalBoundary(el), status: "hidden" };
+    el = el.closest("button, a, label, p, li, td, th") || el;
+    let result;
+    for (let item = el; item && item !== document.body; item = item.parentElement) {
+      const group = item.parentElement;
+      if (!group) break;
+      const display = getComputedStyle(group).display;
+      if (["TD", "TH"].includes(item.tagName)) { result = tablePlacement(item.parentElement); break; }
+      if (item.tagName === "TR") { result = tablePlacement(item); break; }
+      if (["UL", "OL"].includes(group.tagName) && !listCanInsert(group)) { result = fallback(group); break; }
+      if (display.includes("grid") || display.includes("flex")) { result = rowPlacement(group, item); break; }
+      if (item.tagName === "LI" && ["UL", "OL"].includes(group.tagName)) {
+        const siblings = [...group.children].filter((el) => !isOurs(el));
+        result = { kind: "list", after: item, group, peers: [item], later: siblings.slice(siblings.indexOf(item) + 1) };
+        break;
+      }
+    }
+    result ||= { kind: "block", after: normalBoundary(el) };
+    if (!result.status && result.kind === "block" && result.after !== el) { result.status = "fallback"; result.reason = "the anchor cannot contain a question card"; }
+    if (svg && !result.status) { result.status = "fallback"; result.reason = "the anchor is inside a drawing"; }
+    return result;
   }
   function renderCard(host, a) {
     const root = host.shadowRoot;
@@ -412,43 +488,113 @@
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(undefined); } };
   }
   let topStack = null;
+  let outcomes = new Map();
+  const slots = new Map();
+  const groupObserver = new ResizeObserver(() => queueDraw());
+  let observedGroups = new Set();
+  function slotFor(id, host, place) {
+    // The form's intrinsic width must not widen an auto-layout table.
+    host.style.contain = place.kind === "table" ? "inline-size" : "";
+    const tag = place.kind === "table" ? "tr" : place.kind === "list" || ["UL", "OL"].includes(place.group?.tagName) ? "li" : "div";
+    let slot = slots.get(id);
+    if (!slot || slot.localName !== tag) {
+      slot?.remove();
+      slot = document.createElement(tag);
+      slot.className = "jf-ask jf-slot";
+      slots.set(id, slot);
+      if (tag === "tr") slot.appendChild(document.createElement("td"));
+    }
+    const container = tag === "tr" ? slot.firstElementChild : slot;
+    if (host.parentElement !== container) container.appendChild(host);
+    let style = "display:block;min-width:0;box-sizing:border-box;";
+    if (tag === "li") style += "list-style:none;counter-increment:list-item 0;padding:0;";
+    if (place.kind === "grid") style += "grid-column:1 / -1;grid-row:auto;align-self:stretch;justify-self:stretch;";
+    if (place.kind === "flex") style += "flex:0 0 100%;";
+    if (tag === "tr") {
+      style = "";
+      const cell = slot.firstElementChild;
+      cell.colSpan = place.columns;
+      cell.style.cssText = "padding:0;min-width:0;";
+    }
+    if (slot.style.cssText !== style) slot.style.cssText = style;
+    return slot;
+  }
+  function insertSlot(slot, place, tails) {
+    if (place.after) {
+      const tail = tails.get(place.after) || place.after;
+      if (tail.nextElementSibling !== slot) tail.after(slot);
+      tails.set(place.after, slot);
+    } else {
+      if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
+      if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
+      const first = [...document.body.children].find((c) => !isOurs(c) && c.getBoundingClientRect().width > 0);
+      const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
+      const style = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
+      if (topStack.style.cssText !== style) topStack.style.cssText = style;
+      const tail = tails.get(topStack);
+      if (tail) { if (tail.nextElementSibling !== slot) tail.after(slot); }
+      else if (topStack.firstElementChild !== slot) topStack.prepend(slot);
+      tails.set(topStack, slot);
+    }
+  }
+  function rowFits(place, slot) {
+    const r = slot.getBoundingClientRect(), g = place.group.getBoundingClientRect(), cs = getComputedStyle(place.group);
+    if (place.kind === "table") {
+      const peer = place.after.getBoundingClientRect();
+      return Math.abs(r.left - peer.left) <= 1 && Math.abs(r.right - peer.right) <= 1 &&
+        peer.bottom <= r.top + 1 && place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
+    }
+    const left = g.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+    const right = g.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+    return Math.abs(r.left - left) <= 1 && Math.abs(r.right - right) <= 1 &&
+      place.peers.every((el) => el.getBoundingClientRect().bottom <= r.top + 1) &&
+      place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
+  }
   function drawAttention() {
     const items = inline() ? [] : shownItems();
     const keep = new Set(items.map((a) => a.id));
-    for (const [id, host] of cards) if (!keep.has(id)) { host.remove(); cards.delete(id); }
+    for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
     if (!document.body) return;
-    const dark = pageIsDark();
-    for (const a of items) {
+    // Measure original rows without detaching hosts (and losing focus/drafts).
+    const saved = [...slots.values()].map((slot) => [slot, slot.style.cssText]);
+    for (const [slot] of saved) slot.style.setProperty("display", "none", "important");
+    const placements = items.map((a) => resolvePlacement(a));
+    for (const [slot, style] of saved) slot.style.cssText = style;
+    const groups = new Set(placements.map((p) => p.group || p.observe).filter(Boolean));
+    for (const g of observedGroups) if (!groups.has(g)) groupObserver.unobserve(g);
+    for (const g of groups) if (!observedGroups.has(g)) groupObserver.observe(g);
+    observedGroups = groups;
+    const dark = pageIsDark(), tails = new Map();
+    items.forEach((a, i) => {
       let host = cards.get(a.id);
       if (!host) {
-        host = document.createElement("div");
-        host.className = "jf-ask";
-        host.id = `jf-q-${a.id}`;
-        host.attachShadow({ mode: "open" });
-        cards.set(a.id, host);
+        host = document.createElement("div"); host.className = "jf-ask"; host.id = `jf-q-${a.id}`;
+        host.attachShadow({ mode: "open" }); cards.set(a.id, host);
       }
       host.toggleAttribute("dark", dark);
       const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
-      const after = placeAfter(a);
-      if (after) { if (after.nextElementSibling !== host) after.after(host); }
-      else {
-        if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
-        if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
-        // Line up with the page's own content column.
-        const first = [...document.body.children].find((c) => !c.classList.contains("jf-ask") && c.getBoundingClientRect().width > 0);
-        const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
-        topStack.style.cssText = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
-        if (host.parentElement !== topStack) topStack.appendChild(host);
-      }
+      insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
+    });
+    const failed = placements.map((p, i) => p.peers && !rowFits(p, slots.get(items[i].id)));
+    if (failed.some(Boolean)) {
+      failed.forEach((fail, i) => { if (fail) placements[i] = fallback(placements[i].group); });
+      const settledTails = new Map();
+      items.forEach((a, i) => insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], settledTails));
     }
+    outcomes = new Map(items.map((a, i) => {
+      const p = placements[i];
+      return [a.id, { status: p.status || "direct", destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
+    }));
     if (topStack && !topStack.children.length) topStack.remove();
+    postSnapshot();
   }
-  // Pages re-render; put cards back when a render drops or moves them.
   let drawQueued = false;
-  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawAttention(); }); } };
-  new MutationObserver((ms) => { if (ms.some((m) => ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && n.classList?.contains("jf-ask")))) queueDraw(); })
-    .observe(document.documentElement, { childList: true, subtree: true });
+  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawMarkers(); }); } };
+  new MutationObserver((ms) => {
+    if (ms.some((m) => !isOurs(m.target.nodeType === 1 ? m.target : m.target.parentElement) &&
+      (m.type !== "childList" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden"], characterData: true });
   // The jelly page's dock opens a jelly on one item: scroll to its card.
   addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.data?.type !== "jelly:attend") return;
@@ -513,24 +659,12 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, missing: deadAnchors(), floating: anchorsThat("floating"), hidden: anchorsThat("hidden") }) }).catch(() => {});
+          page_height: document.documentElement.scrollHeight, missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
+          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
-  // Questions whose --at matches nothing on the page (they fall back to the top).
-  function deadAnchors() {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => { try { return !document.querySelector(a.anchor.selector); } catch { return true; } }).map((a) => `${a.id} ${a.anchor.selector}`);
-  }
-  // Questions whose anchor is there but whose card is not where the agent thinks:
-  // "floating" anchors sit in a fixed or sticky part, so the card went to the top;
-  // "hidden" anchors are not shown right now, so neither is the card below them.
   function anchorsThat(kind) {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => {
-      let el = null;
-      try { el = document.querySelector(a.anchor.selector); } catch {}
-      if (!el) return false;
-      const top = !placeAfter(a);
-      return kind === "floating" ? top : !top && el.getClientRects().length === 0;
-    }).map((a) => `${a.id} ${a.anchor.selector}`);
+    return attention.filter((a) => isOpen(a) && a.anchor?.selector && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
@@ -551,7 +685,8 @@
     if (!embedded && !optOut) document.body.appendChild(btn);
     drawMarkers();
     drawWorking();
-    new ResizeObserver(drawMarkers).observe(document.body);
+    new ResizeObserver(queueDraw).observe(document.body);
+    addEventListener("resize", queueDraw);
   });
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };

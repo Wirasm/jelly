@@ -497,7 +497,13 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
         match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
-            Ok(place) => out["anchor"] = json!(place),
+            Ok(place) => {
+                out["anchor"] = json!(place.status());
+                if let AnchorPlace::Fallback(f) = place {
+                    out["anchor_destination"] = json!(f.destination);
+                    out["anchor_reason"] = json!(f.reason);
+                }
+            },
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
     }
@@ -507,12 +513,8 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 /// How long an ask waits for a browser before it answers "not checked".
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Where an open item's card lands, from a snapshot taken after it was asked
-/// (one rendered now, or an open view's): "below" its anchor, or at the top
-/// because the anchor is "missing" or "floating" (in a fixed or sticky part),
-/// or below an anchor that is "hidden" right now. `Err` says why it could not
-/// be checked.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<&'static str, String> {
+/// Placement from a fresh browser snapshot; failure to render does not undo the ask.
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<AnchorPlace, String> {
     let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
@@ -523,8 +525,7 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         // a jelly this one replaced: only a snapshot taken since counts.
         let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version && s.at_ms >= asked).cloned();
         if let Some(s) = snap {
-            let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-            return Ok(if lists(&s.missing) { "missing" } else if lists(&s.floating) { "floating" } else if lists(&s.hidden) { "hidden" } else { "below" });
+            return Ok(s.placement(item));
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
@@ -614,6 +615,50 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
 
 // ---- the agent view -------------------------------------------------------
 
+#[derive(serde::Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum AnchorDestination {
+    Top,
+    After { selector: String },
+}
+
+impl AnchorDestination {
+    fn describe(&self) -> String {
+        match self {
+            Self::Top => "at the top".into(),
+            Self::After { selector } => format!("after {selector}"),
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+struct AnchorFallback {
+    id: String,
+    destination: AnchorDestination,
+    reason: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum AnchorPlace {
+    Below,
+    Missing,
+    Floating,
+    Hidden,
+    Fallback(AnchorFallback),
+}
+
+impl AnchorPlace {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Below => "below",
+            Self::Missing => "missing",
+            Self::Floating => "floating",
+            Self::Hidden => "hidden",
+            Self::Fallback(_) => "fallback",
+        }
+    }
+}
+
 /// What a browser shows of a jelly, as text, posted by the runtime for `jelly see`.
 #[derive(Deserialize, Clone)]
 struct Screen {
@@ -638,6 +683,19 @@ struct Screen {
     hidden: Vec<String>,
     #[serde(default)]
     page_height: u32,
+    #[serde(default)]
+    fallback: Vec<AnchorFallback>,
+}
+
+impl Screen {
+    fn placement(&self, item: &str) -> AnchorPlace {
+        let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
+        if lists(&self.missing) { AnchorPlace::Missing }
+        else if lists(&self.floating) { AnchorPlace::Floating }
+        else if lists(&self.hidden) { AnchorPlace::Hidden }
+        else if let Some(f) = self.fallback.iter().find(|f| f.id == item) { AnchorPlace::Fallback(f.clone()) }
+        else { AnchorPlace::Below }
+    }
 }
 
 async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> StatusCode {
@@ -814,6 +872,9 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
             line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; it shows at the top instead"));
         }
+        for f in &sc.fallback {
+            line(&mut out, format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
+        }
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
@@ -926,4 +987,39 @@ struct AskReq {
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_selects_the_actual_destination_for_this_item() {
+        let mut screen: Screen = serde_json::from_value(json!({
+            "text": "", "width": 1280, "height": 900, "version": 3,
+            "fallback": [
+                {"id": "a1", "destination": {"kind": "after", "selector": "#tiles"}, "reason": "layout"},
+                {"id": "a2", "destination": {"kind": "top"}, "reason": "no boundary"}
+            ]
+        })).unwrap();
+        assert_eq!(screen.placement("other"), AnchorPlace::Below);
+        let AnchorPlace::Fallback(first) = screen.placement("a1") else { panic!("expected fallback") };
+        assert_eq!(first.destination.describe(), "after #tiles");
+        assert_eq!(first.reason, "layout");
+        let AnchorPlace::Fallback(second) = screen.placement("a2") else { panic!("expected fallback") };
+        assert_eq!(second.destination, AnchorDestination::Top);
+        screen.hidden.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), AnchorPlace::Hidden);
+        screen.floating.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), AnchorPlace::Floating);
+        screen.missing.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), AnchorPlace::Missing);
+    }
+
+    #[test]
+    fn old_snapshots_default_to_below() {
+        let screen: Screen = serde_json::from_value(json!({"text":"", "width":1, "height":1, "version":1})).unwrap();
+        assert!(screen.fallback.is_empty());
+        assert_eq!(screen.placement("a1"), AnchorPlace::Below);
+    }
 }
