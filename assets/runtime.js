@@ -406,9 +406,7 @@
         ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(el, pseudo).content));
     });
   }
-  function resolvePlacement(a) {
-    let el = null;
-    try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
+  function resolvePlacement(a, el) {
     if (!el) return { kind: "block", after: null, status: a.anchor?.selector ? "missing" : "direct" };
     if (el === document.body || el === document.documentElement || isOurs(el)) return { kind: "block", after: null, status: "floating" };
     const hidden = el.getClientRects().length === 0;
@@ -554,26 +552,63 @@
       place.peers.every((el) => el.getBoundingClientRect().bottom <= r.top + 1) &&
       place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
   }
+  function attentionAnchors(items, restoreFocus) {
+    const focusStates = ["focus", "focus-visible", "focus-within"].map((pseudo) => {
+      const attribute = `data-jf-${pseudo}`;
+      const elements = [...document.querySelectorAll(`:${pseudo}`)].filter((el) => !isOurs(el));
+      return { pseudo, attribute, elements: elements.map((el) => [el, el.getAttribute(attribute)]) };
+    });
+    // Structural selectors need owned siblings absent, but detachment clears
+    // focus pseudos. Match their saved state while querying the original nodes.
+    const identifier = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\*[\s\S]*?\*\/|\\(?:[\da-fA-F]{1,6}\s?|[^\r\n\f])|:(?:[\w-]|\\(?:[\da-fA-F]{1,6}\s?|[^\r\n\f]))+/g;
+    const selectorWithFocus = (selector) => selector.replace(identifier, (token) => {
+      if (!token.startsWith(":")) return token;
+      const name = token.slice(1).replace(/\\([\da-fA-F]{1,6})\s?|\\([^\r\n\f])/g,
+        (_, hex, char) => hex ? String.fromCodePoint(parseInt(hex, 16) || 0xfffd) : char).toLowerCase();
+      const state = focusStates.find((state) => state.pseudo === name);
+      return state ? `[${state.attribute}]` : token;
+    });
+    const owned = [...document.querySelectorAll(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work")]
+      .filter((el) => !el.parentElement || !isOurs(el.parentElement));
+    const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
+    try {
+      for (const state of focusStates) for (const [el] of state.elements) el.setAttribute(state.attribute, "");
+      for (const el of owned) el.remove();
+      return items.map((a) => {
+        try { return a.anchor?.selector ? document.querySelector(selectorWithFocus(a.anchor.selector)) : null; } catch { return null; }
+      });
+    } finally {
+      for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
+      for (const state of focusStates) for (const [el, value] of state.elements) {
+        if (value === null) el.removeAttribute(state.attribute); else el.setAttribute(state.attribute, value);
+      }
+      restoreFocus();
+    }
+  }
   function drawAttention() {
     const focused = document.activeElement?.shadowRoot?.activeElement || document.activeElement;
     const selection = focused && "selectionStart" in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+    const restoreFocus = () => {
+      if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+        if (selection) focused.setSelectionRange(...selection);
+      }
+    };
     const allItems = shownItems();
     const selfRendered = inline();
     const items = selfRendered ? [] : allItems;
     const keep = new Set(items.map((a) => a.id));
     for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
     if (!document.body) return;
-    // Query the live view without runtime siblings so structural and focus
-    // selectors retain their meaning. Restore owned nodes before applying layout.
-    const owned = [...document.querySelectorAll(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work")]
-      .filter((el) => !el.parentElement || !isOurs(el.parentElement));
-    const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
+    const anchors = attentionAnchors(allItems, restoreFocus);
+    const positions = [...slots.values()].filter((slot) => slot.isConnected).map((slot) => [slot, slot.style.cssText]);
     let placements;
     try {
-      for (const el of owned) el.remove();
-      placements = allItems.map((a) => resolvePlacement(a));
+      // Keep focus and :focus-within live while taking cards out of row flow.
+      for (const [slot] of positions) slot.style.setProperty("position", "absolute", "important");
+      placements = allItems.map((a, i) => resolvePlacement(a, anchors[i]));
     } finally {
-      for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
+      for (const [slot, style] of positions) slot.style.cssText = style;
     }
     const groups = new Set(placements.map((p) => p.group || p.observe).filter(Boolean));
     for (const g of observedGroups) if (!groups.has(g)) groupObserver.unobserve(g);
@@ -591,22 +626,20 @@
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
       insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
     });
+    restoreFocus();
     const failed = items.map((a, i) => placements[i].peers && !rowFits(placements[i], slots.get(a.id)));
     if (failed.some(Boolean)) {
       failed.forEach((fail, i) => { if (fail) placements[i] = fallback(placements[i].group); });
       const settledTails = new Map();
       items.forEach((a, i) => insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], settledTails));
     }
+    restoreFocus();
     outcomes = new Map((refreshingAttention ? [] : allItems).map((a, i) => {
       const p = placements[i];
       const status = selfRendered && !["missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
       return [a.id, { status, destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
     }));
     if (topStack && !topStack.children.length) topStack.remove();
-    if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
-      focused.focus({ preventScroll: true });
-      if (selection) focused.setSelectionRange(...selection);
-    }
     postSnapshot();
   }
   let drawQueued = false;
@@ -692,11 +725,13 @@
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   let refreshingAttention = false;
+  let attentionRefresh = 0;
   async function refreshThreads() {
+    const refresh = ++attentionRefresh;
     refreshingAttention = true;
     outcomes.clear();
     const r = await fetch(api);
-    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; refreshingAttention = false; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
+    if (r.ok) { const j = await r.json(); if (refresh !== attentionRefresh) return; comments = j.comments || []; attention = j.attention || []; working = j.working || null; refreshingAttention = false; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
   }
 
   addEventListener("DOMContentLoaded", () => {

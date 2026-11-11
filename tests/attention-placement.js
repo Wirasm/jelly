@@ -274,6 +274,92 @@ async (page) => {
     });
     await settle();
     await page.evaluate(()=>assert(screens.at(-1).fallback.some(f=>f.id==='body'),'settled refresh measures placement'));
+    for (const [newestFirst,eventKind] of ['attention','answer','withdraw','comment','resolve','reply'].map((kind,i)=>[i%2===1,kind])) {
+      await page.evaluate((eventKind)=>{
+        window.pending=[];
+        window.fetch=(url,opts)=>opts ? fetchBeforeDelay(url,opts) : new Promise(resolve=>pending.push(resolve));
+        for (let i=0;i<2;i++) {
+          window.eventVersion=(window.eventVersion||2)+1;
+          socket.onmessage({data:JSON.stringify({jelly:'test:placement',kind:eventKind,version:eventVersion,state:{},view_rev:1})});
+        }
+        window.oldAttention=[{id:'body',kind:'ask',title:'Old',by:'test',anchor:{selector:'#body-item'}}];
+        window.newAttention=[{id:'body',kind:'ask',title:'New',by:'test',anchor:{selector:'#absent'}}];
+      },eventKind);
+      await page.evaluate((newestFirst)=>{
+        const i=newestFirst?1:0;
+        pending[i]({ok:true,json:async()=>({attention:i?newAttention:oldAttention})});
+        document.getElementById('body-item').textContent='Overlapping refresh';
+      },newestFirst);
+      await settle();
+      await page.evaluate((newestFirst)=>{
+        const screen=screens.at(-1);
+        assert(screen.version===eventVersion,'overlapping refresh snapshot has current version');
+        assert(!screen.below.length && !screen.fallback.length,'older refresh cannot certify current placement');
+        assert(newestFirst ? screen.missing.includes('body #absent') : !screen.missing.length,'only latest completed refresh publishes diagnostics');
+        const i=newestFirst?0:1;
+        pending[i]({ok:true,json:async()=>({attention:i?newAttention:oldAttention})});
+        document.getElementById('body-item').textContent='Both refreshes finished';
+      },newestFirst);
+      await settle();
+      await page.evaluate(()=>{
+        assert(screens.at(-1).missing.includes('body #absent'),'late older response cannot overwrite current attention');
+        assert(host('body').shadowRoot.querySelector('h3').textContent==='New','latest card retained');
+        window.fetch=fetchBeforeDelay;
+      });
+    }
+    for (const kind of ['grid','flex','list','table']) {
+      await page.goto('http://127.0.0.1:7889/tests/attention-placement.html?agent=1');
+      await settle();
+      await page.evaluate((kind)=>{
+        const group=document.getElementById(kind);
+        const selector=kind==='table'?'#table:focus-within tbody > tr:first-child':`#${kind}:focus-within > :first-child`;
+        const anchor=group.querySelector(kind==='table'?'tr':':scope > :first-child');
+        document.head.insertAdjacentHTML('beforeend','<style>#grid:focus-within {grid-template-columns:1fr} #flex:focus-within > button {flex-basis:100%}</style>');
+        anchor.tabIndex=0; anchor.focus();
+        window.items=[{id:'focus',kind:'ask',title:'Focus',by:'test',anchor:{selector}}];
+        refresh();
+      },kind);
+      await settle();
+      await page.locator('#jf-q-focus textarea').fill('Still typing');
+      await page.locator('#jf-q-focus textarea').focus();
+      await page.evaluate(()=>refresh());
+      await settle();
+      await page.evaluate((kind)=>{
+        const host=document.getElementById('jf-q-focus'), slot=host.closest('.jf-slot');
+        const anchor=document.getElementById(kind).querySelector(kind==='table'?'tr':':scope > :first-child');
+        const later=[...anchor.parentElement.children].filter(el=>!el.classList.contains('jf-ask')).slice(1);
+        const r=host.getBoundingClientRect();
+        if(slot.previousElementSibling!==anchor) throw Error(kind+' focus-dependent boundary');
+        if(!later.every(el=>el.getBoundingClientRect().top>=r.bottom-1)) throw Error(kind+' focused card precedes later rows');
+        if(!screens.at(-1).below.some(m=>m.startsWith('focus '))) throw Error(kind+' positive focused measurement');
+        if(host.shadowRoot.activeElement?.value!=='Still typing') throw Error(kind+' focus draft retained');
+      },kind);
+      // Combine focus state with a structural selector that counts from the end.
+      await page.evaluate((kind)=>{
+        items[0].anchor.selector=kind==='table'?'#table:focus-within tbody > tr:nth-last-child(2)':`#${kind}:focus-within > :nth-last-child(2)`;
+        refresh();
+      },kind);
+      await settle();
+      await page.evaluate((kind)=>{
+        const host=document.getElementById('jf-q-focus');
+        const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+        const originals=[...parent.children].filter(el=>!el.classList.contains('jf-ask'));
+        if(host.closest('.jf-slot').previousElementSibling!==originals.at(-2)) throw Error(kind+' focus and structural selector identity');
+      },kind);
+      await page.evaluate((kind)=>{
+        const group=document.getElementById(kind), parent=kind==='table'?group.tBodies[0]:group;
+        for (const el of parent.children) if (!el.classList.contains('jf-ask')) el.dataset.focusProbe=':focus-within';
+        items[0].anchor.selector=items[0].anchor.selector.replace(':focus-within', ':is(:f\\6f cus-within)/*:focus*/')+'[data-focus-probe=":focus-within'+String.fromCharCode(92,10)+'"]';
+        refresh();
+      },kind);
+      await settle();
+      await page.evaluate((kind)=>{
+        const host=document.getElementById('jf-q-focus'), group=document.getElementById(kind);
+        const parent=kind==='table'?group.tBodies[0]:group;
+        const originals=[...parent.children].filter(el=>!el.classList.contains('jf-ask'));
+        if(host.closest('.jf-slot').previousElementSibling!==originals.at(-2)) throw Error(kind+' escaped focus pseudo and literal attribute');
+      },kind);
+    }
     if(errors.length) throw Error(errors.join('\n'));
     page.off('pageerror',onError);
     results.push({width,passed:true});
