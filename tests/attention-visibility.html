@@ -3,6 +3,7 @@
 <style>
 body { min-height: 4000px; margin: 16px; font: 16px system-ui; }
 section { margin: 12px 0; }
+[data-visible="false"] { opacity: 0; }
 .concealed { visibility: hidden; }
 .clipped { height: 50px; overflow: hidden; }
 .clipped p { transform: translateY(200px); }
@@ -10,6 +11,7 @@ section { margin: 12px 0; }
 <button id="show" onclick="details.hidden = !details.hidden">Show details</button>
 <section id="details" hidden><p id="tucked">The tucked-away part</p></section>
 <details><summary>Closed section</summary><p id="closed">Inside details</p></details>
+<section data-visible="false"><p id="attribute">Attribute controlled</p></section>
 <section class="concealed"><p id="invisible">Invisible</p></section>
 <section style="opacity:0"><p id="transparent">Transparent</p></section>
 <section inert><p id="inert">Inert</p></section>

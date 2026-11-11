@@ -101,8 +101,8 @@
       return;
     }
     if (ev.view_rev !== boot.viewRev) { location.reload(); return; }
-    if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads();
-    if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads();
+    if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
+    if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads().catch(console.error);
     if (ev.kind === "working") { working = ev.args ? { what: ev.args, by: ev.by } : null; drawWorking(); }
     apply(ev);
   });
@@ -353,8 +353,7 @@
   // Where a card goes: after its anchor, lifted out of grids, flex rows, lists and
   // tables so it gets a full row; at the top when the anchor is missing or floats.
   function placeAfter(a) {
-    let el = null;
-    try { el = a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch {}
+    let el = anchorElement(a);
     if (!el || el === document.body) return null;
     if (el.closest(".jf-ask")) return null;
     // A card cannot live inside a drawing: go below the whole SVG.
@@ -420,7 +419,10 @@
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(undefined); } };
   }
   function anchorElement(a) {
-    try { return a.anchor?.selector ? document.querySelector(a.anchor.selector) : null; } catch { return null; }
+    const selector = a.anchor?.selector;
+    const question = inline() && selector?.startsWith("#q-") ? document.getElementById(selector.slice(1)) : null;
+    if (question) return question;
+    try { return selector ? document.querySelector(selector) : null; } catch { return null; }
   }
   function available(el, whole = false) {
     if (!el?.isConnected || el.closest("[inert]")) return false;
@@ -458,7 +460,7 @@
       label.className = "exposure";
       host.shadowRoot.querySelector(".c").prepend(label);
     }
-    const text = rescued ? `About ${a.anchor?.quote || a.anchor?.selector} · This part is hidden; the question is shown here.` : "";
+    const text = rescued ? `About ${a.anchor?.quote || a.anchor?.selector} · The question is shown here so you can answer it.` : "";
     if (label.textContent !== text) label.textContent = text;
     host.toggleAttribute("data-exposed", rescued);
   }
@@ -516,19 +518,41 @@
   const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawAttention(); }); } };
   new MutationObserver((ms) => {
     if (ms.some((m) => !isOurs(m.target) && (m.type === "attributes" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
-  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "open", "class", "style", "inert"] });
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
   for (const type of ["resize", "transitionend", "animationend"]) addEventListener(type, queueDraw);
 
-  let opening = 0;
+  let opening = 0, openingMessage = null;
+  function showOpeningMessage(text) {
+    openingMessage?.remove();
+    openingMessage = document.createElement("div");
+    openingMessage.className = "jf-ask";
+    openingMessage.setAttribute("role", "alert");
+    openingMessage.tabIndex = -1;
+    openingMessage.textContent = text;
+    openingMessage.style.cssText = "display:block;padding:16px;background:#fff;color:#1b2221;border:2px solid #b26a12;font:16px system-ui";
+    document.body.prepend(openingMessage);
+    openingMessage.scrollIntoView({ block: "center" });
+    openingMessage.focus();
+  }
   async function openAttention(id) {
     const request = ++opening;
     let item = attention.find((a) => a.id === id);
     if (!item) {
-      await refreshThreads();
+      try {
+        await refreshThreads();
+      } catch (e) {
+        if (request === opening) showOpeningMessage("Could not load this question. Open it from the dock to try again.");
+        console.error(e);
+        return;
+      }
       if (request !== opening) return;
       item = attention.find((a) => a.id === id);
     }
-    if (!item || item.withdrawn) return;
+    openingMessage?.remove();
+    if (!item || item.withdrawn) {
+      showOpeningMessage("This question is no longer waiting for an answer.");
+      return;
+    }
     for (const fn of attendSubs) { try { fn(item); } catch (e) { console.error(e); } }
     drawAttention();
     const host = inline() ? anchorElement(item) : cards.get(id);
@@ -603,15 +627,14 @@
   }
   // Questions whose --at matches nothing on the page (they fall back to the top).
   function deadAnchors() {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => { try { return !document.querySelector(a.anchor.selector); } catch { return true; } }).map((a) => `${a.id} ${a.anchor.selector}`);
+    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => !anchorElement(a)).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   // Questions whose anchor is there but whose card is not where the agent thinks:
   // "floating" anchors sit in a fixed or sticky part, so the card went to the top;
   // "hidden" describes the anchor independently of rescued card placement.
   function anchorsThat(kind) {
     return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => {
-      let el = null;
-      try { el = document.querySelector(a.anchor.selector); } catch {}
+      const el = anchorElement(a);
       if (!el) return false;
       const top = !placeAfter(a);
       return kind === "floating" ? top : !top && !available(el);
@@ -624,7 +647,11 @@
 
   async function refreshThreads() {
     const r = await fetch(api);
-    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
+    if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
+    const j = await r.json();
+    comments = j.comments || []; attention = j.attention || []; working = j.working || null;
+    drawMarkers(); drawWorking();
+    for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
   }
 
   addEventListener("DOMContentLoaded", () => {

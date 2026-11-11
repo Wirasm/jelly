@@ -464,7 +464,7 @@
         pendingAttend = request;
         const send = () => {
           if (pendingAttend !== request || iframe !== $("full").querySelector("iframe")) { iframe.removeEventListener("load", send); return; }
-          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentDocument.URL !== iframe.src) return;
+          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentDocument.URL.split("#")[0] !== iframe.src.split("#")[0]) return;
           pendingAttend = null;
           iframe.removeEventListener("load", send);
           iframe.contentWindow.postMessage({ type: "jelly:attend", id: request.itemId }, location.origin);
@@ -520,7 +520,10 @@
   let focusWrites = Promise.resolve(), pendingFocusWrites = 0;
   function writeFocus(name) {
     pendingFocusWrites++;
-    focusWrites = focusWrites.then(() => jelly.call("focus", { name })).catch(() => {}).finally(() => pendingFocusWrites--);
+    focusWrites = focusWrites.then(() => jelly.call("focus", { name })).catch(() => {}).finally(() => {
+      pendingFocusWrites--;
+      if (!pendingFocusWrites) applyFocus(jelly.state);
+    });
   }
   function openFull(name, fromAgent) {
     if (!byName(name)) return;
@@ -683,13 +686,16 @@
     clearTimeout(pending);
     pending = setTimeout(refresh, 120); // one refresh per burst of changes
   });
+  function applyFocus(s) {
+    if (s.focus && s.focus !== full) openFull(s.focus, true);
+    if (!s.focus && full) closeFull(true);
+  }
   // An agent focusing the surface opens that jelly full size; null closes it.
   jelly.onState((s, ev) => {
     if (!ev || !booted) return;
     if (ev.verb === "focus" && pendingFocusWrites) return;
     if (ev.verb === "seen") return renderStream(); // a jelly was looked at: update New / Updated
-    if (s.focus && s.focus !== full) openFull(s.focus, true);
-    if (!s.focus && full) closeFull(true);
+    applyFocus(s);
   });
   setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
   $("live").classList.add("live");

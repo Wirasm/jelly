@@ -30,7 +30,7 @@ async page => {
       const host = document.getElementById(`jf-q-${id}`);
       if (host) return !!host.shadowRoot.activeElement;
       const item = window.jelly?.items.find(a => a.id === id);
-      return item && document.querySelector(item.anchor.selector)?.contains(document.activeElement);
+      return item && document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
     }, {id:itemId, previous});
     return frame;
   };
@@ -48,7 +48,7 @@ async page => {
   await frame.locator(`#jf-q-${id}`).waitFor({state:'visible',timeout:5000});
   await focused(frame, id);
   await rescued(frame, id, true);
-  assert(await frame.locator(`#jf-q-${id} .exposure`).textContent() === 'About The tucked-away part · This part is hidden; the question is shown here.', 'fallback context');
+  assert(await frame.locator(`#jf-q-${id} .exposure`).textContent() === 'About The tucked-away part · The question is shown here so you can answer it.', 'fallback context');
   assert(ev.anchor_exposed === true && ev.anchor === 'hidden', 'measured hidden diagnostic');
   const measurement = await frame.locator(`#jf-q-${id}`).evaluate(h => {
     const r = h.getBoundingClientRect();
@@ -116,14 +116,22 @@ async page => {
   await frame.waitForFunction(id => document.getElementById(`jf-q-${id}`)?.shadowRoot.activeElement?.className === 'chg', id);
   // Visibility primitives and adjacent-card clipping, with a frame already loaded.
   const cases = [];
-  for (const selector of ['#closed','#invisible','#transparent','#inert','#clipped','#short','#contents','#below','#missing','#floating','#svg']) {
+  for (const selector of ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#short','#contents','#below','#missing','#floating','#svg']) {
     const item = await ask(selector);
     frame = await dock(name, item.args.id);
     await focused(frame, item.args.id);
-    const rescue = ['#closed','#invisible','#transparent','#inert','#clipped','#short'].includes(selector);
+    const rescue = ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#short'].includes(selector);
     await rescued(frame, item.args.id, rescue);
     assert(!!item.anchor_exposed === rescue, `exposure diagnostic ${selector}`);
     if (selector === '#below') assert(item.anchor === 'below', 'offscreen anchors are scroll destinations');
+    if (selector === '#attribute') {
+      await frame.evaluate(() => { window.attributeHeight = document.body.getBoundingClientRect().height; document.querySelector('#attribute').parentElement.dataset.visible = 'true'; });
+      await rescued(frame, item.args.id, false);
+      await frame.evaluate(() => document.querySelector('#attribute').parentElement.dataset.visible = 'false');
+      await rescued(frame, item.args.id, true);
+      assert(await frame.evaluate(() => attributeHeight === document.body.getBoundingClientRect().height), 'attribute placement without a body resize');
+    }
+    if (selector === '#short') assert(!(await frame.locator(`#jf-q-${item.args.id} .exposure`).textContent()).includes('hidden'), 'visible subject is not described as hidden');
     if (selector === '#invisible') {
       await frame.evaluate(() => document.querySelector('#invisible').parentElement.classList.remove('concealed'));
       await rescued(frame, item.args.id, false);
@@ -158,6 +166,44 @@ async page => {
   await rescued(frame, late.args.id, true);
   await page.unroute(showUrl, staleRoute);
   assert(late.anchor_exposed === true, 'Look reports measured exposure');
+  // Required refresh failures remain visible after the dock has closed;
+  // a successfully refreshed, absent/withdrawn item has a separate message.
+  for (const outcome of ['http','network','absent','withdrawn']) {
+    const old = await (await page.request.get(`${base}/api/jellies/${name}`)).json();
+    let seenStale;
+    const staleReady = new Promise(resolve => { seenStale = resolve; });
+    let openingRefresh = false, missingId;
+    const failRefresh = async route => {
+      if (route.request().frame() !== frame) return route.continue();
+      if (!openingRefresh) { await route.fulfill({json:old}); seenStale(); return; }
+      if (outcome === 'http') return route.fulfill({status:503,body:'temporarily unavailable'});
+      if (outcome === 'network') return route.abort('failed');
+      if (outcome === 'withdrawn') {
+        await post(`/api/jellies/${name}/attention/${missingId}/withdraw`, {});
+        const result = await (await page.request.get(showUrl)).json();
+        return route.fulfill({json:result});
+      }
+      return route.fulfill({json:old});
+    };
+    await page.route(showUrl, failRefresh);
+    const missing = await ask('#tucked', 'look');
+    missingId = missing.args.id;
+    await staleReady;
+    await page.locator(`#dock-list [data-goto="${name}"][data-item="${missingId}"]`).waitFor({state:'attached'});
+    openingRefresh = true;
+    await frame.evaluate(() => { window.previousOpeningMessage = document.querySelector('[role="alert"]'); });
+    if (!(await page.locator('#dock-panel').isVisible())) await page.locator('#dock-btn').click();
+    await page.locator(`#dock-list [data-goto="${name}"][data-item="${missingId}"]`).click();
+    const message = frame.locator('[role="alert"]');
+    await frame.waitForFunction(text => {
+      const el = document.querySelector('[role="alert"]');
+      return el && el !== window.previousOpeningMessage && el === document.activeElement && el.textContent.includes(text);
+    }, ['http','network'].includes(outcome) ? 'Could not load' : 'no longer waiting');
+    await message.waitFor({state:'visible'});
+    assert((await message.textContent()).includes(['http','network'].includes(outcome) ? 'Could not load' : 'no longer waiting'), `visible refresh outcome ${outcome}`);
+    assert(await message.evaluate(el => el === document.activeElement), `refresh outcome focused ${outcome}`);
+    await page.unroute(showUrl, failRefresh);
+  }
   // Two questions sharing a destination must stop moving after placement settles.
   const twin = await ask('#tucked');
   frame = await dock(name, twin.args.id);
@@ -175,24 +221,92 @@ async page => {
   assert(stable === 0, 'stable destination order must not cause observer redraws');
   // Built-in grouped rounds use their existing inline question and focus a pick.
   const groupedName = `visibility:group-${Date.now()}`;
-  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'one',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'two',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
+  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'design:mobile',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'design.mobile[wide]',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
   await page.locator('#dock-list [data-goto="'+groupedName+'"]').waitFor({state:'attached'});
-  const groupedId = await page.locator('#dock-list [data-goto="'+groupedName+'"]').getAttribute('data-item');
+  let groupedId = await page.locator('#dock-list [data-goto="'+groupedName+'"]').getAttribute('data-item');
   assert(!!groupedId, 'grouped row carries an item id');
   frame = await dock(groupedName, groupedId);
   await frame.waitForFunction(id => {
-    const a = jelly.items.find(a => a.id === id), target = document.querySelector(a.anchor.selector);
+    const a = jelly.items.find(a => a.id === id), target = document.getElementById(a.anchor.selector.slice(1));
     return target?.contains(document.activeElement) && document.activeElement.matches('[data-pick]');
   }, groupedId);
+  const inlineItems = await frame.evaluate(() => jelly.items.map(a => ({id:a.id,selector:a.anchor.selector})));
+  for (const item of inlineItems) {
+    await frame.evaluate(selector => { location.hash = selector; document.activeElement.blur(); }, item.selector);
+    frame = await dock(groupedName, groupedId);
+    await frame.waitForFunction(id => {
+      const item = jelly.items.find(a => a.id === id);
+      return document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
+    }, groupedId);
+  }
+  await frame.locator(`[data-pick="${groupedId}|y"]`).click();
+  const remaining = inlineItems.find(item => item.id !== groupedId);
+  await page.locator(`#dock-list [data-goto="${groupedName}"][data-item="${remaining.id}"]`).waitFor({state:'attached'});
+  groupedId = remaining.id;
+  frame = await dock(groupedName, groupedId);
+  // Same-document navigation also retains view callbacks for ordinary cards.
+  frame = await dock(name, twin.args.id);
+  await frame.evaluate(() => { location.hash = '#tucked'; document.activeElement.blur(); });
+  frame = await dock(name, twin.args.id);
+  await focused(frame, twin.args.id);
+  assert(await frame.locator('.jf-ask').count() > 0, 'ordinary cards survive hash navigation');
+  frame = await dock(groupedName, groupedId);
   assert(await frame.locator('.jf-ask').count() === 0, 'inline view has no duplicate cards');
-  // Rapid navigation leaves the newest request in the intended frame.
+  // Hold an earlier local write before committing it; wait for both response
+  // echoes before checking the final frame and focused question.
+  const focusUrl = `${base}/api/jellies/surface/call`;
+  let releaseFirst, firstStarted;
+  const firstReady = new Promise(resolve => { firstStarted = resolve; });
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  const writes = [];
+  let held = false;
+  const delayFocus = async route => {
+    if (route.request().postDataJSON().verb !== 'focus') return route.continue();
+    if (!held) { held = true; firstStarted(); await firstGate; }
+    const response = await route.fetch();
+    writes.push(await response.json());
+    await route.fulfill({response});
+  };
+  await page.route(focusUrl, delayFocus);
   await page.evaluate(({name,id,groupedName,groupedId}) => {
     document.querySelector(`#dock-list [data-goto="${name}"][data-item="${id}"]`).click();
     document.querySelector(`#dock-list [data-goto="${groupedName}"][data-item="${groupedId}"]`).click();
   }, {name,id:twin.args.id,groupedName,groupedId});
+  await firstReady;
   frame = await (await page.locator('#full iframe').elementHandle()).contentFrame();
   await frame.waitForURL(`${base}/j/${encodeURIComponent(groupedName)}/`, {waitUntil:'load'});
   await frame.waitForFunction(id => window.jelly?.items.find(a => a.id === id) && document.activeElement.matches('[data-pick]'), groupedId);
+  releaseFirst();
+  await page.waitForFunction(name => pendingFocusWrites === 0 && jelly.state.focus === name, groupedName);
+  assert(writes.length === 2, 'both delayed local focus writes completed');
+  assert(await page.locator('#full iframe').getAttribute('title') === groupedName, 'final selection after earlier writes and echoes');
+  await frame.waitForFunction(() => document.activeElement.matches('[data-pick]'));
+  await page.unroute(focusUrl, delayFocus);
+  // An external focus committed after a local open or close must survive a
+  // delayed response to that local write, including its queue-drain handling.
+  for (const operation of ['open','close']) {
+    let release, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const holdResponse = async route => {
+      if (route.request().postDataJSON().verb !== 'focus') return route.continue();
+      const response = await route.fetch();
+      started(); await gate;
+      await route.fulfill({response});
+    };
+    await page.route(focusUrl, holdResponse);
+    if (operation === 'open') {
+      await page.evaluate(({name,id}) => document.querySelector(`#dock-list [data-goto="${name}"][data-item="${id}"]`).click(), {name,id:twin.args.id});
+    } else await page.locator('#back').click();
+    await ready;
+    await post('/api/jellies/surface/call', {verb:'focus',args:{name:groupedName}});
+    await page.waitForFunction(name => jelly.state.focus === name, groupedName);
+    release();
+    await page.waitForFunction(name => pendingFocusWrites === 0 && jelly.state.focus === name && full === name, groupedName);
+    assert(await page.locator('#full').isVisible(), `external focus survives local ${operation}`);
+    assert(await page.locator('#full iframe').getAttribute('title') === groupedName, `external focus selects its frame after local ${operation}`);
+    await page.unroute(focusUrl, holdResponse);
+  }
   // Shared snapshots allow the same view to register the hook inertly.
   const shared = await page.request.get(`${base}/api/jellies/${name}/share`);
   const snapshot = await page.context().newPage();
@@ -204,5 +318,5 @@ async page => {
   await snapshot.close();
   page.off('pageerror', onError);
   assert(pageErrors.length === 0, `browser errors: ${pageErrors}`);
-  return {measurement,cases,callbacks:'once, immediate/delayed reveal, unsubscribe and failure',draft:'preserved and persisted',grouped:'focused inline',rapid:'newest frame only',snapshot:'inert subscription'};
+  return {measurement,cases,callbacks:'once, immediate/delayed reveal, unsubscribe and failure',draft:'preserved and persisted',grouped:'focused inline',rapid:'newest frame and focused control after delayed writes',externalFocus:'local open and close responses delayed',refresh:'HTTP, network, absent and withdrawn messages visible and focused',hash:'inline and runtime cards',snapshot:'inert subscription'};
 }

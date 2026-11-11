@@ -31,6 +31,8 @@ playwright-cli -s=visibility close
 The check clicks real dock rows and asserts visibility, shadow-root focus,
 context, measured diagnostics, host/draft/selection preservation, synchronous and
 delayed reveals, subscription behavior, stable shared destinations, persisted
-answers, grouped inline questions, rapid frame switching and snapshot registration.
+answers, grouped inline questions with punctuation in their IDs, hash navigation,
+attribute-driven opacity, visible refresh failures, delayed focus writes and agent
+focus during local open/close writes, and snapshot registration.
 Hidden-section visibility fails on the pre-fix runtime. Stop the throwaway daemon
 after testing; no real jelly home is used.
