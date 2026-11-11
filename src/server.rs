@@ -3,9 +3,10 @@
 
 use crate::store::{AttentionKind, Error, Event, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::body::Bytes;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -27,6 +28,7 @@ const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
 const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
 
 struct App {
+    port: u16,
     store: Mutex<Store>,
     events: broadcast::Sender<Event>,
     /// What some browser last showed of each jelly, as text. Memory only.
@@ -61,8 +63,10 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
             .and_then(|_| store.pin(PAGE, true, "jelly"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let port = listener.local_addr()?.port();
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default() });
+    let app: Shared = Arc::new(App { port, store: Mutex::new(store), events: tx, screens: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -77,7 +81,13 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         }
     });
 
-    let router = Router::new()
+    // Local clients remain trusted; the request boundary protects against foreign websites.
+    eprintln!("jelly on http://127.0.0.1:{port}");
+    axum::serve(listener, router(app)).await
+}
+
+fn router(app: Shared) -> Router {
+    Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
         .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
@@ -120,12 +130,34 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
         .route("/api/jellies/{name}/reply", post(reply))
-        .with_state(app);
+        .with_state(app.clone())
+        .layer(middleware::from_fn_with_state(app, request_boundary))
+}
 
-    // Loopback only: anything that reaches this port can run verbs.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    eprintln!("jelly on http://127.0.0.1:{port}");
-    axum::serve(listener, router).await
+fn allowed_request(headers: &HeaderMap, port: u16) -> bool {
+    let mut hosts = headers.get_all(header::HOST).iter();
+    let Some(host) = hosts.next().and_then(|h| h.to_str().ok()) else { return false };
+    if hosts.next().is_some() {
+        return false;
+    }
+    let Some(name) = ["127.0.0.1", "localhost"].into_iter()
+        .find(|name| host == format!("{name}:{port}") || (port == 80 && host == *name)) else { return false };
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    match origins.next() {
+        None => true,
+        Some(origin) => origins.next().is_none() && origin.to_str().is_ok_and(|origin|
+            origin == format!("http://{name}:{port}") || (port == 80 && origin == format!("http://{name}"))),
+    }
+}
+
+async fn request_boundary(State(app): State<Shared>, req: Request, next: Next) -> Response {
+    let mut response = if allowed_request(req.headers(), app.port) {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, Json(json!({"error": "foreign Host or Origin"}))).into_response()
+    };
+    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("frame-ancestors 'self'"));
+    response
 }
 
 struct ApiError(Error);
@@ -487,7 +519,7 @@ struct AttendReq {
     spec: Value,
 }
 
-async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
+async fn attend(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
     let asked = now_ms();
     let Json(ev) = app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?;
@@ -496,7 +528,7 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     // and the event that listeners and the log get is unchanged.
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
-        match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
+        match anchor_place(&app, app.port, &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
             Ok(place) => out["anchor"] = json!(place),
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
@@ -538,11 +570,6 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
             },
         }
     }
-}
-
-/// The port this request came in on, for rendering our own pages.
-fn port_of(headers: &axum::http::HeaderMap) -> u16 {
-    headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878)
 }
 
 #[derive(Deserialize)]
@@ -726,12 +753,12 @@ struct SeeQ {
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
 /// what the person did, what waits on them, and what is on screen.
-async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>) -> Result<Response, ApiError> {
     let (j, home) = {
         let store = app.store.lock().expect("store lock");
         (store.get(&name)?.clone(), store.home().to_path_buf())
     };
-    let port = port_of(&req_headers);
+    let port = app.port;
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
     // Use a snapshot from an open view if it is current and the right width; otherwise render one.
@@ -926,4 +953,174 @@ struct AskReq {
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    #[test]
+    fn request_authority_and_origin() {
+        let cases = [
+            (7878, Some("127.0.0.1:7878"), None, true),
+            (7878, Some("localhost:7878"), Some("http://localhost:7878"), true),
+            (7878, Some("127.0.0.1:7878"), Some("http://127.0.0.1:7878"), true),
+            (80, Some("localhost"), Some("http://localhost"), true),
+            (80, Some("localhost:80"), Some("http://localhost"), true),
+            (80, Some("127.0.0.1"), Some("http://127.0.0.1:80"), true),
+            (7878, None, None, false),
+            (7878, Some("localhost"), None, false),
+            (7878, Some("localhost:7879"), None, false),
+            (7878, Some("evil.test:7878"), None, false),
+            (7878, Some("localhost.evil.test:7878"), None, false),
+            (7878, Some("evil.localhost:7878"), None, false),
+            (7878, Some("localhost:7878@evil.test"), None, false),
+            (7878, Some("[::1]:7878"), None, false),
+            (7878, Some("localhost:7878"), Some("http://127.0.0.1:7878"), false),
+            (7878, Some("localhost:7878"), Some("http://localhost:7879"), false),
+            (7878, Some("localhost:7878"), Some("https://localhost:7878"), false),
+            (7878, Some("localhost:7878"), Some("null"), false),
+            (7878, Some("localhost:7878"), Some(""), false),
+            (7878, Some("localhost:7878"), Some("http://localhost:7878/"), false),
+            (7878, Some("localhost:7878"), Some("http://localhost:7878.evil.test"), false),
+            (7878, Some("localhost:7878"), Some("http://localhost:7878 http://evil.test"), false),
+        ];
+        for (port, host, origin, allowed) in cases {
+            let mut headers = HeaderMap::new();
+            if let Some(host) = host { headers.insert(header::HOST, host.parse().unwrap()); }
+            if let Some(origin) = origin { headers.insert(header::ORIGIN, origin.parse().unwrap()); }
+            assert_eq!(allowed_request(&headers, port), allowed, "{host:?} {origin:?} port {port}");
+        }
+        for repeated in [header::HOST, header::ORIGIN] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, "localhost:7878".parse().unwrap());
+            headers.insert(header::ORIGIN, "http://localhost:7878".parse().unwrap());
+            let value = headers[&repeated].clone();
+            headers.append(repeated, value);
+            assert!(!allowed_request(&headers, 7878));
+        }
+    }
+
+    struct Server {
+        app: Shared,
+        home: tempfile::TempDir,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) { self.task.abort(); }
+    }
+
+    impl Server {
+        async fn start() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let mut store = Store::open(home.path()).unwrap();
+            store.create("probe", "<p>counter</p>".into(), "const verbs = { bump(s) { s.n++; } };".into(), json!({"n": 0}), "test", false, "", "").unwrap();
+            store.put_asset("probe", "hello.txt", b"hello", "test").unwrap();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let app = Arc::new(App {
+                port: listener.local_addr().unwrap().port(), store: Mutex::new(store),
+                events: broadcast::channel(16).0, screens: Mutex::default(),
+            });
+            let routes = router(app.clone());
+            let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap(); });
+            Self { app, home, task }
+        }
+
+        fn url(&self, path: &str) -> String { format!("http://127.0.0.1:{}{path}", self.app.port) }
+
+        fn request(&self, method: &str, path: &str) -> ureq::Request {
+            ureq::AgentBuilder::new().timeout(Duration::from_secs(5)).redirects(0).build().request(method, &self.url(path))
+        }
+
+        fn handshake(&self, origin: Option<&str>) -> String {
+            let mut stream = TcpStream::connect(("127.0.0.1", self.app.port)).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+            write!(stream, "GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{origin}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", self.app.port).unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                headers.push(byte[0]);
+                assert!(headers.len() < 8192);
+            }
+            String::from_utf8(headers).unwrap()
+        }
+    }
+
+    fn response(result: Result<ureq::Response, ureq::Error>) -> ureq::Response {
+        match result {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+            Err(error) => panic!("{error}"),
+        }
+    }
+
+    fn csp(response: &ureq::Response) {
+        assert_eq!(response.header("content-security-policy"), Some("frame-ancestors 'self'"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn foreign_requests_cannot_read_mutate_or_upgrade() {
+        let server = Server::start().await;
+        tokio::task::spawn_blocking(move || {
+            let original = server.app.store.lock().unwrap().get("probe").unwrap().clone();
+            let log = std::fs::read(server.home.path().join("events.jsonl")).unwrap();
+            for (name, value) in [("Origin", "http://evil.test"), ("Origin", "null"), ("Host", "evil.test:7878")] {
+                for (method, path) in [
+                    ("GET", "/api/jellies/probe/state"),
+                    ("GET", "/j/probe/"),
+                    ("GET", "/j/probe/assets/hello.txt"),
+                    ("GET", "/api/events"),
+                    ("POST", "/api/jellies/probe/call"),
+                    ("PUT", "/api/projects/probe/design"),
+                    ("DELETE", "/api/jellies/probe?by=test"),
+                ] {
+                    let req = server.request(method, path).set(name, value);
+                    let res = response(if method == "POST" { req.send_json(json!({"verb":"bump", "by":"test"})) } else { req.call() });
+                    assert_eq!(res.status(), 403, "{method} {name}: {value}");
+                    csp(&res);
+                    assert!(res.into_json::<Value>().unwrap()["error"].is_string());
+                }
+            }
+            for origin in ["http://evil.test", "null"] {
+                assert!(server.handshake(Some(origin)).starts_with("HTTP/1.1 403"));
+            }
+            let store = server.app.store.lock().unwrap();
+            let current = store.get("probe").unwrap();
+            assert_eq!(current.state, original.state);
+            assert_eq!(current.version, original.version);
+            assert_eq!(std::fs::read(server.home.path().join("events.jsonl")).unwrap(), log);
+        }).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_clients_views_assets_and_streams_keep_working() {
+        let server = Server::start().await;
+        tokio::task::spawn_blocking(move || {
+            for origin in [None, Some(server.url(""))] {
+                let mut req = server.request("POST", "/api/jellies/probe/call");
+                if let Some(origin) = &origin { req = req.set("Origin", origin); }
+                assert_eq!(req.send_json(json!({"verb":"bump", "by":"test"})).unwrap().status(), 200);
+                assert!(server.handshake(origin.as_deref()).starts_with("HTTP/1.1 101"));
+            }
+            let state: Value = server.request("GET", "/api/jellies/probe/state").call().unwrap().into_json().unwrap();
+            assert_eq!(state, json!({"n": 2}));
+            for (path, status) in [("/j/probe/", 200), ("/see-frame/probe?w=390&h=844", 200), ("/j/probe/assets/hello.txt", 200), ("/missing", 404), ("/j/probe", 308)] {
+                let res = response(server.request("GET", path).call());
+                assert_eq!(res.status(), status, "{path}");
+                csp(&res);
+                if status == 308 { assert_eq!(res.header("location"), Some("/j/probe/")); }
+                if path.ends_with("hello.txt") { assert_eq!(res.into_string().unwrap(), "hello"); }
+            }
+            let res = server.request("GET", "/api/events").call().unwrap();
+            assert_eq!(res.status(), 200);
+            assert_eq!(res.header("content-type"), Some("text/event-stream"));
+            csp(&res);
+        }).await.unwrap();
+    }
 }

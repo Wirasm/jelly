@@ -53,7 +53,16 @@ To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 ## How it works
 
 A local daemon holds every jelly and serves them on 127.0.0.1 only, without
-authentication: anything that can reach the port can run verbs. Verbs run one at a
-time in QuickJS with a 1 second, 64 MB limit and no network, which keeps every
-change attributable and undoable. Live data is pushed in from outside with
+authentication. It checks Host and any supplied Origin on every request, including
+WebSocket upgrades, and allows only its own origin to frame live pages. This
+protects against foreign websites, including DNS rebinding and disguised clicks
+through foreign frames. Jelly's own frames, sandboxed ask previews and offline
+shared files still work.
+
+Requests without Origin still work for the CLI and other local clients. This is
+not authentication: local programs can supply accepted headers, and jelly views
+and scripts running at the daemon's origin remain trusted.
+
+Verbs run one at a time in QuickJS with a 1 second, 64 MB limit and no network,
+which keeps every change attributable and undoable. Live data is pushed in from outside with
 `jelly call`. Contributors: read [`AGENTS.md`](AGENTS.md).
