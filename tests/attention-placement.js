@@ -51,12 +51,21 @@ async (page) => {
       assert(originalTextarea.value==='Keep this draft','draft survives redraw');
       assert(document.activeElement===host('grid'),'focus survives redraw');
       assert(host('grid').parentElement.nextElementSibling===host('grid2').parentElement,'stable same-row order');
+      originalTextarea.setSelectionRange(5,9);
       document.getElementById('grid').style.gridTemplateColumns='repeat(4,minmax(0,1fr))';
     });
     await settle();
     await page.setViewportSize({width:width===1280?390:1280,height:900});
     await settle();
-    await page.evaluate(()=>checkRow('grid','grid','grid-7'));
+    await page.evaluate(()=>{
+      checkRow('grid','grid','grid-7');
+      assert(document.activeElement===host('grid') && host('grid').shadowRoot.activeElement===originalTextarea,'responsive relocation preserves focus');
+      assert(originalTextarea.selectionStart===5 && originalTextarea.selectionEnd===9,'responsive relocation preserves selection');
+    });
+    await page.keyboard.insertText('this');
+    await page.evaluate(()=>{
+      assert(originalTextarea.value==='Keep this draft','typing and selection survive relocation');
+    });
     await page.setViewportSize({width,height:900});
     await settle();
     await page.evaluate(()=>{
@@ -66,6 +75,22 @@ async (page) => {
         document.body.insertAdjacentHTML('beforeend',html);
         items.push({id,kind:'ask',title:id,by:'test',anchor:selector?{selector}:undefined,options:[{id:'yes',label:'Yes'}]});
       };
+      for (const kind of ['grid','flex','list','table']) {
+        const id='struct-'+kind;
+        const children=Array.from({length:5},(_,i)=>kind==='table'?`<tr id="${id}-${i}"><td>${i}</td></tr>`:`<li id="${id}-${i}" style="min-height:40px">${i}</li>`).join('');
+        const style=kind==='grid'?'display:grid;grid-template-columns:1fr 1fr':kind==='flex'?'display:flex;flex-wrap:wrap':'';
+        const tag=kind==='table'?'tbody':'ul';
+        addCase(id,`<style>#${id}>li {flex:0 0 50%;box-sizing:border-box}</style>${kind==='table'?'<table>':''}<${tag} id="${id}" style="${style}">${children}</${tag}>${kind==='table'?'</table>':''}`,`#${id} > :nth-last-child(2)`);
+      }
+      for (const tag of ['button','a','label','p','li','td','th']) {
+        const id='promote-'+tag, outer=document.createElement(tag);
+        outer.id=id;
+        outer.innerHTML=`<div id="${id}-grid" style="display:grid;grid-template-columns:1fr 1fr"><div id="${id}-target">One</div><div>Two</div><div id="${id}-later">Three</div></div>`;
+        if (tag==='li') { const list=document.createElement('ul'); list.append(outer); document.body.append(list); }
+        else if (['td','th'].includes(tag)) { const table=document.createElement('table'); table.insertRow().append(outer); document.body.append(table); }
+        else document.body.append(outer);
+        items.push({id,kind:'ask',title:id,by:'test',anchor:{selector:'#'+id+'-target'}});
+      }
       addCase('nested','<div id="outer" style="display:grid;grid-template-columns:1fr"><div id="nested" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button id="n1"><b id="deep">One</b></button><button>Two</button><button id="n3">Three</button></div></div>','#deep');
       addCase('last','<div id="last" style="display:grid;grid-template-columns:1fr 1fr"><button>One</button><button id="last-tile">Two</button></div>','#last-tile');
       addCase('nowrap','<div id="nowrap" style="display:flex"><button id="nw">One</button><button>Two</button></div>','#nw');
@@ -109,6 +134,41 @@ async (page) => {
       checkRow('grid','grid','grid-7');
       assert(rect(document.getElementById('grid')).width<gridWidth,'observed group resize');
       assert(host('grid')===originalHost && originalTextarea.value==='Keep this draft','group resize keeps draft');
+    });
+    for (let pass=0;pass<3;pass++) {
+      await page.evaluate(()=>refresh());
+      await settle();
+      await page.evaluate(()=>{
+        for (const kind of ['grid','flex','list','table']) {
+          const id='struct-'+kind, slot=host(id).parentElement.closest('.jf-slot');
+          assert(slot.previousElementSibling.id===id+'-3',id+' resolves original structural anchor');
+          assert(rect(host(id)).bottom<=rect(document.getElementById(id+'-4')).top+1,id+' remains before later row');
+          assert(!screens.at(-1).floating.some(m=>m.startsWith(id+' ')),id+' is not floating');
+        }
+        for (const tag of ['button','a','label','p','li','td','th']) {
+          const id='promote-'+tag;
+          if (['li','td','th'].includes(tag)) checkRow(id,id+'-grid',id+'-target');
+          else {
+            const f=screens.at(-1).fallback.find(f=>f.id===id);
+            assert(f?.destination.kind==='after',id+' reports restricted-content fallback');
+            assert(document.querySelector(f.destination.selector).nextElementSibling===host(id).parentElement,id+' reports actual boundary');
+          }
+        }
+      });
+    }
+    await page.evaluate(()=>{
+      for (const kind of ['grid','flex','list','table']) {
+        for (const i of [3,4]) document.getElementById('struct-'+kind+'-'+i).remove();
+      }
+      refresh();
+    });
+    await settle();
+    await page.evaluate(()=>{
+      for (const kind of ['grid','flex','list','table']) {
+        const id='struct-'+kind;
+        assert(host(id).closest('.jf-slot').previousElementSibling.id===id+'-1',id+' re-resolves changed view structure');
+        assert(rect(host(id)).bottom<=rect(document.getElementById(id+'-2')).top+1,id+' follows the new anchor row');
+      }
     });
     const cdp=await page.context().newCDPSession(page);
     const {nodes}=await cdp.send('Accessibility.getFullAXTree');
@@ -182,6 +242,11 @@ async (page) => {
     await settle();
     await page.evaluate(()=>{
       assert(!document.querySelector('.jf-slot'),'inline attention opts out');
+      const screen=screens.at(-1);
+      assert(screen.missing.some(m=>m.startsWith('missing ')),'inline missing diagnostic');
+      assert(screen.floating.some(m=>m.startsWith('fixed ')),'inline floating diagnostic');
+      assert(screen.hidden.some(m=>m.startsWith('hidden ')),'inline hidden diagnostic');
+      assert(!screen.below.length && !screen.fallback.length,'inline visible placements remain unchecked');
       document.querySelector('meta[name="jelly-attention"]').remove();
       document.body.innerHTML='<button id="body-item" style="order:1">Body layout</button>';
       document.body.style.cssText='display:grid;grid-template-columns:1fr';
@@ -194,6 +259,21 @@ async (page) => {
       assert(f?.destination.kind==='top','no normal boundary reports top');
       assert(host('body').closest('.jf-ask-top'),'no normal boundary renders at top');
     });
+    await page.evaluate(()=>{
+      window.fetchBeforeDelay=window.fetch;
+      window.fetch=(url,opts)=>opts ? fetchBeforeDelay(url,opts) : new Promise(resolve=>window.finishRefresh=()=>resolve({ok:true,json:async()=>({attention:items})}));
+      socket.onmessage({data:JSON.stringify({jelly:'test:placement',kind:'attention',version:2,state:{},view_rev:1})});
+      document.getElementById('body-item').textContent='Changed while refreshing';
+    });
+    await settle();
+    await page.evaluate(()=>{
+      const screen=screens.at(-1);
+      assert(screen.version===2,'new version snapshot posted during refresh');
+      assert(!screen.below.length && !screen.fallback.length,'pending refresh does not claim old placement');
+      finishRefresh(); window.fetch=fetchBeforeDelay;
+    });
+    await settle();
+    await page.evaluate(()=>assert(screens.at(-1).fallback.some(f=>f.id==='body'),'settled refresh measures placement'));
     if(errors.length) throw Error(errors.join('\n'));
     page.off('pageerror',onError);
     results.push({width,passed:true});

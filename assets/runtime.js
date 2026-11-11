@@ -416,7 +416,6 @@
     while (el.ownerSVGElement) el = el.ownerSVGElement;
     for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return { kind: "block", after: null, status: "floating" };
     if (hidden) return { kind: "block", after: normalBoundary(el), status: "hidden" };
-    el = el.closest("button, a, label, p, li, td, th") || el;
     let result;
     for (let item = el; item && item !== document.body; item = item.parentElement) {
       const group = item.parentElement;
@@ -425,7 +424,12 @@
       if (["TD", "TH"].includes(item.tagName)) { result = tablePlacement(item.parentElement); break; }
       if (item.tagName === "TR") { result = tablePlacement(item); break; }
       if (["UL", "OL"].includes(group.tagName) && !listCanInsert(group)) { result = fallback(group); break; }
-      if (display.includes("grid") || display.includes("flex")) { result = rowPlacement(group, item); break; }
+      if (display.includes("grid") || display.includes("flex")) {
+        const restricted = group.closest("button, a, label, p");
+        if (restricted === group) continue;
+        result = restricted ? fallback(restricted) : rowPlacement(group, item);
+        break;
+      }
       if (item.tagName === "LI" && ["UL", "OL"].includes(group.tagName)) {
         const siblings = [...group.children].filter((el) => !isOurs(el));
         result = { kind: "list", after: item, group, peers: [item], later: siblings.slice(siblings.indexOf(item) + 1) };
@@ -551,15 +555,26 @@
       place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
   }
   function drawAttention() {
-    const items = inline() ? [] : shownItems();
+    const focused = document.activeElement?.shadowRoot?.activeElement || document.activeElement;
+    const selection = focused && "selectionStart" in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+    const allItems = shownItems();
+    const selfRendered = inline();
+    const items = selfRendered ? [] : allItems;
     const keep = new Set(items.map((a) => a.id));
     for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
     if (!document.body) return;
-    // Measure original rows without detaching hosts (and losing focus/drafts).
-    const saved = [...slots.values()].map((slot) => [slot, slot.style.cssText]);
-    for (const [slot] of saved) slot.style.setProperty("display", "none", "important");
-    const placements = items.map((a) => resolvePlacement(a));
-    for (const [slot, style] of saved) slot.style.cssText = style;
+    // Query the live view without runtime siblings so structural and focus
+    // selectors retain their meaning. Restore owned nodes before applying layout.
+    const owned = [...document.querySelectorAll(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work")]
+      .filter((el) => !el.parentElement || !isOurs(el.parentElement));
+    const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
+    let placements;
+    try {
+      for (const el of owned) el.remove();
+      placements = allItems.map((a) => resolvePlacement(a));
+    } finally {
+      for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
+    }
     const groups = new Set(placements.map((p) => p.group || p.observe).filter(Boolean));
     for (const g of observedGroups) if (!groups.has(g)) groupObserver.unobserve(g);
     for (const g of groups) if (!observedGroups.has(g)) groupObserver.observe(g);
@@ -576,17 +591,22 @@
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
       insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
     });
-    const failed = placements.map((p, i) => p.peers && !rowFits(p, slots.get(items[i].id)));
+    const failed = items.map((a, i) => placements[i].peers && !rowFits(placements[i], slots.get(a.id)));
     if (failed.some(Boolean)) {
       failed.forEach((fail, i) => { if (fail) placements[i] = fallback(placements[i].group); });
       const settledTails = new Map();
       items.forEach((a, i) => insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], settledTails));
     }
-    outcomes = new Map(items.map((a, i) => {
+    outcomes = new Map((refreshingAttention ? [] : allItems).map((a, i) => {
       const p = placements[i];
-      return [a.id, { status: p.status || "direct", destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
+      const status = selfRendered && !["missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
+      return [a.id, { status, destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
     }));
     if (topStack && !topStack.children.length) topStack.remove();
+    if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
+      focused.focus({ preventScroll: true });
+      if (selection) focused.setSelectionRange(...selection);
+    }
     postSnapshot();
   }
   let drawQueued = false;
@@ -659,7 +679,7 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
+          page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
@@ -671,9 +691,12 @@
   // Text a page fills in later (fetches, timers) counts too.
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
+  let refreshingAttention = false;
   async function refreshThreads() {
+    refreshingAttention = true;
+    outcomes.clear();
     const r = await fetch(api);
-    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
+    if (r.ok) { const j = await r.json(); comments = j.comments || []; attention = j.attention || []; working = j.working || null; refreshingAttention = false; drawMarkers(); drawWorking(); for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } } }
   }
 
   addEventListener("DOMContentLoaded", () => {

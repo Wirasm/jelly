@@ -96,7 +96,10 @@ and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` an
 `jelly look` say in their reply where the card landed: below the element, at the
 top because nothing matched or the element is in a fixed or sticky part, or below
 an element that is not on screen right now. If row insertion is unsafe, the
-reply and `see` name the actual fallback destination. Clear your own
+reply and `see` name the actual fallback destination. Without a measurement for
+that question, the reply says it was not checked. Pages that render their own
+inline attention retain missing, floating and hidden anchor diagnostics; the
+runtime cannot confirm where their visible questions appear. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 

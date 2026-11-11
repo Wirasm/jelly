@@ -524,13 +524,13 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         // Screens are kept by name, so one from before the ask may belong to
         // a jelly this one replaced: only a snapshot taken since counts.
         let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version && s.at_ms >= asked).cloned();
-        if let Some(s) = snap {
-            return Ok(s.placement(item));
+        if let Some(place) = snap.and_then(|s| s.placement(item)) {
+            return Ok(place);
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
             Some((r, at)) if at.elapsed() > std::time::Duration::from_secs(2) => {
-                return Err(r.clone().err().unwrap_or_else(|| "the page rendered but sent no snapshot".into()));
+                return Err(r.clone().err().unwrap_or_else(|| "the page sent no placement measurement for this question".into()));
             }
             Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
             None => tokio::select! {
@@ -685,16 +685,19 @@ struct Screen {
     page_height: u32,
     #[serde(default)]
     fallback: Vec<AnchorFallback>,
+    #[serde(default)]
+    below: Vec<String>,
 }
 
 impl Screen {
-    fn placement(&self, item: &str) -> AnchorPlace {
+    fn placement(&self, item: &str) -> Option<AnchorPlace> {
         let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-        if lists(&self.missing) { AnchorPlace::Missing }
+        Some(if lists(&self.missing) { AnchorPlace::Missing }
         else if lists(&self.floating) { AnchorPlace::Floating }
         else if lists(&self.hidden) { AnchorPlace::Hidden }
         else if let Some(f) = self.fallback.iter().find(|f| f.id == item) { AnchorPlace::Fallback(f.clone()) }
-        else { AnchorPlace::Below }
+        else if lists(&self.below) { AnchorPlace::Below }
+        else { return None })
     }
 }
 
@@ -1002,24 +1005,64 @@ mod placement_tests {
                 {"id": "a2", "destination": {"kind": "top"}, "reason": "no boundary"}
             ]
         })).unwrap();
-        assert_eq!(screen.placement("other"), AnchorPlace::Below);
-        let AnchorPlace::Fallback(first) = screen.placement("a1") else { panic!("expected fallback") };
+        assert_eq!(screen.placement("other"), None);
+        let AnchorPlace::Fallback(first) = screen.placement("a1").unwrap() else { panic!("expected fallback") };
         assert_eq!(first.destination.describe(), "after #tiles");
         assert_eq!(first.reason, "layout");
-        let AnchorPlace::Fallback(second) = screen.placement("a2") else { panic!("expected fallback") };
+        let AnchorPlace::Fallback(second) = screen.placement("a2").unwrap() else { panic!("expected fallback") };
         assert_eq!(second.destination, AnchorDestination::Top);
         screen.hidden.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), AnchorPlace::Hidden);
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Hidden));
         screen.floating.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), AnchorPlace::Floating);
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Floating));
         screen.missing.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), AnchorPlace::Missing);
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Missing));
+    }
+
+    #[tokio::test]
+    async fn attention_response_preserves_snapshot_destination_and_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
+        let (events, _) = broadcast::channel(16);
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default() });
+        for kind in ["ask", "look"] {
+            for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
+                let mut received = app.events.subscribe();
+                let post_snapshot = async {
+                    let ev = received.recv().await.unwrap();
+                    let snapshot: Screen = serde_json::from_value(json!({
+                        "text":"", "width":1280, "height":900, "version":ev.version,
+                        "fallback":[{"id":ev.args.as_ref().unwrap()["id"], "destination":destination, "reason":"layout cannot take a question row"}]
+                    })).unwrap();
+                    let mut unmeasured = snapshot.clone();
+                    unmeasured.fallback.clear();
+                    put_screen(State(app.clone()), Path("placement".into()), Json(unmeasured)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    assert_eq!(put_screen(State(app.clone()), Path("placement".into()), Json(snapshot)).await, StatusCode::NO_CONTENT);
+                };
+                let request = attend(State(app.clone()), Path("placement".into()), axum::http::HeaderMap::new(), Json(AttendReq {
+                    spec: json!({"kind":kind, "title":"Choose", "by":"test", "anchor":{"selector":"#tile"}})
+                }));
+                let (response, ()) = tokio::join!(request, post_snapshot);
+                let Json(response) = response.unwrap_or_else(|_| panic!("attention request failed"));
+                assert_eq!(response["anchor"], "fallback");
+                assert_eq!(response["anchor_destination"], destination);
+                assert_eq!(response["anchor_reason"], "layout cannot take a question row");
+                let location = if destination["kind"] == "after" { "after #tiles" } else { "at the top" };
+                assert_eq!(crate::placement(&response), format!("it shows {location} instead; layout cannot take a question row"));
+            }
+        }
+        let log = std::fs::read_to_string(app.store.lock().unwrap().events_path()).unwrap();
+        assert!(!log.contains("anchor_destination") && !log.contains("anchor_reason"));
     }
 
     #[test]
-    fn old_snapshots_default_to_below() {
-        let screen: Screen = serde_json::from_value(json!({"text":"", "width":1, "height":1, "version":1})).unwrap();
+    fn unmeasured_snapshots_do_not_confirm_placement() {
+        let mut screen: Screen = serde_json::from_value(json!({"text":"", "width":1, "height":1, "version":1})).unwrap();
         assert!(screen.fallback.is_empty());
-        assert_eq!(screen.placement("a1"), AnchorPlace::Below);
+        assert_eq!(screen.placement("a1"), None);
+        screen.below.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Below));
     }
 }
