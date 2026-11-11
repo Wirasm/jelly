@@ -49,7 +49,12 @@ impl App {
         for ev in &evs {
             let _ = self.events.send(ev.clone());
         }
-        if let Some(error) = error { return Err(error.into()); }
+        if let Some(error) = error {
+            if let Some(last) = evs.last() {
+                return Err(Error::Invalid(format!("{error}; committed {} changes to {} through seq:{}. Inspect with `jelly show {}` before retrying", evs.len(), last.jelly, last.seq, last.jelly)).into());
+            }
+            return Err(error.into());
+        }
         Ok(Json(json!({"jelly": evs.last().map(|e| e.jelly.clone()), "events": evs.len(), "seq": evs.last().map(|e| e.seq), "state": evs.last().and_then(|e| e.state.clone())})))
     }
 
@@ -1265,7 +1270,19 @@ mod wait_tests {
                     assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
                     std::task::Poll::Ready(())
                 }).await;
-                assert!(app.change_many(|s| s.ask_round("sharing", &spec, ASK_VIEW, ASK_VERBS, "", "agent")).is_err());
+                let error = app.change_many(|s| s.ask_round("sharing", &spec, ASK_VIEW, ASK_VERBS, "", "agent")).unwrap_err();
+                let response = error.into_response();
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                let message = body["error"].as_str().unwrap();
+                assert!(message.contains("could not record event"), "{message}");
+                if successful > 0 {
+                    assert!(message.contains(&format!("committed {successful} changes to sharing through seq:{}", head + successful)), "{message}");
+                    assert!(message.contains("jelly show sharing"), "{message}");
+                    assert!(message.contains("before retrying"), "{message}");
+                } else {
+                    assert!(!message.contains("committed"), "{message}");
+                }
                 for seq in head + 1..=head + successful {
                     assert_eq!(rx.try_recv().unwrap().seq, seq);
                 }
