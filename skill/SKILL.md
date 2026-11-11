@@ -55,6 +55,40 @@ jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a questio
 Keep data in state, not in page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at them.
 
+### Place the Comment button
+
+A standalone jelly (`/j/<id>/`) has a Comment button 10px from the bottom-right
+corner. Reserve a clear spot for it when your view has fixed or sticky controls.
+Set `--jelly-comment-inset` on `:root` or `body`; the button inherits it. The value
+uses CSS `inset` order: top, right, bottom, left. Use all four values, with `auto`
+for the opposite edges, so the button keeps its natural size.
+
+```css
+/* Above a bottom control bar. */
+:root { --jelly-comment-inset: auto 10px 78px auto; }
+
+/* Top right. */
+:root { --jelly-comment-inset: 10px 10px auto auto; }
+
+/* A bottom bar whose height the view already measures. */
+:root { --jelly-comment-inset: auto 10px calc(var(--foot, 68px) + 10px) auto; }
+
+/* Move it only while a mobile tracing panel is open. */
+@media (max-width: 900px) {
+  body.tracing { --jelly-comment-inset: 10px 10px auto auto; }
+}
+```
+
+Media queries, class changes and updated CSS variables move the button immediately.
+Placement follows normal CSS rules; the runtime does not detect obstacles. Check
+that Comment and your controls remain visible and clickable at supported sizes
+and states, including the longer label while commenting.
+
+On the jelly page, the header supplies Comment and embedded jellies omit their
+local button. A view with its own comment control can still omit the standalone
+button with `<meta name="jelly-comment" content="off">`; Option-click remains
+available. That metadata does not set placement.
+
 ## Recipes
 
 Optional starting points for jellies that are easy to get wrong the first time.

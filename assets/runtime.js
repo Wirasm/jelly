@@ -158,8 +158,9 @@
 
   // ---- comments: markers on the elements they are about ------------------------
 
+  // Views place Comment via --jelly-comment-inset inherited from root or body.
   const css = `
-    .jf-btn { position: fixed; right: 10px; bottom: 10px; z-index: 2147483000; font: 12px -apple-system, sans-serif;
+    .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px -apple-system, sans-serif;
       background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
     .jf-btn.on { background: #e0a24f; color: #1b2221; border-color: #e0a24f; opacity: 1; }
     .jf-hover { outline: 2px dashed #e0a24f !important; outline-offset: 2px; cursor: crosshair !important; }
