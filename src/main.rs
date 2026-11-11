@@ -6,6 +6,7 @@ mod store;
 mod verbs;
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -707,6 +708,11 @@ fn placement(ev: &Value) -> String {
         Some("missing") => format!("{at} matches nothing on the page, so it shows at the top"),
         Some("floating") => format!("{at} is in a fixed or sticky part of the page, so it shows at the top"),
         Some("hidden") => format!("it shows below {at}, which is not on screen right now"),
+        Some("fallback") => {
+            let destination = server::AnchorDestination::deserialize(&ev["anchor_destination"])
+                .map_or_else(|_| "somewhere else".into(), |d| d.describe());
+            format!("it shows {destination} instead; {}", ev["anchor_reason"].as_str().unwrap_or(""))
+        },
         _ => format!("it shows below {at} if that matches something, else at the top: not checked ({})",
             ev["anchor_unchecked"].as_str().unwrap_or("no snapshot")),
     }
@@ -799,6 +805,8 @@ mod tests {
         assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "hidden"})), "it shows below #list, which is not on screen right now");
+        assert_eq!(at(json!({"anchor":"fallback", "anchor_destination":{"kind":"after", "selector":"#tiles"}, "anchor_reason":"layout"})), "it shows after #tiles instead; layout");
+        assert_eq!(at(json!({"anchor":"fallback", "anchor_destination":{"kind":"top"}, "anchor_reason":"no boundary"})), "it shows at the top instead; no boundary");
         let unchecked = at(json!({"anchor_unchecked": "no Chrome found"}));
         assert!(unchecked.contains("not checked (no Chrome found)") && !unchecked.starts_with("it shows on the page below"));
         assert_eq!(placement(&json!({"args": {"anchor": null}})), "it shows at the top of the page");

@@ -12,6 +12,7 @@ const console = { error() {} };
 class URLSearchParams { has() { return false; } }
 class WebSocket { constructor() { globalThis.socket = this; } }
 class MutationObserver { observe() {} }
+class ResizeObserver { observe() {} }
 const document = {
   body: { children: [] },
   documentElement: { scrollHeight: 900 },

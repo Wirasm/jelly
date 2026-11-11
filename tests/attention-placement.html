@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Attention placement checks</title>
+<style>
+body { margin:20px; font:16px system-ui }
+#grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; padding:10px; }
+.tile { position:relative; display:flex; flex-direction:column; min-height:60px; background:#eee; border:0; }
+#flex { display:flex; flex-wrap:wrap; gap:12px; padding:10px }
+#flex > button { flex:0 0 28%; min-height:60px }
+table { width:100%; border-collapse:collapse } td { border:1px solid; padding:8px }
+li { padding:8px }
+@media(max-width:500px) { #grid { grid-template-columns:repeat(2,minmax(0,1fr)) } }
+</style>
+<div id="grid"></div>
+<div id="flex"></div>
+<ol id="list" start="4"><li id="li1">One</li><li id="li2">Two</li><li id="li3" value="12">Twelve</li></ol>
+<table id="table"><tbody><tr id="tr1"><td id="cell" colspan="2">A</td><td>B</td></tr><tr id="tr2"><td>C</td><td>D</td><td>E</td></tr></tbody></table>
+<script>
+for (const id of ['grid','flex']) for(let i=0;i<17;i++) document.getElementById(id).insertAdjacentHTML('beforeend',`<button class="tile" id="${id}-${i}"><span>${i}</span></button>`);
+window.items = [['grid','#grid-7 span'],['flex','#flex-7'],['list','#li2'],['table','#cell']].map(([id,selector])=>({id,kind:'ask',title:id,by:'test',anchor:{selector},options:[{id:'yes',label:'Yes'}]}));
+window.screens=[];
+window.requests=[];
+window.__JELLY__={name:'test:placement',state:{},version:1,viewRev:1,attention:items};
+window.WebSocket=class { constructor(){ window.socket=this; } };
+window.fetch=async (url,opts)=>{ if(opts) requests.push({url,body:JSON.parse(opts.body)}); if(url.endsWith('/screen')) screens.push(JSON.parse(opts.body)); return {ok:true,json:async()=>({attention:items})}; };
+window.refresh=()=>socket.onmessage({data:JSON.stringify({jelly:'test:placement',kind:'attention',view_rev:1})});
+</script>
+<script src="../assets/runtime.js"></script>
