@@ -6,6 +6,7 @@ mod store;
 mod verbs;
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -681,9 +682,8 @@ fn placement(ev: &Value) -> String {
         Some("floating") => format!("{at} is in a fixed or sticky part of the page, so it shows at the top"),
         Some("hidden") => format!("it shows below {at}, which is not on screen right now"),
         Some("fallback") => {
-            let destination = if ev["anchor_destination"]["kind"] == "after" {
-                format!("after {}", ev["anchor_destination"]["selector"].as_str().unwrap_or(""))
-            } else { "at the top".into() };
+            let destination = server::AnchorDestination::deserialize(&ev["anchor_destination"])
+                .map_or_else(|_| "somewhere else".into(), |d| d.describe());
             format!("it shows {destination} instead; {}", ev["anchor_reason"].as_str().unwrap_or(""))
         },
         _ => format!("it shows below {at} if that matches something, else at the top: not checked ({})",

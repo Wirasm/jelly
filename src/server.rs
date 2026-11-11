@@ -617,13 +617,13 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
 
 #[derive(serde::Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-enum AnchorDestination {
+pub(crate) enum AnchorDestination {
     Top,
     After { selector: String },
 }
 
 impl AnchorDestination {
-    fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         match self {
             Self::Top => "at the top".into(),
             Self::After { selector } => format!("after {selector}"),
