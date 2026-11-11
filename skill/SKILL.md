@@ -114,6 +114,7 @@ jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
   --why "Calmer, and the button stands out more" --at "#hero"
 # If that ask printed "since seq:42", copy its token into wait:
 jelly wait plan --since seq:42 --timeout 60
+# Inspect kind and args.id; if this is not the answer, continue from its seq.
 jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
@@ -167,17 +168,23 @@ jelly events [plan]          # stream every event as JSON lines
 ```
 
 `ask`, `look`, `call` and `reshape` print `since seq:N` from their own change.
-Copy that token when you wait: even an answer completed before wait connects is
-returned. `--since` returns the earliest recorded event strictly after N, by
-someone other than your `--as` / `JELLY_AS` identity. Leave NAME out to read across
+Copy that token when you wait. `--since` returns the earliest recorded event
+strictly after N, by someone other than your `--as` / `JELLY_AS` identity. Leave NAME out to read across
 jellies, excluding the jelly page's own changes. Explicitly naming `surface`
 includes those changes.
 
-This mode prints a recorded event, without `state`. Read answers from `args`
-(`option` and `text`; an empty look answer means "seen"). For current state,
-run `jelly state NAME` separately. To continue after a result with `"seq": 58`,
-wait again with `--since seq:58`. Tokens use this daemon's retained history,
-survive restarts and jelly replacement, and do not belong to another home.
+This mode prints one recorded event, without `state`. Other changes can arrive
+before the answer. Check for `kind: "answer"` and the question's `args.id` (and
+`args.group` for a spec round); read its `args.option` and `args.text`. An empty
+look answer means "seen". If an event is not the answer you need, handle it and
+wait again using its `seq`: after `"seq": 58`, use `--since seq:58`. Continue
+until the relevant answer arrives (all required answers for a spec round) or your
+time budget expires. Each invocation's `--timeout` starts a new timeout, so use
+the remaining budget when continuing. An answer completed before connection is
+retained and reached this way even when other events precede it.
+
+For current state, run `jelly state NAME` separately. Tokens use this daemon's
+retained history, survive restarts and jelly replacement, and do not belong to another home.
 `seq:0` reads from the beginning; a token beyond the current sequence waits for
 a later event. Without `--since`, wait only hears future live events. A timeout
 exits 2 with no event on stdout; no timeout means wait indefinitely.

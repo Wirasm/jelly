@@ -346,10 +346,12 @@ async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Str
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct WaitQ {
     since: u64,
     by: String,
+    /// Prefer the current-project identity when it existed at the token or changed after it.
+    project_jelly: Option<String>,
     jelly: Option<String>,
     timeout: Option<u64>,
 }
@@ -381,19 +383,39 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
 }
 
 async fn wait_since(app: &App, q: &WaitQ) -> Result<Option<Event>, Error> {
+    wait_since_at_handoff(app, q, |_| {}).await
+}
+
+async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mut Store)) -> Result<Option<Event>, Error> {
+    let mut q = q.clone();
     let rx = app.events.subscribe();
     let deadline = q.timeout.map(|t| Instant::now().checked_add(Duration::from_secs(t))
         .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
     let mut reader = {
-        let store = app.store.lock().expect("store lock");
+        let mut store = app.store.lock().expect("store lock");
         let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
-        if let Some(ev) = recorded_change(&mut reader, q)? {
+        if let Some(preferred) = &q.project_jelly {
+            let mut found = store.get(preferred).is_ok();
+            let mut line = String::new();
+            while reader.read_line(&mut line).map_err(history_error)? != 0 {
+                let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
+                if ev.jelly == *preferred {
+                    if ev.seq >= q.since { found = true; break; }
+                    found = ev.kind != crate::store::EventKind::Remove;
+                }
+                line.clear();
+            }
+            if found { q.jelly = Some(preferred.clone()); }
+            std::io::Seek::rewind(&mut reader).map_err(history_error)?;
+        }
+        if let Some(ev) = recorded_change(&mut reader, &q)? {
             return Ok(Some(ev));
         }
         if let Some(name) = &q.jelly { store.get(name)?; }
+        after_scan(&mut store);
         reader
     };
-    wait_for_record(app, q, &mut reader, rx, deadline).await
+    wait_for_record(app, &q, &mut reader, rx, deadline).await
 }
 
 async fn wait_for_record(
@@ -1026,7 +1048,7 @@ mod wait_tests {
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
-        WaitQ { since, by: "agent".into(), jelly: jelly.map(String::from), timeout: Some(0) }
+        WaitQ { since, by: "agent".into(), project_jelly: None, jelly: jelly.map(String::from), timeout: Some(0) }
     }
 
     fn note(app: &App, jelly: &str, who: &str) -> Event {
@@ -1066,13 +1088,20 @@ mod wait_tests {
         for lag in [false, true] {
             let (dir, mut app) = fixture(1);
             let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
-            let q = query(Some("j"), ask.seq);
-            let rx = app.events.subscribe();
-            let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
-            assert!(recorded_change(&mut reader, &q).unwrap().is_none());
-            let answer = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap().0;
-            if lag { for _ in 0..4 { note(&app, "j", "agent"); } }
-            let result = wait_for_record(&app, &q, &mut reader, rx, Some(Instant::now() + Duration::from_secs(1))).await.unwrap().unwrap();
+            let q = WaitQ { timeout: Some(1), ..query(Some("j"), ask.seq) };
+            let answer = std::cell::RefCell::new(None);
+            let result = wait_since_at_handoff(&app, &q, |store| {
+                let ev = store.answer("j", "a1", None, "yes", "person").unwrap();
+                let _ = app.events.send(ev.clone());
+                answer.replace(Some(ev));
+                if lag {
+                    for _ in 0..4 {
+                        let ev = store.note("j", "changed", "agent").unwrap();
+                        let _ = app.events.send(ev);
+                    }
+                }
+            }).await.unwrap().unwrap();
+            let answer = answer.into_inner().unwrap();
             assert_eq!(result.seq, answer.seq);
             assert_eq!(result.args.unwrap()["text"], "yes");
             assert!(result.state.is_none());
@@ -1144,6 +1173,60 @@ mod wait_tests {
         assert_eq!(last.seq, seq);
         assert_eq!(last.kind, crate::store::EventKind::Attention);
         assert_eq!(summary["state"]["round"], 1);
+    }
+
+    #[test]
+    fn log_failures_are_reported_for_saved_changes_and_removal() {
+        for failure in ["directory", "readonly", "partial"] {
+            let (dir, app) = fixture(8);
+            let _ = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap();
+            let mut rx = app.events.subscribe();
+            let path = dir.path().join("events.jsonl");
+            let original = std::fs::read(&path).unwrap();
+            let retained = dir.path().join("retained.jsonl");
+            match failure {
+                "directory" => {
+                    std::fs::rename(&path, &retained).unwrap();
+                    std::fs::create_dir(&path).unwrap();
+                }
+                "readonly" => {
+                    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+                    permissions.set_readonly(true);
+                    std::fs::set_permissions(&path, permissions).unwrap();
+                }
+                "partial" => {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"seq\":").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            for remove in [false, true] {
+                let result = if remove {
+                    app.change(|s| s.remove("j", "person"))
+                } else {
+                    app.change(|s| s.answer("j", "a1", None, "persisted despite log failure", "person"))
+                };
+                let error = result.unwrap_err().0.to_string();
+                assert!(error.contains("already saved or removed"), "{error}");
+                assert!(error.contains("could not record event"), "{error}");
+                assert!(rx.try_recv().is_err(), "failed changes must not be broadcast as accepted");
+                let reopened = Store::open(dir.path()).unwrap();
+                if remove {
+                    assert!(reopened.get("j").is_err());
+                } else {
+                    assert_eq!(reopened.get("j").unwrap().attention[0].answer.as_ref().unwrap().text, "persisted despite log failure");
+                }
+            }
+            if failure == "directory" {
+                std::fs::remove_dir(&path).unwrap();
+                std::fs::rename(retained, &path).unwrap();
+            }
+            std::fs::remove_file(&path).unwrap();
+            std::fs::write(&path, &original).unwrap();
+            let recovered = note(&app, "other", "person");
+            let mut reader = BufReader::new(File::open(path).unwrap());
+            assert_eq!(recorded_change(&mut reader, &query(Some("other"), 0)).unwrap().unwrap().seq, recovered.seq);
+        }
     }
 
     #[tokio::test]

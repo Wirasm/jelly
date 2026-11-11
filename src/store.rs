@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -562,7 +562,10 @@ impl Store {
             .filter(|j| j.attention.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
             .collect();
-        stale.iter().filter_map(|n| self.set_archived(n, true, "jelly").ok()).collect()
+        stale.iter().filter_map(|n| match self.set_archived(n, true, "jelly") {
+            Ok(ev) => Some(ev),
+            Err(e) => { eprintln!("could not archive {n}: {e}"); None }
+        }).collect()
     }
 
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
@@ -713,7 +716,7 @@ impl Store {
         let _ = fs::remove_file(self.path(name));
         let _ = fs::remove_dir_all(self.asset_dir(name));
         let ev = self.event(&entry.jelly, EventKind::Remove, by, None, None, Vec::new());
-        self.log(&ev);
+        self.log(&ev)?;
         Ok(ev)
     }
 
@@ -743,7 +746,7 @@ impl Store {
         let jelly = entry.jelly.clone();
         write_atomic(&self.path(name), &bytes).map_err(|e| Error::Invalid(format!("could not save {name}: {e}")))?;
         let mut ev = self.event(&jelly, kind, by, verb, args, changed);
-        self.log(&ev);
+        self.log(&ev)?;
         ev.state = Some(jelly.state);
         Ok(ev)
     }
@@ -766,12 +769,28 @@ impl Store {
         }
     }
 
-    fn log(&self, ev: &Event) {
-        let line = serde_json::to_string(ev).expect("an event serializes");
-        let file = fs::OpenOptions::new().create(true).append(true).open(self.dir.join("events.jsonl"));
-        if let Err(e) = file.and_then(|mut f| writeln!(f, "{line}")) {
-            eprintln!("could not log event: {e}");
-        }
+    fn log(&self, ev: &Event) -> Result<(), Error> {
+        let append = || -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new().create(true).read(true).append(true).open(self.events_path())?;
+            let len = file.metadata()?.len();
+            if len > 0 {
+                file.seek(SeekFrom::End(-1))?;
+                let mut last = [0];
+                file.read_exact(&mut last)?;
+                if last != [b'\n'] {
+                    return Err(std::io::Error::other("incomplete event history; repair events.jsonl before retrying"));
+                }
+            }
+            let mut line = serde_json::to_vec(ev).expect("an event serializes");
+            line.push(b'\n');
+            if let Err(error) = file.write_all(&line) {
+                // A failed append must not leave a fragment before the next event.
+                file.set_len(len).map_err(|rollback| std::io::Error::other(format!("{error}; could not remove partial record: {rollback}; repair events.jsonl before retrying")))?;
+                return Err(error);
+            }
+            Ok(())
+        };
+        append().map_err(|e| Error::Invalid(format!("{} was already saved or removed, but could not record event: {e}; inspect the jelly before retrying", ev.jelly)))
     }
 
     pub fn events_path(&self) -> PathBuf {
@@ -939,6 +958,59 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(dir.path()).unwrap();
         (dir, s)
+    }
+
+    #[test]
+    fn incomplete_history_is_reported_by_every_mutation() {
+        for operation in ["create", "replace", "call", "call_from", "reshape", "set_state", "undo",
+            "comment", "resolve", "reply", "set_project", "archive", "restore", "note", "put_asset",
+            "attend", "ask_round", "answer", "withdraw", "working", "done", "pin", "remove", "sweep"] {
+            let (dir, mut s) = store();
+            s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+            s.call("j", "label", json!({"id": "x", "value": "x"}), "agent").unwrap();
+            s.comment("j", Value::Null, "Which?", "person").unwrap();
+            s.attend("j", json!({"title": "Which?"}), "agent").unwrap();
+            let path = dir.path().join("events.jsonl");
+            fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{").unwrap();
+            let result = match operation {
+                "create" => s.create("new", "".into(), VERBS.into(), json!({}), "agent", false, "", ""),
+                "replace" => s.create("j", "".into(), VERBS.into(), json!({}), "agent", true, "", ""),
+                "call" => s.call("j", "label", json!({"id": "x", "value": "y"}), "agent"),
+                "call_from" => s.call_from("j", "label", json!({"id": "x", "value": "y"}), "person", Some(json!({"text": "click"}))),
+                "reshape" => s.reshape("j", Some("<p>new</p>".into()), None, None, "agent"),
+                "set_state" => s.set_state("j", "/new", Some(json!(true)), "agent"),
+                "undo" => s.undo("j", "agent"),
+                "comment" => s.comment("j", Value::Null, "More", "person"),
+                "resolve" => s.resolve("j", "c1", "agent"),
+                "reply" => s.reply("j", "c1", "Yes", "agent", true),
+                "set_project" => s.set_project("j", "other", "agent"),
+                "archive" => s.set_archived("j", true, "agent"),
+                "restore" => s.set_archived("j", false, "agent"),
+                "note" => s.note("j", "Note", "agent"),
+                "put_asset" => s.put_asset("j", "file.txt", b"hello", "agent"),
+                "attend" => s.attend("j", json!({"title": "Next?"}), "agent"),
+                "ask_round" => s.ask_round("new", &json!({"question": "Which?"}), "", VERBS, "", "agent").map(|mut events| events.pop().unwrap()),
+                "answer" => s.answer("j", "a1", None, "Yes", "person"),
+                "withdraw" => s.withdraw("j", "a1", "agent"),
+                "working" => s.set_working("j", Some("Editing"), "agent"),
+                "done" => s.set_working("j", None, "agent"),
+                "pin" => s.pin("j", true, "agent"),
+                "remove" => s.remove("j", "agent"),
+                "sweep" => {
+                    let j = &mut s.entry("j").unwrap().jelly;
+                    j.comments.clear();
+                    j.attention.clear();
+                    j.updated_ms = 0;
+                    assert!(s.sweep(0).is_empty());
+                    assert!(s.get("j").unwrap().archived);
+                    continue;
+                }
+                _ => unreachable!(),
+            };
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("incomplete event history"), "{operation}: {error}");
+            assert!(error.contains("already saved or removed"), "{operation}: {error}");
+        }
     }
 
     #[test]

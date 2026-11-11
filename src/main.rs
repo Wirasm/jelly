@@ -460,11 +460,16 @@ fn run(cli: Cli) -> Result<(), String> {
             print(json!({"jelly": jelly, "round": r["state"]["round"], "since": since, "next": format!("jelly wait {jelly} --since {since}: the answers arrive as answer events")}))
         }
         Cmd::Wait { name, timeout, since } => {
+            let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
+                .and_then(|n| { let p = project(); (!p.is_empty()).then(|| format!("{p}:{n}")) });
             let name = name.map(|n| id(&n));
             if let Some(SequenceToken(seq)) = since {
                 let mut req = ureq::get(&format!("{}/api/wait", cli.url))
                     .query("since", &seq.to_string()).query("by", &by);
                 if let Some(n) = &name { req = req.query("jelly", n); }
+                if let Some(preferred) = project_jelly.filter(|p| Some(p) != name.as_ref()) {
+                    req = req.query("project_jelly", &preferred);
+                }
                 if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
                 let resp = req.call().map_err(describe)?;
                 if resp.status() == 204 {

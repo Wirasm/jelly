@@ -175,3 +175,48 @@ fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
     assert_eq!(String::from_utf8(output.stderr).unwrap().trim(), "jelly: nobody changed test:plan in time");
     assert!(daemon.log().iter().all(|ev| ev.get("state").is_none()));
 }
+
+#[test]
+fn historical_short_names_keep_the_current_project_after_removal() {
+    for other_exists in [false, true] {
+        let daemon = Daemon::start();
+        let asked = daemon.ok(&["ask", "plan", "Which?"]);
+        let answer = daemon.post("/api/jellies/test:plan/attention/a1/answer", json!({"text": "yes", "by": "person"}));
+        ureq::delete(&format!("{}/api/jellies/test:plan?by=agent", daemon.url)).call().unwrap();
+        if other_exists {
+            daemon.post("/api/jellies", json!({"name": "plan", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
+        }
+        assert_eq!(daemon.wait(token(&asked))["seq"], answer["seq"]);
+    }
+}
+
+#[test]
+fn historical_short_names_still_fall_back_to_a_unique_existing_jelly() {
+    for removed_before_ask in [false, true] {
+        let daemon = Daemon::start();
+        daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
+        if removed_before_ask {
+            daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
+            ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
+        }
+        let asked = daemon.ok(&["ask", "remote", "Which?"]);
+        let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
+        assert_eq!(result["seq"], answer["seq"]);
+    }
+}
+
+#[test]
+fn reading_through_an_intervening_change_reaches_the_answer() {
+    let daemon = Daemon::start();
+    let asked = daemon.ok(&["ask", "plan", "Which?"]);
+    let change = daemon.post("/api/jellies/test:plan/call", json!({"verb": "tick", "by": "person"}));
+    let answer = daemon.post("/api/jellies/test:plan/attention/a1/answer", json!({"text": "yes", "by": "person"}));
+    let first = daemon.wait(token(&asked));
+    assert_eq!(first["seq"], change["seq"]);
+    assert_ne!(first["kind"], "answer");
+    let next = daemon.wait(&format!("seq:{}", first["seq"]));
+    assert_eq!(next["seq"], answer["seq"]);
+    assert_eq!(next["kind"], "answer");
+    assert_eq!(next["args"]["id"], "a1");
+}
