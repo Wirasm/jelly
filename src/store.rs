@@ -224,6 +224,21 @@ struct Entry {
     undo: Vec<Snapshot>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InboxReader {
+    Named { name: String },
+    Conversation { id: String },
+    Parent { pid: u32, start_time: u64 },
+}
+
+#[derive(Serialize, Deserialize)]
+struct InboxCursor {
+    project: String,
+    reader: InboxReader,
+    seq: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Event {
     pub seq: u64,
@@ -778,6 +793,46 @@ impl Store {
         self.dir.join("events.jsonl")
     }
 
+    pub fn read_inbox(&mut self, project: &str, reader: InboxReader) -> Result<Vec<Event>, Error> {
+        let read = |path: &Path| -> std::io::Result<String> {
+            match fs::read_to_string(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+                result => result,
+            }
+        };
+        let consume = || -> std::io::Result<Vec<Event>> {
+            let path = self.dir.join("inbox-readers.json");
+            let mut cursors: Vec<InboxCursor> = match fs::read_to_string(&path) {
+                Ok(text) => serde_json::from_str(&text)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e),
+            };
+            let cursor = cursors.iter_mut().find(|c| c.project == project && c.reader == reader);
+            let since = cursor.as_ref().map(|c| c.seq);
+            let first_since = now_ms().saturating_sub(3_600_000);
+            let mut seq = since.unwrap_or(0);
+            let mut items = Vec::new();
+            let prefix = format!("{project}:");
+            for event in read(&self.events_path())?.lines().filter_map(|line| serde_json::from_str::<Event>(line).ok()) {
+                seq = seq.max(event.seq);
+                let unread = since.map_or(event.at_ms > first_since, |s| event.seq > s);
+                if unread && event.by == PERSON && event.jelly != PAGE && event.kind.is_for_agent()
+                    && (project.is_empty() || event.jelly.starts_with(&prefix))
+                {
+                    items.push(event);
+                }
+            }
+            if let Some(cursor) = cursor {
+                cursor.seq = seq;
+            } else {
+                cursors.push(InboxCursor { project: project.into(), reader, seq });
+            }
+            write_atomic(&path, &serde_json::to_vec(&cursors)?)?;
+            Ok(items)
+        };
+        consume().map_err(|e| Error::Invalid(format!("could not read inbox: {e}")))
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join("jellies").join(format!("{name}.json"))
     }
@@ -939,6 +994,87 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(dir.path()).unwrap();
         (dir, s)
+    }
+
+    #[test]
+    fn inbox_positions_preserve_filters_and_initial_window() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let reader = InboxReader::Named { name: "a".into() };
+        let mut events = Vec::new();
+        let mut push = |e: &Event| events.push(serde_json::to_string(e).unwrap());
+        event.seq = 1;
+        event.at_ms = now_ms() - 7_200_000;
+        push(&event);
+        event.seq = 2;
+        event.at_ms = now_ms();
+        push(&event);
+        event.seq = 3;
+        push(&event);
+        event.seq = 4;
+        event.by = "agent".into();
+        push(&event);
+        event.seq = 5;
+        event.by = PERSON.into();
+        event.jelly = PAGE.into();
+        push(&event);
+        event.seq = 6;
+        event.jelly = "p:sample".into();
+        event.kind = EventKind::Working;
+        push(&event);
+        event.seq = 7;
+        event.jelly = "other:sample".into();
+        event.kind = EventKind::Call;
+        push(&event);
+        fs::write(s.events_path(), events.join("\n") + "\nmalformed\n").unwrap();
+        assert_eq!(s.read_inbox("p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
+        assert!(s.read_inbox("p", reader.clone()).unwrap().is_empty());
+        assert_eq!(s.read_inbox("", reader.clone()).unwrap().len(), 3);
+        assert_eq!(s.read_inbox("other", reader.clone()).unwrap().len(), 1);
+        assert!(s.read_inbox("missing", reader.clone()).unwrap().is_empty());
+        let records: Vec<InboxCursor> = serde_json::from_slice(&fs::read(dir.path().join("inbox-readers.json")).unwrap()).unwrap();
+        assert!(records.iter().all(|c| c.seq == 7));
+        event.seq = 8;
+        event.jelly = "p:sample".into();
+        event.at_ms = 1;
+        let mut log = fs::OpenOptions::new().append(true).open(s.events_path()).unwrap();
+        writeln!(log, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(s.read_inbox("p", reader.clone()).unwrap()[0].seq, 8);
+        assert!(s.read_inbox("p", reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbox_storage_failures_do_not_consume() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "a".into() };
+        s.read_inbox("p", reader.clone()).unwrap();
+        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let path = dir.path().join("inbox-readers.json");
+        let saved = fs::read(&path).unwrap();
+        fs::write(&path, "broken").unwrap();
+        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(s.read_inbox("p", reader.clone()).is_err());
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, &saved).unwrap();
+        let tmp = path.with_extension("json.tmp");
+        fs::create_dir(&tmp).unwrap();
+        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        fs::remove_dir(tmp).unwrap();
+        let log = fs::read(s.events_path()).unwrap();
+        fs::remove_file(s.events_path()).unwrap();
+        fs::create_dir(s.events_path()).unwrap();
+        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        fs::remove_dir(s.events_path()).unwrap();
+        fs::write(s.events_path(), log).unwrap();
+        assert_eq!(s.read_inbox("p", reader).unwrap().len(), 1);
     }
 
     #[test]

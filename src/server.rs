@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, InboxReader, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -102,7 +102,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
-        .route("/api/inbox", get(inbox))
+        .route("/api/inbox", get(inbox).post(consume_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
@@ -475,9 +475,29 @@ async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value
         .filter_map(|l| serde_json::from_str::<Event>(l).ok())
         .filter(|e| e.at_ms > since && e.by == PERSON && e.jelly != PAGE && e.kind.is_for_agent())
         .filter(|e| prefix.as_deref().is_none_or(|p| e.jelly.starts_with(p)))
-        .map(|e| { let text = e.describe(); let mut v = json!(e); v["text"] = json!(text); v })
+        .map(inbox_item)
         .collect();
     Json(json!(items))
+}
+
+
+fn inbox_item(event: Event) -> Value {
+    let text = event.describe();
+    let mut value = json!(event);
+    value["text"] = json!(text);
+    value
+}
+
+#[derive(Deserialize)]
+struct InboxReq {
+    #[serde(default)]
+    project: String,
+    reader: InboxReader,
+}
+
+async fn consume_inbox(State(app): State<Shared>, Json(req): Json<InboxReq>) -> Result<Json<Value>, ApiError> {
+    let items = app.store.lock().expect("store lock").read_inbox(&req.project, req.reader)?;
+    Ok(Json(json!(items.into_iter().map(inbox_item).collect::<Vec<_>>())))
 }
 
 

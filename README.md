@@ -48,7 +48,30 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new.
+`UserPromptSubmit` hook. It prints nothing when there is nothing new. Claude's
+`CLAUDE_CODE_SESSION_ID` environment variable or the hook's JSON `session_id`
+keeps one inbox reader across commands and resumed conversations.
+
+Inbox identity uses explicit `--as` / `JELLY_AS` first, then
+`inbox --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
+`session_id` from hook stdin. Other agents should export a stable, distinct
+conversation token as `JELLY_SESSION_ID`. Without one, the invoking parent
+process's PID and start time identify the reader for that process's lifetime;
+a new parent starts a new reader. Shared names or conversation tokens intentionally
+share progress. Event attribution still defaults to `agent`.
+
+Progress is stored in the daemon's home (`inbox-readers.json`), per reader and
+project, and survives daemon restarts. A new reader sees the last hour; later
+reads use event positions. Upgrading leaves old client `inbox/` timestamps unused,
+so each new reader can replay the recent hour. Use a matching CLI and daemon.
+The consuming POST `/api/inbox` accepts `{ "project": "...", "reader": ... }`
+with reader forms `{ "kind": "named", "name": "..." }`,
+`{ "kind": "conversation", "id": "..." }`, or
+`{ "kind": "parent", "pid": 123, "start_time": 456 }` (Unix seconds).
+Omitting `project` or using an empty string reads all projects. The response is an
+array of events with `text`. GET `/api/inbox?project=...&since=...` remains a
+non-consuming timestamp query. A successful POST saves progress before responding;
+a lost response can leave progress advanced without displayed output.
 
 ## How it works
 

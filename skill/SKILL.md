@@ -168,7 +168,19 @@ jelly reply plan c3 "Split it into two steps." --resolve   # done: closes the th
 jelly reply plan c3 "Which date, the 12th or the 19th?"    # asking back: stays open
 ```
 
-Set `JELLY_AS=<your name>` when several agents share one jelly page.
+Set `JELLY_AS=<your name>` when several agents share one jelly page. Each distinct
+name reads independently; reusing a name shares progress. Without an explicit
+`--as` / `JELLY_AS`, inbox uses `--session-id` / `JELLY_SESSION_ID`, then
+`CLAUDE_CODE_SESSION_ID`, then JSON `session_id` from `--hook` stdin. Use a stable,
+distinct `JELLY_SESSION_ID` for other agents' conversations and reuse it on resume.
+Without a supplied session ID, the invoking parent's PID and start time identify
+the reader until that process exits; a new parent starts a new reader.
+
+Cursors live in the daemon's home, per reader and project, and survive restarts.
+New readers see the last hour, then receive events since their own last read by
+event position. Old client timestamp cursors are unused after upgrading, so the
+recent hour may replay once for each new reader. Event attribution still defaults
+to `agent`. Use matching CLI and daemon versions.
 
 ## Projects and names
 
