@@ -176,7 +176,7 @@ fn inbox_parent_lifetime_and_fresh_shell_conversations() {
 }
 
 #[test]
-fn inbox_failures_are_visible_except_in_hooks() {
+fn inbox_daemon_failures_are_visible_in_hooks() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("daemon");
     let daemon = Daemon::start(&home);
@@ -186,17 +186,36 @@ fn inbox_failures_are_visible_except_in_hooks() {
     let result = daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
-    assert_eq!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
+    assert!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()).contains("jelly inbox failed: could not read inbox"));
     std::fs::remove_file(home.join("inbox-readers.json")).unwrap();
     let log = std::fs::read_to_string(home.join("events.jsonl")).unwrap();
-    std::fs::write(home.join("events.jsonl"), format!("malformed\n{log}")).unwrap();
-    let result = daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap();
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
-    assert_eq!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
-    assert!(!home.join("inbox-readers.json").exists());
+    let event: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    let mut missing_field = event.clone();
+    missing_field.as_object_mut().unwrap().remove("seq");
+    let mut unknown_kind = event.clone();
+    unknown_kind["kind"] = json!("unknown");
+    let mut old = missing_field.clone();
+    old["at_ms"] = json!(0);
+    let mut excluded = missing_field.clone();
+    excluded["by"] = json!("agent");
+    let mut other_project = missing_field.clone();
+    other_project["jelly"] = json!("other:sample");
+    for malformed in ["malformed".to_string(), missing_field.to_string(), unknown_kind.to_string(),
+        String::new(), old.to_string(), excluded.to_string(), other_project.to_string()]
+    {
+        std::fs::write(home.join("events.jsonl"), format!("{malformed}\n{log}")).unwrap();
+        let result = daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
+        for _ in 0..2 {
+            let warning = stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap());
+            assert!(warning.contains("jelly inbox failed: could not read inbox"), "{warning}");
+        }
+        assert!(!home.join("inbox-readers.json").exists());
+    }
     std::fs::write(home.join("events.jsonl"), log).unwrap();
     has_event(&stdout(daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap()));
+    assert_eq!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
     let url = daemon.url.clone();
     drop(daemon);
     let mut cmd = Command::new(BIN);

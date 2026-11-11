@@ -48,7 +48,9 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new. Claude's
+`UserPromptSubmit` hook. It prints nothing when there is nothing new or the daemon
+is unavailable. Daemon read failures appear in hook output as `jelly inbox failed: ...`;
+no progress is saved when the daemon cannot read the inbox. Claude's
 `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
 commands and resumed conversations. JSON `session_id` identifies hook invocations
 only. To share that progress with ordinary commands, supply the same conversation

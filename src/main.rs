@@ -670,9 +670,16 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id
     let resp = ureq::post(&format!("{url}/api/inbox"))
         .timeout(std::time::Duration::from_secs(1))
         .send_json(store::InboxRequest { project: project.into(), reader });
+    let resp = match resp {
+        Err(ureq::Error::Transport(_)) if hook => return Ok(()),
+        result => result,
+    };
     let items: Vec<Value> = match resp.map_err(describe).and_then(|r| r.into_json().map_err(|e| e.to_string())) {
         Ok(v) => v,
-        Err(_) if hook => return Ok(()),
+        Err(e) if hook => {
+            println!("jelly inbox failed: {e}");
+            return Ok(());
+        }
         Err(e) => return Err(e),
     };
     if items.is_empty() {
