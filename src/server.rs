@@ -419,8 +419,15 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
                 }
                 line.clear();
             }
-            if identities.contains(preferred) { q.jelly = Some(preferred.clone()); }
-            else if identities.len() == 1 { q.jelly = identities.into_iter().next(); }
+            let short = preferred.split_once(':').map_or(preferred.as_str(), |(_, short)| short);
+            q.jelly = Some(if identities.contains(preferred) {
+                preferred.clone()
+            } else {
+                let hits: Vec<String> = identities.into_iter()
+                    .filter(|name| name.split_once(':').is_some_and(|(_, name)| name == short))
+                    .collect();
+                if hits.len() == 1 { hits[0].clone() } else { short.to_string() }
+            });
             std::io::Seek::rewind(&mut reader).map_err(history_error)?;
         }
         if let Some(ev) = recorded_change(&mut reader, &q)? {
