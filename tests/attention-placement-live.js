@@ -23,6 +23,10 @@ async (page) => {
     <div id="flex"><button id="flex0">One</button><button>Two</button><button id="flexLater">Three</button></div>
     <ul><li id="list0">One</li><li id="listLater">Two</li></ul>
     <table><tbody><tr id="table0"><td>One</td></tr><tr id="tableLater"><td>Two</td></tr></tbody></table>
+    <button id="hidden" hidden>Hidden</button>
+    <button id="floating" style="position:fixed;top:0">Floating</button>
+    <div id="nowrap" style="display:flex"><button id="fallback">Cannot wrap</button></div>
+    <button id="body-item" style="order:1">Body layout</button>
   `}});
   if(!response.ok()) throw Error('create: '+await response.text());
   try {
@@ -31,21 +35,51 @@ async (page) => {
     await page.waitForFunction(()=>window.jelly);
     await page.waitForTimeout(100);
     const results=[];
-    for(const kind of ['ask','look']) for(const layout of ['grid','flex','list','table']) {
-      const selector='#'+layout+'0';
-      const response=await page.request.post(api+'/attention',{data:{kind,title:'Check '+layout,by:'test',anchor:{selector},options:kind==='ask'?[{id:'yes',label:'Yes'}]:[]}});
+    const cases=[
+      ...['grid','flex','list','table'].map(layout=>({layout,selector:'#'+layout+'0',status:'below'})),
+      {selector:'#absent',status:'missing'},
+      {selector:'#floating',status:'floating'},
+      {selector:'#hidden',status:'hidden'},
+      {selector:'#fallback',status:'fallback',destination:{kind:'after',selector:'#nowrap'}},
+      {selector:'#body-item',status:'fallback',destination:{kind:'top'},bodyGrid:true},
+    ];
+    for(const kind of ['ask','look']) for(const test of cases) {
+      const {layout,selector,status,destination}=test;
+      await page.evaluate(bodyGrid=>{
+        document.body.style.display=bodyGrid?'grid':'';
+        document.body.style.gridTemplateColumns=bodyGrid?'1fr':'';
+      },!!test.bodyGrid);
+      const response=await page.request.post(api+'/attention',{data:{kind,title:'Check '+selector,by:'test',anchor:{selector},options:kind==='ask'?[{id:'yes',label:'Yes'}]:[]}});
       if(!response.ok()) throw Error(await response.text());
       const reply=await response.json(), id=reply.args.id;
-      if(reply.anchor!=='below') throw Error(kind+' '+layout+' reply: '+JSON.stringify(reply));
-      const snapshot=screens.find(screen=>screen.version>=reply.version && screen.below?.includes(id+' '+selector));
-      if(!snapshot) throw Error('reply lacks browser-produced positive measurement for '+id);
-      await page.evaluate(({id,layout})=>{
+      if(reply.anchor!==status) throw Error(kind+' '+selector+' reply: '+JSON.stringify(reply));
+      const snapshot=screens.find(screen=>screen.version>=reply.version && (status==='fallback'
+        ? screen.fallback?.some(f=>f.id===id)
+        : screen[status]?.includes(id+' '+selector)));
+      if(!snapshot) throw Error('reply lacks browser-produced '+status+' measurement for '+id);
+      if(destination) {
+        const measurement=snapshot.fallback.find(f=>f.id===id);
+        if(measurement.destination.kind!==destination.kind || measurement.destination.selector!==destination.selector ||
+           reply.anchor_destination?.kind!==destination.kind || reply.anchor_destination?.selector!==destination.selector ||
+           !measurement.reason || reply.anchor_reason!==measurement.reason) {
+          throw Error('fallback changed across snapshot boundary: '+JSON.stringify({measurement,reply,destination}));
+        }
+        await page.evaluate(({id,destination})=>{
+          const host=document.getElementById('jf-q-'+id);
+          let previous=host.parentElement.previousElementSibling;
+          while(previous?.matches('.jf-slot')) previous=previous.previousElementSibling;
+          if(destination.kind==='top' ? !host.closest('.jf-ask-top') : document.querySelector(destination.selector)!==previous) {
+            throw Error('fallback card is not at reported destination');
+          }
+        },{id,destination});
+      }
+      if(layout) await page.evaluate(({id,layout})=>{
         const card=document.getElementById('jf-q-'+id).getBoundingClientRect();
         const anchor=document.getElementById(layout+'0').getBoundingClientRect();
         const later=document.getElementById(layout+'Later').getBoundingClientRect();
         if(card.top<anchor.bottom-1 || card.bottom>later.top+1) throw Error(layout+' card is not between anchor and later row');
       },{id,layout});
-      results.push({kind,layout,anchor:reply.anchor,measurement:id+' '+selector});
+      results.push({kind,selector,anchor:reply.anchor,destination:reply.anchor_destination,measurement:id+' '+selector});
     }
     return results;
   } finally {
