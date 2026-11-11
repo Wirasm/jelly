@@ -813,12 +813,24 @@ struct SeeQ {
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
 /// what the person did, what waits on them, and what is on screen.
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+    let port = port_of(&req_headers);
+    let render_name = name.clone();
+    see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>| {
+        let name = render_name.clone();
+        async move { render(port, &name, width, height, png.as_deref(), RENDER_LIMIT).await }
+    }).await
+}
+
+async fn see_with_renderer<F, Fut>(app: Shared, name: String, q: SeeQ, mut render_page: F) -> Result<Response, ApiError>
+where
+    F: FnMut(u32, u32, Option<std::path::PathBuf>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
     let (j, home, owner) = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(&name)?;
         (j.clone(), store.home().to_path_buf(), app.snapshot_owner(&name, j.view_rev)?)
     };
-    let port = port_of(&req_headers);
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
     let fresh = |app: &App| -> Result<Option<Screen>, ApiError> {
@@ -828,7 +840,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     let mut snap = fresh(&app)?;
     if snap.is_none() {
         let asked = now_ms();
-        match render(port, &name, width, height, None, RENDER_LIMIT).await {
+        match render_page(width, height, None).await {
             Ok(()) => {
                 for _ in 0..30 {
                     if let Some(s) = fresh(&app)?.filter(|s| s.at_ms >= asked) {
@@ -848,7 +860,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let path = dir.join(format!("{}-{width}.png", name.replace(':', "_")));
         // The full page: as tall as the page said it was, within reason.
         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
-        match render(port, &name, width, h, Some(&path), RENDER_LIMIT).await {
+        match render_page(width, h, Some(path.clone())).await {
             Ok(()) => Some(path),
             Err(e) => { notes.push(format!("No screenshot: {e}")); None }
         }
@@ -1051,6 +1063,113 @@ mod tests {
         let response = see(State(app.clone()), Path("test:x".into()),
             Query(SeeQ { width: None, height: None, png: false, full: false }), axum::http::HeaderMap::new()).await.unwrap();
         String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn bundled_runtime_posts_served_ownership_and_reloads_obsolete_pages() {
+        let (_dir, app) = app();
+        create_page(&app, "PAGE", false).await;
+        let Html(html) = view(State(app.clone()), Path("test:x".into())).await.unwrap();
+        let boot = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        let eval = |script: &str| ctx.with(|ctx| {
+            ctx.eval::<(), _>(script).unwrap_or_else(|err| panic!("{err}: {:?}", ctx.catch()));
+        });
+        eval(include_str!("../tests/runtime-browser.js"));
+        eval(&format!("window.__JELLY__={boot};"));
+        eval(RUNTIME_JS);
+        eval("loaded();");
+        while rt.execute_pending_job().unwrap() {}
+        let request: Value = ctx.with(|ctx| {
+            serde_json::from_str(&ctx.eval::<String, _>("JSON.stringify(requests[0])").unwrap()).unwrap()
+        });
+        assert_eq!(request["url"], "/api/jellies/test%3Ax/screen");
+        assert_eq!(post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap(), StatusCode::NO_CONTENT);
+        eval("if (reloads !== 0) throw Error('accepted post reloaded');");
+        eval("message({jelly:'other:x', kind:'new', view_rev:1}); if (reloads !== 0) throw Error('other jelly reloaded');");
+        eval("message({jelly:'test:x', kind:'new', view_rev:1, version:1}); if (reloads !== 1) throw Error('same-revision replacement did not reload');");
+        create_page(&app, "REPLACEMENT", true).await;
+        let stale_status = post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap_err().into_response().status();
+        assert_eq!(stale_status, StatusCode::CONFLICT);
+        eval(&format!("responseStatus={}; loaded();", stale_status.as_u16()));
+        while rt.execute_pending_job().unwrap() {}
+        eval("if (reloads !== 2) throw Error('stale post did not reload');");
+    }
+
+    #[tokio::test]
+    async fn see_rechecks_currentness_after_text_and_png_rendering() {
+        for png in [false, true] {
+            for replace in [false, true] {
+                let (_dir, app) = app();
+                create_page(&app, "OLD PAGE", false).await;
+                let current = owner(&app, "test:x").await;
+                if png { post(&app, snapshot(&current, "OLD PAGE", 1)).await.unwrap(); }
+                let (started, suspended) = tokio::sync::oneshot::channel();
+                let (resume, resumed) = tokio::sync::oneshot::channel();
+                let mut rendezvous = Some((started, resumed));
+                let seeing = see_with_renderer(app.clone(), "test:x".into(),
+                    SeeQ { width: None, height: None, png, full: false },
+                    move |_, _, path| {
+                        assert_eq!(path.is_some(), png);
+                        let (started, resumed) = rendezvous.take().expect("one render");
+                        async move {
+                            started.send(()).unwrap();
+                            resumed.await.unwrap();
+                            // A failed text render bypasses polling, so only the final
+                            // currentness check can reject the captured jelly here.
+                            if png { Ok(()) } else { Err("controlled render failure".into()) }
+                        }
+                    });
+                let changing = async {
+                    suspended.await.unwrap();
+                    if replace { create_page(&app, "NEW PAGE", true).await; }
+                    else { let _ = app.change(|s| s.set_state("test:x", "", Some(json!({"n":1})), "test")).unwrap(); }
+                    resume.send(()).unwrap();
+                };
+                let (result, _) = tokio::join!(seeing, changing);
+                assert_eq!(result.expect_err("obsolete see must fail").into_response().status(), StatusCode::CONFLICT,
+                    "png={png}, replace={replace}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_see_waits_for_matching_version_and_width() {
+        for wrong_width in [false, true] {
+            let (_dir, app) = app();
+            create_page(&app, "PAGE", false).await;
+            let current = owner(&app, "test:x").await;
+            let (rendered, polling) = tokio::sync::oneshot::channel();
+            let mut rendered = Some(rendered);
+            let posting_app = app.clone();
+            let posting_owner = current.clone();
+            let seeing = see_with_renderer(app.clone(), "test:x".into(),
+                SeeQ { width: None, height: None, png: false, full: false },
+                move |_, _, path| {
+                    assert!(path.is_none());
+                    let app = posting_app.clone();
+                    let owner = posting_owner.clone();
+                    let rendered = rendered.take().expect("one render");
+                    async move {
+                        let mut wrong = snapshot(&owner, "WRONG SNAPSHOT", if wrong_width { 1 } else { 2 });
+                        if wrong_width { wrong.width = 390; }
+                        post(&app, wrong).await.unwrap();
+                        rendered.send(()).unwrap();
+                        Ok(())
+                    }
+                });
+            let updating = async {
+                polling.await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                post(&app, snapshot(&current, "MATCHING SNAPSHOT", 1)).await.unwrap();
+            };
+            let (result, _) = tokio::join!(seeing, updating);
+            let response = result.unwrap();
+            let output = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+            assert!(output.contains("MATCHING SNAPSHOT"), "{output}");
+            assert!(!output.contains("WRONG SNAPSHOT"), "{output}");
+        }
     }
 
     #[tokio::test]
