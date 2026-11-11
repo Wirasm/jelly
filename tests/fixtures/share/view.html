@@ -1,0 +1,127 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div>
+<script>
+const errors = [];
+addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true);
+addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
+const result = document.createElement('pre');
+result.id = 'share-test-result';
+document.body.append(result);
+const assert = (ok, message) => { if (!ok) throw Error(message); };
+const ids = items => items.map(a => a.id).join(',');
+async function loaded(image) {
+  await new Promise((resolve, reject) => {
+    if (image.complete && image.naturalWidth) return resolve();
+    image.onload = resolve;
+    image.onerror = () => reject(Error(`image failed: ${image.id}`));
+  });
+  assert(image.complete && image.naturalWidth > 0, `pixels: ${image.id}`);
+}
+(async () => {
+  const original = JSON.stringify(jelly.state);
+  const history = JSON.stringify(jelly.items);
+  let attentionCalls = 0, stateCalls = 0;
+  jelly.onAttention(() => { attentionCalls++; document.body.dataset.attention = ids(jelly.attention); });
+  jelly.onState(s => {
+    stateCalls++;
+    assert(s === jelly.state && s.picture === ['assets', 'dot.png'].join('/'), 'unchanged callback state');
+    assert(s.label === `Label: ${s.picture}`, 'unchanged label');
+    document.getElementById('pictures').innerHTML = `<img id="state" src="${s.picture}"><img id="api" src="${jelly.asset(s.file)}"><img id="constructed" src="${['assets', s.file].join('/')}">`;
+  });
+  assert(attentionCalls === 1 && stateCalls === 1, 'immediate callbacks');
+  assert(ids(jelly.items) === 'a1,a2,a3,a4', 'all history');
+  assert(ids(jelly.attention) === 'a1,a4', 'open attention');
+  assert(ids(jelly.itemsAt('#pictures')) === 'a2,a1', 'anchor order includes answered');
+  assert(ids(jelly.itemsAt('#other')) === 'a4', 'other anchor excludes withdrawn');
+  assert(jelly.itemsAt('#missing').length === 0, 'exact selector');
+  assert(jelly.items[1].answer.text === 'captured answer', 'captured answer');
+  assert(jelly.items[2].withdrawn, 'captured withdrawal');
+  assert(jelly.asset('unused.png').startsWith('data:image/png;base64,'), 'unused asset');
+  assert(jelly.asset('absent.png') === 'assets/absent.png', 'missing asset fallback');
+  await Promise.all([...document.images].map(loaded));
+
+  const responsive = new Image();
+  responsive.id = 'responsive';
+  responsive.srcset = `${jelly.state.picture}?v=1 1x, ${jelly.state.picture}#fragment 2x`;
+  document.body.append(responsive);
+  await loaded(responsive);
+  assert(responsive.getAttribute('srcset').includes('#fragment 2x'), 'srcset descriptors and fragment');
+  const mixed = new Image();
+  mixed.id = 'mixed-srcset';
+  mixed.srcset = `${jelly.asset('dot.png')} 1x, ${jelly.state.picture} 2x`;
+  document.body.append(mixed);
+  await loaded(mixed);
+  assert(!mixed.getAttribute('srcset').includes(jelly.state.picture), 'data URI srcset boundary');
+
+  const style = document.createElement('style');
+  style.textContent = `#background { background-image: url('${jelly.state.picture}'); --label: "url(${jelly.state.picture})"; }`;
+  document.head.append(style);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(style.textContent.includes(`"url(${jelly.state.picture})"`), 'CSS string is not a URL token');
+  const cssImage = new Image();
+  cssImage.id = 'css';
+  cssImage.src = getComputedStyle(document.getElementById('background')).backgroundImage.slice(5, -2);
+  await loaded(cssImage);
+  style.firstChild.textContent = `#background { background-image: url(${jelly.state.picture}?changed); }`;
+  const background = document.getElementById('background');
+  background.style.backgroundImage = `url(${jelly.state.picture})`;
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(style.textContent.includes('data:image/png') && background.style.backgroundImage.includes('data:image/png'), 'CSS changes resolved');
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  document.getElementById('pictures').innerHTML = `<img id="late" src="${jelly.state.picture}">`;
+  await loaded(document.getElementById('late'));
+  const link = document.createElement('a');
+  link.href = jelly.state.picture + '?download#part';
+  document.body.append(link);
+  const video = document.createElement('video');
+  video.poster = jelly.state.picture;
+  document.body.append(video);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(link.href === jelly.asset('dot.png') + '#part' && video.poster === jelly.asset('dot.png'), 'href and poster');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const svgImage = document.createElementNS(svg.namespaceURI, 'image');
+  svgImage.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', jelly.state.picture);
+  svg.append(svgImage);
+  document.body.append(svg);
+  const untouched = ['https://example.com/assets/dot.png', 'other/dot.png', 'assets/dot.png.extra', 'assets/absent.png'];
+  const links = untouched.map(url => {
+    const a = document.createElement('a');
+    a.setAttribute('href', url);
+    a.dataset.path = jelly.state.picture;
+    document.body.append(a);
+    return a;
+  });
+  const script = document.createElement('script');
+  script.type = 'application/json';
+  script.textContent = JSON.stringify({path: jelly.state.picture});
+  document.body.append(script);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(svgImage.getAttribute('xlink:href') === jelly.asset('dot.png'), 'SVG resource');
+  assert(links.every((a, i) => a.getAttribute('href') === untouched[i] && a.dataset.path === jelly.state.picture), 'exact local resource matching');
+  assert(JSON.parse(script.textContent).path === jelly.state.picture, 'script data unchanged');
+  document.getElementById('late').src = './' + jelly.state.picture + '?changed';
+  await loaded(document.getElementById('late'));
+
+  const path = ['assets', jelly.state.textFile].join('/');
+  for (const input of [path, new URL(path, document.baseURI), new Request(new URL(path, document.baseURI))]) {
+    assert(await (await fetch(input)).text() === 'hello offline', 'asset fetch');
+  }
+  assert((await fetch(path, {method: 'HEAD'})).ok, 'HEAD asset fetch');
+  assert(await (await fetch('data:text/plain,unrelated')).text() === 'unrelated', 'native fetch');
+  const calls = [];
+  const nativeFetch = window.fetch;
+  window.fetch = (...args) => { calls.push(args); return nativeFetch(...args); };
+  for (const mutate of [() => jelly.answer('a1', 'x'), () => jelly.call('change'), () => jelly.comment({}, 'no'), () => jelly.reply('x', 'no'), () => jelly.resolve('x')]) {
+    let rejected = false;
+    try { await mutate(); } catch (e) { rejected = e.message.includes('read-only'); }
+    assert(rejected, 'mutation rejected');
+  }
+  assert(document.body.textContent.includes('Read-only snapshot.'), 'visible refusal');
+  assert(JSON.stringify(jelly.state) === original && JSON.stringify(jelly.items) === history, 'mutations leave captured data unchanged');
+  assert(calls.length === 0, 'mutations do not request API');
+  assert(!performance.getEntriesByType('resource').some(e => /\/api\//.test(e.name)), 'no daemon requests');
+  assert(errors.length === 0, errors.join('; '));
+  result.textContent = JSON.stringify({complete: true, ok: true, errors});
+})().catch(e => { result.textContent = JSON.stringify({complete: true, ok: false, error: String(e), errors}); });
+</script></body></html>

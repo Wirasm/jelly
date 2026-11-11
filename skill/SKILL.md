@@ -190,6 +190,13 @@ jelly design                     # the project's DESIGN.md, if the repo has one
 jelly share plan                 # one read-only HTML file, state and assets baked in
 ```
 
+Shared files include every uploaded asset, including names read from state or
+resolved with `jelly.asset(file)`. They open offline from `file://` and keep state
+values unchanged. `items`, `attention`, `itemsAt(selector)` and `onAttention(fn)`
+read the attention captured when shared; `onAttention` runs once immediately.
+Answers and other mutations refuse changes and show the read-only note.
+External dependencies and other jellies are not bundled.
+
 A repo's DESIGN.md (github.com/google-labs-code/design.md) becomes CSS variables at
 `/p/<project>/design.css` (`--color-primary`, `--rounded-md`, …). Use it when it
 helps the jelly feel like the product. Do not inline big files as base64; add them

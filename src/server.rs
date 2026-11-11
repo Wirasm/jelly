@@ -446,14 +446,20 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
         let j = store.get(&name)?.clone();
         (j, store.asset_dir(&name), store.assets(&name))
     };
-    let mut html = j.view.clone();
-    for f in files {
-        if let Ok(bytes) = std::fs::read(dir.join(&f)) {
-            let uri = format!("data:{};base64,{}", content_type(&f), base64::engine::general_purpose::STANDARD.encode(bytes));
-            html = html.replace(&format!("assets/{f}"), &uri);
-        }
+    let mut assets = Vec::new();
+    for file in files {
+        let bytes = std::fs::read(dir.join(&file))
+            .map_err(|e| Error::Invalid(format!("could not share asset {file}: {e}")))?;
+        let uri = format!("data:{};base64,{}", content_type(&file), base64::engine::general_purpose::STANDARD.encode(bytes));
+        assets.push((file, uri));
     }
-    let boot = json!({"name": j.name, "about": j.about, "state": j.state}).to_string().replace("</", "<\\/");
+    assets.sort_by_key(|(file, _)| std::cmp::Reverse(file.len()));
+    let mut html = j.view.clone();
+    for (file, uri) in &assets {
+        html = html.replace(&format!("assets/{file}"), uri);
+    }
+    let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets})
+        .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
     Ok(Html(inject_head(&html, &inject)))
 }
@@ -926,4 +932,107 @@ struct AskReq {
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+
+    fn fixture(view: &str) -> (tempfile::TempDir, Shared) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.create("test:share", view.into(), "const verbs = {};".into(),
+            json!({"picture": "assets/dot.png", "file": "dot.png", "textFile": "hello.txt", "label": "Label: assets/dot.png", "closing": "</script>"}),
+            "agent", false, "Shared </script> jelly", "").unwrap();
+        for (anchor, title) in [("#pictures", "open"), ("#pictures", "answered"), ("#other", "withdrawn"), ("#other", "other")] {
+            store.attend("test:share", json!({"kind": "look", "title": title, "anchor": {"selector": anchor}}), "agent").unwrap();
+        }
+        store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
+        store.withdraw("test:share", "a3", "agent").unwrap();
+        let (events, _) = broadcast::channel(16);
+        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default() }))
+    }
+
+    async fn exported(app: Shared) -> String {
+        share(State(app), Path("test:share".into())).await.unwrap_or_else(|e| panic!("{}", e.0)).0
+    }
+
+    fn boot(html: &str) -> Value {
+        let json = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
+        serde_json::from_str(&json.replace("<\\/", "</")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn share_embeds_all_assets_and_preserves_captured_data() {
+        let (_dir, app) = fixture("<head></head><img src='assets/dot.png.extra'><img src='assets/dot.png'>");
+        let expected = {
+            let mut store = app.store.lock().unwrap();
+            for (file, bytes) in [("dot.png", &b"png"[..]), ("dot.png.extra", &b"long"[..]), ("unused.txt", &b"unused"[..])] {
+                store.put_asset("test:share", file, bytes, "agent").unwrap();
+            }
+            serde_json::to_value(store.get("test:share").unwrap()).unwrap()
+        };
+        let html = exported(app).await;
+        let boot = boot(&html);
+        assert_eq!(boot["state"], expected["state"]);
+        assert_eq!(boot["attention"], expected["attention"]);
+        assert_eq!(boot["about"], expected["about"]);
+        assert!(!html.contains("Shared </script>"));
+        let assets: Vec<(String, String)> = serde_json::from_value(boot["assets"].clone()).unwrap();
+        let assets: std::collections::HashMap<_, _> = assets.into_iter().collect();
+        assert_eq!(assets.len(), 3);
+        assert_eq!(assets["dot.png"], "data:image/png;base64,cG5n");
+        assert_eq!(assets["dot.png.extra"], "data:application/octet-stream;base64,bG9uZw==");
+        assert_eq!(assets["unused.txt"], "data:text/plain; charset=utf-8;base64,dW51c2Vk");
+        assert!(html.contains(&format!("<img src='{}'><img src='{}'>", assets["dot.png.extra"], assets["dot.png"])));
+    }
+
+    #[tokio::test]
+    async fn share_without_assets() {
+        let (_dir, app) = fixture("<p>No assets</p>");
+        let html = exported(app).await;
+        assert_eq!(boot(&html)["assets"], json!([]));
+        assert!(html.contains("<p>No assets</p>"));
+    }
+
+    #[tokio::test]
+    async fn share_refuses_an_unreadable_listed_asset() {
+        let (_dir, app) = fixture("");
+        let path = app.store.lock().unwrap().asset_dir("test:share").join("broken.png");
+        std::fs::create_dir_all(path).unwrap();
+        let error = share(State(app), Path("test:share".into())).await.expect_err("a directory cannot be read as an asset");
+        assert!(error.0.to_string().contains("could not share asset broken.png"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Chrome/Chromium; run explicitly with --ignored"]
+    async fn shared_file_renders_assets_and_reading_api() {
+        let browser = chrome().expect("Chrome/Chromium required; set JELLY_CHROME to the browser binary");
+        let (dir, app) = fixture(include_str!("../tests/fixtures/share/view.html"));
+        {
+            let mut store = app.store.lock().unwrap();
+            let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGP4z8DwHxkzkC4AADxAH+HggXe0AAAAAElFTkSuQmCC").unwrap();
+            for file in ["dot.png", "unused.png"] {
+                store.put_asset("test:share", file, &png, "agent").unwrap();
+            }
+            store.put_asset("test:share", "hello.txt", b"hello offline", "agent").unwrap();
+        }
+        let html = exported(app).await;
+        let path = dir.path().join("shared.html");
+        std::fs::write(&path, html).unwrap();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30),
+            tokio::process::Command::new(browser)
+                .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--dump-dom", "--virtual-time-budget=5000"])
+                .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
+                .arg(format!("file://{}", path.display()))
+                .kill_on_drop(true).output()).await.expect("browser timed out").expect("browser could not start");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let dom = String::from_utf8(output.stdout).unwrap();
+        let result = dom.split_once("<pre id=\"share-test-result\">").expect("browser did not create result element").1.split_once("</pre>").unwrap().0;
+        let result: Value = serde_json::from_str(result).unwrap_or_else(|e| panic!("browser did not finish: {e}: {result}"));
+        assert_eq!(result["complete"], true, "{result}");
+        assert_eq!(result["ok"], true, "{result}");
+        println!("{result}");
+    }
 }
