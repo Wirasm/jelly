@@ -245,3 +245,7 @@ view can also fetch public APIs itself in the browser.
 
 A verb runs at most 1 second and has no file, network or process access. The view
 has the full browser. The daemon listens on 127.0.0.1 only and has no login.
+
+If deleting a saved jelly file fails during `jelly rm` or `jelly move`, the old
+jelly can reappear after a daemon restart. Saved files and recorded history
+can then disagree about which jelly identities exist.
