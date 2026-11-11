@@ -669,7 +669,7 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id
     };
     let resp = ureq::post(&format!("{url}/api/inbox"))
         .timeout(std::time::Duration::from_secs(1))
-        .send_json(json!({"project": project, "reader": reader}));
+        .send_json(store::InboxRequest { project: project.into(), reader });
     let items: Vec<Value> = match resp.map_err(describe).and_then(|r| r.into_json().map_err(|e| e.to_string())) {
         Ok(v) => v,
         Err(_) if hook => return Ok(()),

@@ -233,6 +233,13 @@ pub enum InboxReader {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct InboxRequest {
+    #[serde(default)]
+    pub project: String,
+    pub reader: InboxReader,
+}
+
+#[derive(Serialize, Deserialize)]
 struct InboxCursor {
     project: String,
     reader: InboxReader,
@@ -302,6 +309,11 @@ pub const PERSON: &str = "person";
 pub const PAGE: &str = "surface";
 
 impl Event {
+    pub fn is_inbox_item(&self, project: &str) -> bool {
+        self.by == PERSON && self.jelly != PAGE && self.kind.is_for_agent()
+            && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
+    }
+
     /// One line on what happened, for agents: the inbox and `jelly see` both use it.
     pub fn describe(&self) -> String {
         let a = self.args.clone().unwrap_or(Value::Null);
@@ -812,13 +824,11 @@ impl Store {
             let first_since = now_ms().saturating_sub(3_600_000);
             let mut seq = since.unwrap_or(0);
             let mut items = Vec::new();
-            let prefix = format!("{project}:");
-            for event in read(&self.events_path())?.lines().filter_map(|line| serde_json::from_str::<Event>(line).ok()) {
+            for line in read(&self.events_path())?.lines() {
+                let event: Event = serde_json::from_str(line)?;
                 seq = seq.max(event.seq);
                 let unread = since.map_or(event.at_ms > first_since, |s| event.seq > s);
-                if unread && event.by == PERSON && event.jelly != PAGE && event.kind.is_for_agent()
-                    && (project.is_empty() || event.jelly.starts_with(&prefix))
-                {
+                if unread && event.is_inbox_item(project) {
                     items.push(event);
                 }
             }
@@ -1027,7 +1037,7 @@ mod tests {
         event.jelly = "other:sample".into();
         event.kind = EventKind::Call;
         push(&event);
-        fs::write(s.events_path(), events.join("\n") + "\nmalformed\n").unwrap();
+        fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
         assert_eq!(s.read_inbox("p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
         assert!(s.read_inbox("p", reader.clone()).unwrap().is_empty());
         assert_eq!(s.read_inbox("", reader.clone()).unwrap().len(), 3);
@@ -1043,6 +1053,39 @@ mod tests {
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(s.read_inbox("p", reader.clone()).unwrap()[0].seq, 8);
         assert!(s.read_inbox("p", reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbox_malformed_events_do_not_consume() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let existing = InboxReader::Named { name: "existing".into() };
+        let new = InboxReader::Named { name: "new".into() };
+        for project in ["p", ""] {
+            s.read_inbox(project, existing.clone()).unwrap();
+        }
+        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let path = dir.path().join("inbox-readers.json");
+        let saved = fs::read(&path).unwrap();
+        let log = fs::read_to_string(s.events_path()).unwrap();
+        let mut lines: Vec<_> = log.lines().collect();
+        lines[1] = "malformed";
+        fs::write(s.events_path(), lines.join("\n") + "\n").unwrap();
+        for project in ["p", ""] {
+            for reader in [&existing, &new] {
+                let error = s.read_inbox(project, reader.clone()).unwrap_err();
+                assert!(error.to_string().contains("could not read inbox"));
+                assert_eq!(fs::read(&path).unwrap(), saved);
+            }
+        }
+        fs::write(s.events_path(), log).unwrap();
+        for project in ["p", ""] {
+            for reader in [&existing, &new] {
+                assert_eq!(s.read_inbox(project, reader.clone()).unwrap().len(), 2);
+                assert!(s.read_inbox(project, reader.clone()).unwrap().is_empty());
+            }
+        }
     }
 
     #[test]

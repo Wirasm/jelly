@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, InboxReader, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, InboxRequest, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -470,11 +470,9 @@ async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value
     let path = app.store.lock().expect("store lock").events_path();
     let since = q.since.unwrap_or(0);
     let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    let prefix = q.project.filter(|p| !p.is_empty()).map(|p| format!("{p}:"));
     let items: Vec<Value> = text.lines()
         .filter_map(|l| serde_json::from_str::<Event>(l).ok())
-        .filter(|e| e.at_ms > since && e.by == PERSON && e.jelly != PAGE && e.kind.is_for_agent())
-        .filter(|e| prefix.as_deref().is_none_or(|p| e.jelly.starts_with(p)))
+        .filter(|e| e.at_ms > since && e.is_inbox_item(q.project.as_deref().unwrap_or("")))
         .map(inbox_item)
         .collect();
     Json(json!(items))
@@ -488,14 +486,7 @@ fn inbox_item(event: Event) -> Value {
     value
 }
 
-#[derive(Deserialize)]
-struct InboxReq {
-    #[serde(default)]
-    project: String,
-    reader: InboxReader,
-}
-
-async fn consume_inbox(State(app): State<Shared>, Json(req): Json<InboxReq>) -> Result<Json<Value>, ApiError> {
+async fn consume_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<Value>, ApiError> {
     let items = app.store.lock().expect("store lock").read_inbox(&req.project, req.reader)?;
     Ok(Json(json!(items.into_iter().map(inbox_item).collect::<Vec<_>>())))
 }

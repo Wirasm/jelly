@@ -49,8 +49,11 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It prints nothing when there is nothing new. Claude's
-`CLAUDE_CODE_SESSION_ID` environment variable or the hook's JSON `session_id`
-keeps one inbox reader across commands and resumed conversations.
+`CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
+commands and resumed conversations. JSON `session_id` identifies hook invocations
+only. To share that progress with ordinary commands, supply the same conversation
+ID through `inbox --session-id` or `JELLY_SESSION_ID` (or use the same explicit
+`--as` / `JELLY_AS` name for both).
 
 Inbox identity uses explicit `--as` / `JELLY_AS` first, then
 `inbox --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
