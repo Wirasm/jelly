@@ -120,6 +120,7 @@
   #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 7; max-width: min(92vw, 560px); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); }
   #toast:empty { display: none; }
   @media (max-width: 720px) {
+    :root { --jelly-comment-inset: auto 10px 110px auto; }
     #result { grid-template-columns: 1fr; } #when { font-size: 44px; }
     #board { grid-template-columns: 1fr; } #chart-box { position: static; }
     .capbar .mark span { font-size: 10px; }
