@@ -98,7 +98,7 @@
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
     }
-    if (ev.view_rev !== boot.viewRev) { location.reload(); return; }
+    if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { location.reload(); return; }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads();
     if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads();
     if (ev.kind === "working") { working = ev.args ? { what: ev.args, by: ev.by } : null; drawWorking(); }
@@ -729,9 +729,9 @@
     snapT = setTimeout(() => {
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
+        body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
           page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
-          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).catch(() => {});
+          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) location.reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   function anchorsThat(kind) {
