@@ -190,17 +190,19 @@
   btn.textContent = "Comment";
   btn.title = "Pin a comment to any part of this jelly (or hold Option and click)";
 
+  // Everything the runtime adds to a view. Selectors name view elements only.
+  const OURS = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
+  const isOurs = (el) => el.closest(OURS);
   function selectorFor(el) {
     const parts = [];
     for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
       if (n.id) { parts.unshift("#" + CSS.escape(n.id)); break; }
       let i = 1;
-      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) i++;
+      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName && !isOurs(s)) i++;
       parts.unshift(`${n.tagName.toLowerCase()}:nth-of-type(${i})`);
     }
     return parts.join(" > ") || "body";
   }
-  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work");
 
   // On the jelly page, the page's header owns the Comment button.
   const embedded = window.parent !== window;
@@ -277,9 +279,10 @@
     drawAttention();
     markerEls.forEach((p) => p.remove());
     markerEls = [];
-    visible().forEach((f, i) => {
-      let el = null;
-      try { el = document.querySelector(f.anchor?.selector || "body"); } catch {}
+    const shown = visible();
+    const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor?.selector || "body" } })), keepFocus());
+    shown.forEach((f, i) => {
+      const el = anchors[i];
       if (!el) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
@@ -572,7 +575,7 @@
       }
       return [":root", ...path].join(" > ");
     };
-    const owned = [...document.querySelectorAll(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work")]
+    const owned = [...document.querySelectorAll(OURS)]
       .filter((el) => !el.parentElement || !isOurs(el.parentElement));
     const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
     try {
@@ -597,15 +600,19 @@
       restoreFocus();
     }
   }
-  function drawAttention() {
+  // Returns a function that puts focus and selection back where they are now.
+  function keepFocus() {
     const focused = document.activeElement?.shadowRoot?.activeElement || document.activeElement;
     const selection = focused && "selectionStart" in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
-    const restoreFocus = () => {
+    return () => {
       if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
         focused.focus({ preventScroll: true });
         if (selection) focused.setSelectionRange(...selection);
       }
     };
+  }
+  function drawAttention() {
+    const restoreFocus = keepFocus();
     const allItems = shownItems();
     const selfRendered = inline();
     const items = selfRendered ? [] : allItems;
@@ -688,7 +695,6 @@
   }
 
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
-  const SKIP = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   function agentSnapshot() {
@@ -698,7 +704,7 @@
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
     (function walk(el, depth) {
       for (const c of el.children) {
-        if (lines.length > 400 || c.matches(SKIP) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
+        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
         else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
