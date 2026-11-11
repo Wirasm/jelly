@@ -589,6 +589,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "libc",
  "rquickjs",
  "serde",
  "serde_json",

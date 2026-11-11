@@ -28,7 +28,7 @@ prose, and whenever you need them to choose.
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
-jelly ls                                         # is the daemon up? (the person runs `jelly serve`)
+jelly ls                                         # list jellies; starts the daemon on first use
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
@@ -44,11 +44,22 @@ session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 
 ```bash
 cargo install --path .
-jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
+jelly ls               # starts on first use: http://127.0.0.1:7878
 ```
 
+The first client command starts a detached daemon if needed, waits for it, and
+prints one startup line on stderr. Data lives in `$JELLY_HOME` or `~/.jelly`, just
+as with `jelly serve`. No login service or extra install step is needed.
+
+`jelly serve` still runs in the foreground for manual use and startup diagnostics.
+For an isolated run: `jelly serve --port 7879 --home /tmp/jelly-test`, then use
+`jelly --url http://127.0.0.1:7879 ls`. On-demand startup applies only to the default
+URL; other `--url` / `JELLY_URL` targets must already be running.
+
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new.
+`UserPromptSubmit` hook. It starts the default daemon silently, suppresses startup
+errors, and prints nothing when there is nothing new. Outside a project it still
+attempts startup, then exits successfully without inbox output.
 
 ## How it works
 

@@ -53,7 +53,7 @@ impl App {
     }
 }
 
-pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
+pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
         store
@@ -122,8 +122,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/reply", post(reply))
         .with_state(app);
 
-    // Loopback only: anything that reaches this port can run verbs.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let port = listener.local_addr()?.port();
     eprintln!("jelly on http://127.0.0.1:{port}");
     axum::serve(listener, router).await
 }
