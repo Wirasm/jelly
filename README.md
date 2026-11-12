@@ -81,9 +81,10 @@ layer for stored jelly pages.
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It starts the default daemon silently, suppresses startup
 errors, and prints nothing when there is nothing new. Outside a project it still
-attempts startup, then exits successfully without inbox output. Reader
-identification, decoding and daemon read or progress-commit
-failures appear in hook output as `jelly inbox failed: ...`. Failed reads do not
+attempts startup, then exits successfully without inbox output. Once startup
+succeeds, a daemon that does not answer the inbox request within a second, reader
+identification, decoding and daemon read or progress-commit failures appear in
+hook output as `jelly inbox failed: ...`. Failed reads do not
 advance progress. Claude's
 `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
 commands and resumed conversations. JSON `session_id` identifies hook invocations
@@ -122,6 +123,23 @@ The daemon refuses startup if an existing event log cannot be read, contains
 malformed events or is nonempty and missing its final newline. This prevents
 reusing positions already passed by inbox readers or corrupting the final record
 on the next append.
+
+`~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
+to 1 MiB of your older events, so the inbox and `jelly see` still have them. A trim
+keeps every event's position, and inbox reads go back only as far as the reader's
+position. `jelly see` uses the last change and last eight person events per jelly,
+kept in memory during startup validation and updated on append and trim; it does
+not scan the log on each request. Initial one-hour inbox windows and timestamp
+queries use an in-memory timestamp index to read only matching event byte ranges,
+then return them in sequence order, even when the wall clock moves backwards.
+
+Upgrading changes how a jelly's file stores undo: it now keeps each change's
+difference instead of a full copy of view, verbs and state. The new daemon reads
+old files and keeps their undo, and rewrites each file in the new form at that
+jelly's next change. Converted history is exempt from the new byte budget until
+new history displaces it, within the same 100-step limit. An older binary cannot
+read a rewritten file: it skips that jelly with a `missing field` error. To go
+back to an older binary, keep a copy of `~/.jelly/jellies/` from before the upgrade.
 
 `jelly pull` gets asset names and bytes from the selected daemon, regardless of
 its home or the client's home. GET `/api/jellies/{name}/assets` returns a sorted

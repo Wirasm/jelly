@@ -45,7 +45,7 @@ fn new_jelly(d: &Daemon, name: &str) {
     post(d, "", json!({"name": name, "view": "<p>x</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}));
 }
 
-/// Runs `jelly comments` in project `t` and returns `(jelly, id)` pairs.
+/// Runs `jelly comments --json` in project `t` and returns `(jelly, id)` pairs.
 fn comments(d: &Daemon, extra: &[&str]) -> Vec<(String, String)> {
     let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
         .args(["--url", &d.url, "--project", "t", "comments", "--json"])

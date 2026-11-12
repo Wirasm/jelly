@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -693,16 +693,14 @@ struct InboxQ {
 
 /// What the person did since `since`, for jellies in `project`: the events an
 /// agent should hear about at the start of its next turn, each with a line of text.
-async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value> {
-    let path = app.store.lock().expect("store lock").events_path();
+/// Timestamp queries use indexed byte ranges without assuming wall-clock order.
+async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
-    let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    let items: Vec<Value> = text.lines()
-        .filter_map(|l| serde_json::from_str::<Event>(l).ok())
-        .filter(|e| e.at_ms > since && e.is_inbox_item(q.project.as_deref().unwrap_or("")))
-        .map(inbox_item)
-        .collect();
-    Json(json!(items))
+    let project = q.project.unwrap_or_default();
+    let events = app.store.lock().expect("store lock").events_since(since)
+        .map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
+    let items: Vec<_> = events.into_iter().filter(|e| e.is_inbox_item(&project)).map(inbox_item).collect();
+    Ok(Json(json!(items)))
 }
 
 
@@ -1134,9 +1132,11 @@ where
     app.validate_see(&name, &owner, j.version)?;
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
-    let history: Vec<Event> = std::fs::read_to_string(home.join("events.jsonl")).unwrap_or_default().lines()
-        .filter(|l| l.contains(&format!("\"jelly\":\"{name}\""))).filter_map(|l| serde_json::from_str(l).ok()).collect();
-    let last = history.last().map(|e| format!(" · last change {} by {}", ago(e.at_ms), e.by)).unwrap_or_default();
+    let (last, mine) = app.store.lock().expect("store lock").recent_events(&name);
+    // A trim can drop the newest event while an older one of the person's stays:
+    // only the event that made this version says who made the last change.
+    let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
+    let last = format!(" · last change {}{by}", ago(j.updated_ms));
     line(&mut out, format!("{} · {} · v{} · made by {}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
         if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
@@ -1157,8 +1157,7 @@ where
     for f in j.comments.iter().filter(|f| !f.resolved) {
         line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
-    let mine: Vec<&Event> = history.iter().filter(|e| e.by == PERSON).collect();
-    for e in mine.iter().rev().take(8).rev() {
+    for e in &mine {
         line(&mut out, format!("person   {} {}", ago(e.at_ms), e.describe()));
     }
     let project = j.project();
@@ -1753,6 +1752,7 @@ mod placement_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::PERSON;
 
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
@@ -2136,5 +2136,143 @@ mod tests {
         };
         let (result, _) = tokio::join!(checking, replace);
         assert!(result.unwrap_err().contains("changed"));
+    }
+
+    #[tokio::test]
+    async fn the_inbox_reads_back_to_the_cursor_and_keeps_the_person_after_a_trim() {
+        let (_d, app) = app();
+        let verbs = "const verbs = { label(s, { id }) { s[id] = 1; } };";
+        let ask = |since: u64| inbox(State(app.clone()), Query(InboxQ { project: Some("p".into()), since: Some(since) }));
+        let ids = |r: Result<Json<Value>, ApiError>| r.unwrap().0.as_array().unwrap().iter().map(|e| e["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let since = {
+            let mut s = app.store.lock().unwrap();
+            s.create("j", "".into(), verbs.into(), json!({}), "agent", false, "", "p").unwrap();
+            s.call("p:j", "label", json!({"id": "first"}), PERSON).unwrap().at_ms
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        {
+            let mut s = app.store.lock().unwrap();
+            s.call("p:j", "label", json!({"id": "second"}), PERSON).unwrap();
+            for i in 0..200 {
+                s.call("p:j", "label", json!({"id": format!("agent{i}")}), "agent").unwrap();
+            }
+        }
+        assert_eq!(ids(ask(since).await), ["second"]);
+        assert_eq!(ids(ask(0).await), ["first", "second"]);
+        app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
+        assert_eq!(ids(ask(0).await), ["first", "second"], "the person's events outlive a trim");
+    }
+
+    #[tokio::test]
+    async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
+        let (dir, app) = app();
+        let (recent, later) = {
+            let mut store = app.store.lock().unwrap();
+            store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
+            let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
+            recent.state = None;
+            let mut later = recent.clone();
+            later.seq += 1;
+            later.at_ms -= 1;
+            let mut older = later.clone();
+            older.seq += 1;
+            older.at_ms = 1;
+            std::fs::write(store.events_path(), format!("{}\n{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&later).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
+            (recent, later)
+        };
+        *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
+        let path = app.store.lock().unwrap().events_path();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let old_start = bytes[..bytes.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
+        bytes[old_start] = 0xff;
+        std::fs::write(&path, bytes).unwrap();
+        let empty = inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms) })).await.unwrap();
+        assert!(empty.0.as_array().unwrap().is_empty());
+        let result = inbox(State(app.clone()), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 2) })).await.unwrap();
+        assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq, later.seq]);
+        let mut shifted = std::fs::read(&path).unwrap();
+        shifted.insert(0, b'\n');
+        std::fs::write(&path, shifted).unwrap();
+        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms - 2) })).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());
+        let reader = crate::store::InboxReader::Named { name: "unreadable".into() };
+        assert!(app.store.lock().unwrap().read_inbox("test", &reader).is_err());
+    }
+
+    #[test]
+    fn see_history_does_not_read_unrelated_retained_events() {
+        let (dir, app) = app();
+        let mut store = app.store.lock().unwrap();
+        for name in ["quiet", "busy"] {
+            store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "test").unwrap();
+        }
+        for i in 0..10 {
+            store.set_state("test:quiet", "/n", Some(json!(i)), PERSON).unwrap();
+        }
+        let last = store.set_state("test:quiet", "/n", Some(json!(10)), "agent").unwrap();
+        for i in 0..200 {
+            store.set_state("test:busy", "/n", Some(json!(i)), "agent").unwrap();
+        }
+        let path = store.events_path();
+        drop(store);
+        // Removing the backing log makes any per-see log read observable.
+        let saved = std::fs::read(&path).unwrap();
+        for restarted in [false, true] {
+            if restarted {
+                *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
+            }
+            std::fs::remove_file(&path).unwrap();
+            let (event, person) = app.store.lock().unwrap().recent_events("test:quiet");
+            assert_eq!(event.unwrap().seq, last.seq);
+            assert_eq!(person.iter().map(|e| e.version).collect::<Vec<_>>(), (4..12).collect::<Vec<_>>());
+            assert!(app.store.lock().unwrap().recent_events("test:busy").1.is_empty());
+            assert!(app.store.lock().unwrap().recent_events("test:missing").0.is_none());
+            std::fs::write(&path, &saved).unwrap();
+        }
+        let mut store = app.store.lock().unwrap();
+        store.trim_events(1, 0).unwrap();
+        assert!(store.recent_events("test:quiet").0.is_none());
+        assert!(store.recent_events("test:quiet").1.is_empty());
+        assert!(store.recent_events("test:busy").0.is_some());
+        assert!(store.recent_events("test:busy").0.unwrap().state.is_none());
+    }
+
+    #[tokio::test]
+    async fn see_names_who_made_the_current_version_even_after_a_trim() {
+        let (_d, app) = app();
+        let verbs = "const verbs = { label(s, { id }) { s[id] = 1; } };";
+        {
+            let mut s = app.store.lock().unwrap();
+            for name in ["x", "y"] {
+                s.create(name, "".into(), verbs.into(), json!({}), "agent", false, "", "test").unwrap();
+            }
+            s.call("test:x", "label", json!({"id": "mine"}), PERSON).unwrap();
+            s.call("test:x", "label", json!({"id": "theirs"}), "agent").unwrap();
+            for i in 0..100 {
+                s.call("test:y", "label", json!({"id": format!("n{i}")}), "agent").unwrap();
+            }
+        }
+        let version = app.store.lock().unwrap().get("test:x").unwrap().version;
+        let current = owner(&app, "test:x").await;
+        post(&app, snapshot(&current, "PAGE", version)).await.unwrap();
+        let see_x = || async {
+            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false },
+                |_, _, _| async { Err("no browser".to_string()) }).await.unwrap();
+            String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+        };
+        let header = |out: &str| out.lines().next().unwrap().to_string();
+        let path = app.store.lock().unwrap().events_path();
+        let saved = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let out = see_x().await;
+        std::fs::write(&path, saved).unwrap();
+        assert!(header(&out).ends_with("last change just now by agent"), "{out}");
+        assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
+        app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
+        let out = see_x().await;
+        assert!(header(&out).ends_with("last change just now"), "the agent's change was trimmed, so no author: {out}");
+        assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
     }
 }

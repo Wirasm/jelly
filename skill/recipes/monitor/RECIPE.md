@@ -61,9 +61,9 @@ something else: a table of the worst items, a map, a picture per anomaly.
 - **Finish honestly.** `finish` with `failed` when the run found failures, and
   put the finding in `headline`, not "done". Stop pushing after it: `push` is
   refused.
-- **Mind the disk on very long runs.** The daemon keeps 100 undo snapshots of
-  view and state per jelly and rewrites them on every call: about 6 MB per push
-  at full size. Push every step, not every millisecond.
+- **Push every step, not every millisecond.** Undo keeps what each push changed,
+  within twice the state, but the daemon still rewrites the jelly's file on every
+  call.
 
 ## The driver
 

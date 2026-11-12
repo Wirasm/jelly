@@ -3,7 +3,8 @@
 //! A jelly is a view (HTML), verbs (JavaScript) and state (JSON) held together
 //! under one name. State changes only through verbs, so a person's click and an
 //! agent's call go through the same code and produce the same event. Every
-//! change keeps an undo snapshot and is appended to `events.jsonl`.
+//! change keeps an undo step, what it takes to go back, and is appended to
+//! `events.jsonl`.
 
 use crate::verbs;
 use serde::{Deserialize, Serialize};
@@ -13,9 +14,27 @@ use std::fmt;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Undo keeps the last `UNDO_DEPTH` changes, and drops the oldest sooner once
+/// new steps together hold more than twice the state plus `UNDO_SLACK`, so a
+/// few whole-state `set`s cannot grow a jelly's file to many copies of its
+/// state. Converted legacy steps are exempt from the byte budget until new
+/// history displaces them. The newest step always stays: the last change can
+/// always be undone.
 const UNDO_DEPTH: usize = 100;
+const UNDO_SLACK: usize = 64 * 1024;
+/// Myers diffing is quadratic on unrelated text. Past this it settles for a
+/// coarser diff, which is still exact.
+const DIFF_DEADLINE: Duration = Duration::from_millis(50);
+/// `events.jsonl` is trimmed once it passes `LOG_LIMIT`, down to the newest
+/// `LOG_KEEP` plus up to `PERSON_CARRY` of the person's older events, which
+/// are what the inbox and `jelly see` report.
+const LOG_LIMIT: u64 = 8 << 20;
+const LOG_KEEP: usize = 4 << 20;
+const PERSON_CARRY: usize = 1 << 20;
+/// How much of `events.jsonl` a backwards read takes at a time.
+const LOG_CHUNK: u64 = 64 * 1024;
 
 pub fn resolve_name<'a>(name: &str, project: &str, identities: impl IntoIterator<Item = &'a str>) -> String {
     if name.contains(':') || name == PAGE { return name.into(); }
@@ -227,7 +246,63 @@ pub struct Reply {
     pub at_ms: u64,
 }
 
+/// What it takes to go back one change. `state` turns the pretty-printed
+/// state after the change back into the one before; `view` and `verbs` hold
+/// what a reshape replaced, and are absent when it kept them.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct Step {
+    /// Existing snapshot history must survive upgrade, even above the new byte budget.
+    #[serde(default)]
+    legacy: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    state: Vec<Hunk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    view: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verbs: Option<String>,
+    view_rev: u64,
+}
+
+/// Replace `remove` lines of the pretty-printed state, starting at line `at`, with `lines`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Hunk {
+    at: usize,
+    remove: usize,
+    lines: Vec<String>,
+}
+
+impl Step {
+    fn for_rev(view_rev: u64) -> Step {
+        Step { view_rev, ..Step::default() }
+    }
+
+    fn budget_bytes(&self) -> usize {
+        if self.legacy {
+            return 0;
+        }
+        let lines: usize = self.state.iter().flat_map(|h| &h.lines).map(String::len).sum();
+        lines + self.view.as_ref().map_or(0, String::len) + self.verbs.as_ref().map_or(0, String::len)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(from = "EntryOnDisk")]
+struct Entry {
+    jelly: Jelly,
+    steps: Vec<Step>,
+}
+
+/// Reads jellies saved when undo kept a full copy of view, verbs and state per change.
+#[derive(Deserialize)]
+struct EntryOnDisk {
+    jelly: Jelly,
+    #[serde(default)]
+    undo: Vec<Snapshot>,
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+
+#[derive(Deserialize)]
 struct Snapshot {
     view: String,
     verbs: String,
@@ -235,10 +310,29 @@ struct Snapshot {
     view_rev: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Entry {
-    jelly: Jelly,
-    undo: Vec<Snapshot>,
+impl From<EntryOnDisk> for Entry {
+    fn from(d: EntryOnDisk) -> Self {
+        if d.undo.is_empty() {
+            return Entry { jelly: d.jelly, steps: d.steps };
+        }
+        // Oldest first: each snapshot is what the change after it replaced.
+        let mut entry = Entry { jelly: d.jelly, steps: Vec::new() };
+        for (i, snap) in d.undo.iter().enumerate() {
+            let (view, verbs, state) = match d.undo.get(i + 1) {
+                Some(next) => (&next.view, &next.verbs, &next.state),
+                None => (&entry.jelly.view, &entry.jelly.verbs, &entry.jelly.state),
+            };
+            let step = Step {
+                legacy: true,
+                state: state_step(state, &snap.state),
+                view: (snap.view != *view).then(|| snap.view.clone()),
+                verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
+                view_rev: snap.view_rev,
+            };
+            entry.steps.push(step);
+        }
+        entry
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -434,10 +528,51 @@ pub struct Store {
     dir: PathBuf,
     jellies: BTreeMap<String, Entry>,
     seq: u64,
+    recent: BTreeMap<String, RecentEvents>,
+    timestamps: TimestampIndex,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
     #[cfg(test)]
     pub log_failure: Option<(u64, usize)>,
+}
+
+#[derive(Default)]
+struct RecentEvents {
+    last: Option<Event>,
+    person: Vec<Event>,
+}
+
+impl RecentEvents {
+    fn push(&mut self, event: Event) {
+        if event.by == PERSON {
+            if self.person.len() == 8 {
+                self.person.remove(0);
+            }
+            self.person.push(event.clone());
+        }
+        self.last = Some(event);
+    }
+}
+
+type TimestampIndex = BTreeMap<(u64, u64), (u64, usize)>;
+
+fn read_event_history(path: &Path) -> std::io::Result<(u64, BTreeMap<String, RecentEvents>, TimestampIndex)> {
+    let log = read_optional(path)?;
+    if !log.is_empty() && !log.ends_with('\n') {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
+    }
+    let mut seq = 0;
+    let mut recent = BTreeMap::<String, RecentEvents>::new();
+    let mut timestamps = BTreeMap::new();
+    let mut offset = 0;
+    for line in log.split_inclusive('\n') {
+        let event: Event = serde_json::from_str(line)?;
+        timestamps.insert((event.at_ms, event.seq), (offset, line.len()));
+        offset += line.len() as u64;
+        seq = seq.max(event.seq);
+        recent.entry(event.jelly.clone()).or_default().push(event);
+    }
+    Ok((seq, recent, timestamps))
 }
 
 impl Store {
@@ -461,15 +596,8 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let log = read_optional(&dir.join("events.jsonl"))?;
-        if !log.is_empty() && !log.ends_with('\n') {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
-        }
-        let seq = log.lines().try_fold(0, |seq, line| -> std::io::Result<u64> {
-            let event: Event = serde_json::from_str(line)?;
-            Ok(seq.max(event.seq))
-        })?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None, #[cfg(test)] log_failure: None })
+        let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, source: None, #[cfg(test)] log_failure: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -519,7 +647,7 @@ impl Store {
             working: None,
             notes: Vec::new(),
         };
-        let previous_entry = self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
+        let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new() });
         self.commit(name, EventKind::New, by, None, None, vec![String::new()], previous_entry)
     }
 
@@ -534,8 +662,9 @@ impl Store {
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        snapshot(entry);
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
         entry.jelly.state = next;
+        push_step(entry, step);
         self.source = source;
         self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed, previous_entry)
     }
@@ -555,14 +684,11 @@ impl Store {
             entry.jelly.about = a.trim().into();
         }
         if view.is_some() || verbs_src.is_some() {
-            snapshot(entry);
-            if let Some(v) = view {
-                entry.jelly.view = v;
-            }
-            if let Some(v) = verbs_src {
-                entry.jelly.verbs = v;
-            }
-            entry.jelly.view_rev += 1;
+            let j = &mut entry.jelly;
+            let replaced = |old: &mut String, new: Option<String>| new.filter(|n| n != old).map(|n| std::mem::replace(old, n));
+            let step = Step { view: replaced(&mut j.view, view), verbs: replaced(&mut j.verbs, verbs_src), ..Step::for_rev(j.view_rev) };
+            j.view_rev += 1;
+            push_step(entry, step);
         }
         self.commit(name, EventKind::Reshape, by, None, None, Vec::new(), previous_entry)
     }
@@ -577,21 +703,28 @@ impl Store {
         set_at(&mut next, pointer, value).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        snapshot(entry);
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
         entry.jelly.state = next;
+        push_step(entry, step);
         self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed, previous_entry)
     }
 
     pub fn undo(&mut self, name: &str, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
-        let snap = entry.undo.pop().ok_or_else(|| Error::Invalid(format!("{name} has nothing to undo")))?;
+        let step = entry.steps.last().ok_or_else(|| Error::Invalid(format!("{name} has nothing to undo")))?;
+        let state = restore(&entry.jelly.state, &step.state).map_err(|e| Error::Invalid(format!("the undo history of {name} is damaged: {e}")))?;
+        let step = entry.steps.pop().expect("checked above");
         let mut changed = Vec::new();
-        diff(&entry.jelly.state, &snap.state, &mut String::new(), &mut changed);
-        entry.jelly.view = snap.view;
-        entry.jelly.verbs = snap.verbs;
-        entry.jelly.state = snap.state;
-        if entry.jelly.view_rev != snap.view_rev {
+        diff(&entry.jelly.state, &state, &mut String::new(), &mut changed);
+        entry.jelly.state = state;
+        if let Some(v) = step.view {
+            entry.jelly.view = v;
+        }
+        if let Some(v) = step.verbs {
+            entry.jelly.verbs = v;
+        }
+        if entry.jelly.view_rev != step.view_rev {
             // A new number, not the old one: views opened on the undone
             // version must notice and reload.
             entry.jelly.view_rev += 1;
@@ -943,8 +1076,8 @@ impl Store {
         }
     }
 
-    fn log(&self, ev: &Event) -> Result<(), Error> {
-        let append = || -> std::io::Result<()> {
+    fn log(&mut self, ev: &Event) -> Result<(), Error> {
+        let append = || -> std::io::Result<(u64, usize)> {
             let mut file = fs::OpenOptions::new().create(true).read(true).append(true).open(self.events_path())?;
             let len = file.metadata()?.len();
             if len > 0 {
@@ -968,17 +1101,101 @@ impl Store {
                 file.set_len(len).map_err(|rollback| std::io::Error::other(format!("{error}; could not remove partial record: {rollback}; repair events.jsonl before retrying")))?;
                 return Err(error);
             }
-            Ok(())
+            Ok((len, line.len()))
         };
-        append().map_err(|e| Error::Invalid(format!("could not record event for {}: {e}", ev.jelly)))
+        let (offset, length) = append().map_err(|e| Error::Invalid(format!("could not record event for {}: {e}", ev.jelly)))?;
+        self.timestamps.insert((ev.at_ms, ev.seq), (offset, length));
+        self.recent.entry(ev.jelly.clone()).or_default().push(ev.clone());
+        if offset + length as u64 > LOG_LIMIT {
+            if let Err(e) = self.trim_events(LOG_KEEP, PERSON_CARRY) {
+                let _ = writeln!(std::io::stderr().lock(), "could not trim the event log: {e}");
+            }
+        }
+        Ok(())
     }
 
     pub fn sequence(&self) -> u64 {
         self.seq
     }
 
+    pub(crate) fn trim_events(&mut self, keep: usize, carry: usize) -> std::io::Result<()> {
+        trim_log(&self.events_path(), keep, carry)?;
+        let (_, recent, timestamps) = read_event_history(&self.events_path())?;
+        self.recent = recent;
+        self.timestamps = timestamps;
+        Ok(())
+    }
+
+    /// Last retained change and the person's last eight events, oldest first.
+    /// Built during startup validation and maintained on append and trim so a
+    /// see never searches through unrelated history.
+    pub fn recent_events(&self, name: &str) -> (Option<Event>, Vec<Event>) {
+        self.recent.get(name).map(|r| (r.last.clone(), r.person.clone())).unwrap_or_default()
+    }
+
+    /// Timestamp order can differ from append order after a clock step. Index byte
+    /// ranges so time windows read only matching records, then restore seq order.
+    pub fn events_since(&self, since: u64) -> std::io::Result<Vec<Event>> {
+        let mut file = match fs::File::open(self.events_path()) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.timestamps.is_empty() => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is not a file"));
+        }
+        let mut events = Vec::new();
+        for (&(at_ms, seq), &(offset, length)) in self.timestamps.range((std::ops::Bound::Excluded((since, u64::MAX)), std::ops::Bound::Unbounded)) {
+            file.seek(SeekFrom::Start(offset))?;
+            let mut bytes = vec![0; length];
+            file.read_exact(&mut bytes)?;
+            let event: Event = serde_json::from_slice(&bytes)?;
+            if !bytes.ends_with(b"\n") || (event.at_ms, event.seq) != (at_ms, seq) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log no longer matches its timestamp index"));
+            }
+            events.push(event);
+        }
+        events.sort_unstable_by_key(|e| e.seq);
+        Ok(events)
+    }
+
     pub fn events_path(&self) -> PathBuf {
         self.dir.join("events.jsonl")
+    }
+
+    /// Hands the lines of `events.jsonl` to `visit`, newest first, until it
+    /// returns false or fails. Reads only as far back as `visit` asks for.
+    pub fn events_back(&self, mut visit: impl FnMut(&str) -> std::io::Result<bool>) -> std::io::Result<()> {
+        let mut file = match fs::File::open(self.events_path()) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        // The start of a line whose beginning is in an earlier chunk.
+        let mut pending = Vec::new();
+        let mut end = file.metadata()?.len();
+        let mut newest = true;
+        while end > 0 {
+            let start = end.saturating_sub(LOG_CHUNK);
+            let mut data = vec![0; (end - start) as usize];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut data)?;
+            data.extend_from_slice(&pending);
+            if std::mem::take(&mut newest) && data.ends_with(b"\n") {
+                data.pop();
+            }
+            let mut lines = data.split(|&b| b == b'\n');
+            let partial = if start > 0 { lines.next() } else { None };
+            for line in lines.rev() {
+                let line = std::str::from_utf8(line).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                if !visit(line)? {
+                    return Ok(());
+                }
+            }
+            pending = partial.unwrap_or_default().to_vec();
+            end = start;
+        }
+        Ok(())
     }
 
     fn inbox_cursors(&self) -> std::io::Result<Vec<InboxCursor>> {
@@ -999,19 +1216,23 @@ impl Store {
             let existing = cursors.iter().find(|c| c.project == project && &c.reader == reader);
             let initial = InboxPosition::Recent { since_ms: at_ms.saturating_sub(3_600_000) };
             let position = existing.map_or(&initial, |c| &c.position);
-            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => 0 };
-            let mut events = Vec::new();
-            for line in read_optional(&self.events_path())?.lines() {
-                let event: Event = serde_json::from_str(line)?;
-                through = through.max(event.seq);
-                let unread = match position {
-                    InboxPosition::After { seq } => event.seq > *seq,
-                    InboxPosition::Recent { since_ms } => event.at_ms > *since_ms,
-                };
-                if unread && event.is_inbox_item(project) {
-                    events.push(event.into());
+            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => self.seq };
+            let events = match position {
+                InboxPosition::Recent { since_ms } => self.events_since(*since_ms)?.into_iter()
+                    .filter(|event| event.is_inbox_item(project)).map(InboxItem::from).collect(),
+                InboxPosition::After { seq } => {
+                    let mut events = Vec::new();
+                    self.events_back(|line| {
+                        let event: Event = serde_json::from_str(line)?;
+                        through = through.max(event.seq);
+                        if event.seq <= *seq { return Ok(false); }
+                        if event.is_inbox_item(project) { events.push(event.into()); }
+                        Ok(true)
+                    })?;
+                    events.reverse();
+                    events
                 }
-            }
+            };
             if existing.is_none() {
                 // Fix the initial window so an unacknowledged response can be retried even an hour later.
                 cursors.push(InboxCursor { project: project.into(), reader: reader.clone(), position: initial });
@@ -1045,12 +1266,105 @@ impl Store {
     }
 }
 
-fn snapshot(entry: &mut Entry) {
-    let j = &entry.jelly;
-    entry.undo.push(Snapshot { view: j.view.clone(), verbs: j.verbs.clone(), state: j.state.clone(), view_rev: j.view_rev });
-    if entry.undo.len() > UNDO_DEPTH {
-        entry.undo.remove(0);
+/// Keeps `step` for undo, then drops the oldest steps past the depth or the byte budget.
+fn push_step(entry: &mut Entry, step: Step) {
+    let steps = &mut entry.steps;
+    steps.push(step);
+    let budget = undo_budget(&entry.jelly.state);
+    let mut drop = steps.len().saturating_sub(UNDO_DEPTH);
+    let mut total: usize = steps[drop..].iter().map(Step::budget_bytes).sum();
+    while drop + 1 < steps.len() && total > budget {
+        total -= steps[drop].budget_bytes();
+        drop += 1;
     }
+    steps.drain(..drop);
+}
+
+fn undo_budget(state: &Value) -> usize {
+    2 * serde_json::to_vec(state).map_or(0, |b| b.len()) + UNDO_SLACK
+}
+
+fn pretty(v: &Value) -> String {
+    serde_json::to_string_pretty(v).expect("a state serializes")
+}
+
+/// The hunks that turn the pretty-printed `after` back into `before`, by
+/// line, so a push that shifts an array costs the lines that moved in and out.
+fn state_step(after: &Value, before: &Value) -> Vec<Hunk> {
+    if after == before {
+        return Vec::new();
+    }
+    let (a, b) = (pretty(after), pretty(before));
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    let ops = similar::capture_diff_slices_deadline(similar::Algorithm::Myers, &a, &b, Some(Instant::now() + DIFF_DEADLINE));
+    ops.iter().filter_map(|op| {
+        let (at, remove, from, len) = match *op {
+            similar::DiffOp::Equal { .. } => return None,
+            similar::DiffOp::Delete { old_index, old_len, new_index } => (old_index, old_len, new_index, 0),
+            similar::DiffOp::Insert { old_index, new_index, new_len } => (old_index, 0, new_index, new_len),
+            similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => (old_index, old_len, new_index, new_len),
+        };
+        Some(Hunk { at, remove, lines: b[from..from + len].iter().map(|l| l.to_string()).collect() })
+    }).collect()
+}
+
+/// Applies `state_step`'s hunks to `current`, giving the state before the change.
+fn restore(current: &Value, hunks: &[Hunk]) -> Result<Value, String> {
+    if hunks.is_empty() {
+        return Ok(current.clone());
+    }
+    let text = pretty(current);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut pos = 0;
+    for h in hunks {
+        if h.at < pos || h.at + h.remove > lines.len() {
+            return Err(format!("a step does not fit the state (line {} of {})", h.at, lines.len()));
+        }
+        out.extend(&lines[pos..h.at]);
+        out.extend(h.lines.iter().map(String::as_str));
+        pos = h.at + h.remove;
+    }
+    out.extend(&lines[pos..]);
+    serde_json::from_str(&out.join("\n")).map_err(|e| e.to_string())
+}
+
+/// Rewrites the log as its newest `keep` bytes of whole lines (at least the
+/// newest line), preceded by up to `carry` bytes of the person's older events.
+/// Lines are copied as they are, so `seq` still ascends through the file.
+fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
+    let text = fs::read(path)?;
+    let body = text.strip_suffix(b"\n").unwrap_or(&text);
+    let from = text.len().saturating_sub(keep);
+    let split = match from {
+        0 => 0,
+        _ => text[from - 1..].iter().position(|&b| b == b'\n').map(|i| from + i).filter(|&i| i < body.len())
+            .unwrap_or_else(|| body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)),
+    };
+    let needle = format!("\"by\":\"{PERSON}\"");
+    let mut carried = Vec::new();
+    let mut room = carry;
+    for line in text[..split].split(|&b| b == b'\n').rev() {
+        let theirs = line.windows(needle.len()).any(|w| w == needle.as_bytes())
+            && serde_json::from_slice::<Event>(line).is_ok_and(|e| e.by == PERSON);
+        if theirs {
+            if line.len() + 1 > room {
+                break;
+            }
+            room -= line.len() + 1;
+            carried.push(line);
+        }
+    }
+    let mut out = Vec::with_capacity(carry - room + text.len() - split + 1);
+    for line in carried.iter().rev() {
+        out.extend_from_slice(line);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(&text[split..]);
+    if !out.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    write_atomic(path, &out)
 }
 
 /// Puts `value` at a JSON pointer (adding an object key or appending to an
@@ -1247,6 +1561,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_log_preserves_compact_undo_and_event_indexes() {
+        let (_dir, mut s) = store();
+        s.create("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.call("j", "label", json!({"id": "one", "value": "kept"}), "person").unwrap();
+        let before = fs::read(s.path("j")).unwrap();
+        let history = serde_json::to_value(s.events_since(0).unwrap()).unwrap();
+        let recent = serde_json::to_value(s.recent_events("j")).unwrap();
+        for operation in ["call", "reshape", "set", "undo"] {
+            s.log_failure = Some((s.seq + 1, 10));
+            let result = match operation {
+                "call" => s.call("j", "label", json!({"id": "one", "value": "lost"}), "person"),
+                "reshape" => s.reshape("j", Some("replacement".into()), Some("const verbs = {};".into()), None, "person"),
+                "set" => s.set_state("j", "", Some(json!({})), "person"),
+                "undo" => s.undo("j", "person"),
+                _ => unreachable!(),
+            };
+            assert!(result.unwrap_err().to_string().contains("could not record event"));
+            assert_eq!(fs::read(s.path("j")).unwrap(), before);
+            assert_eq!(serde_json::to_value(s.events_since(0).unwrap()).unwrap(), history);
+            assert_eq!(serde_json::to_value(s.recent_events("j")).unwrap(), recent);
+        }
+        s.log_failure = None;
+        let undone = s.undo("j", "person").unwrap();
+        assert_eq!(undone.state, Some(json!({"labels": {}})));
+        assert_eq!(s.get("j").unwrap().view, "original");
+        assert_eq!(s.get("j").unwrap().verbs, VERBS);
+        let events = s.events_since(0).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.last().unwrap().seq, undone.seq);
+        let (last, person) = s.recent_events("j");
+        assert_eq!(last.unwrap().seq, undone.seq);
+        assert_eq!(person.len(), 2);
+        assert_eq!(person.last().unwrap().seq, undone.seq);
+    }
+
+    #[test]
     fn failed_log_restores_creation_replacement_move_and_assets() {
         let (dir, mut s) = store();
         let created = s.create("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
@@ -1419,6 +1769,7 @@ mod tests {
         event.kind = EventKind::Call;
         push(&event);
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
         assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
         assert_eq!(consume_inbox(&mut s, "", reader.clone()).unwrap().len(), 3);
@@ -1437,6 +1788,17 @@ mod tests {
     }
 
     #[test]
+    fn inbox_without_history_needs_no_event_log() {
+        let (_dir, s) = store();
+        assert!(!s.events_path().exists());
+        assert!(s.events_since(0).unwrap().is_empty());
+        let reader = InboxReader::Named { name: "new".into() };
+        let batch = s.read_inbox("p", &reader).unwrap();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.through, 0);
+    }
+
+    #[test]
     fn inbox_initial_window_stays_fixed_until_commit() {
         let (dir, mut s) = store();
         s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
@@ -1445,18 +1807,30 @@ mod tests {
         let reader = InboxReader::Named { name: "retry".into() };
         let first_read_at = 7_200_000;
         let mut events = Vec::new();
-        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at - 3_599_999), (3, first_read_at)] {
+        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at), (3, first_read_at - 3_599_999), (4, first_read_at - 3_600_002)] {
             event.seq = seq;
             event.at_ms = at_ms;
             events.push(serde_json::to_string(&event).unwrap());
         }
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        let s = Store::open(dir.path()).unwrap();
         assert!(!dir.path().join("inbox-readers.json").exists());
+        let path = s.events_path();
+        let saved = fs::read(&path).unwrap();
+        // Poison excluded records without moving byte ranges: a full scan must fail.
+        let mut damaged = saved.clone();
+        damaged[0] = 0xff;
+        let last_start = saved[..saved.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
+        damaged[last_start] = 0xff;
+        fs::write(&path, damaged).unwrap();
         let first = s.read_inbox_at("p", &reader, first_read_at).unwrap();
         assert_eq!(first.events.iter().map(|item| item.event.seq).collect::<Vec<_>>(), [2, 3]);
         let retry_at = first_read_at + 3_600_001;
         let expected = serde_json::to_value(&first).unwrap();
         assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        let empty_reader = InboxReader::Named { name: "empty".into() };
+        assert!(s.read_inbox_at("p", &empty_reader, retry_at).unwrap().events.is_empty());
+        fs::write(&path, saved).unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
@@ -1464,6 +1838,21 @@ mod tests {
         assert!(s.read_inbox_at("p", &new_reader, retry_at).unwrap().events.is_empty());
         s.commit_inbox(InboxCommit { inbox: InboxRequest { project: "p".into(), reader: reader.clone() }, through: first.through }).unwrap();
         assert!(s.read_inbox_at("p", &reader, retry_at).unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn inbox_reads_back_only_to_the_readers_position() {
+        let (_dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
+        let reader = InboxReader::Named { name: "a".into() };
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        let event = s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        // Lines older than the position are never parsed, so damage there goes unread.
+        let log = fs::read_to_string(s.events_path()).unwrap();
+        let rest = log.split_once('\n').unwrap().1;
+        fs::write(s.events_path(), format!("malformed\n{rest}")).unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [event.seq]);
     }
 
     #[test]
@@ -1723,6 +2112,198 @@ mod tests {
         assert!(!f.resolved, "a follow-up opens the thread again");
         assert_eq!(f.replies.iter().map(|r| r.by.as_str()).collect::<Vec<_>>(), ["claude", "person"]);
         assert!(s.reply("j", "c9", "x", "claude", false).is_err());
+    }
+
+    const MONITOR_VERBS: &str = include_str!("../skill/recipes/monitor/verbs.js");
+
+    #[test]
+    fn hundreds_of_pushes_keep_the_file_near_the_state_and_undo_exact() {
+        let (dir, mut s) = store();
+        let mut state: Value = serde_json::from_str(include_str!("../skill/recipes/monitor/start.json")).unwrap();
+        state["notes"] = json!("n".repeat(95_000));
+        let view = format!("<main>{}</main>", "<p>row</p>".repeat(5_000));
+        s.create("run", view.clone(), MONITOR_VERBS.into(), state, "agent", false, "", "").unwrap();
+        let push = |i: u64| json!({
+            "points": [{"m": "latency", "v": 100.0 + (i % 17) as f64 * 1.37}, {"m": "browsers", "v": (i % 3) as f64}, {"m": "memory", "v": 40.0 + i as f64 / 7.0}],
+            "items": [{"r": if i.is_multiple_of(9) { "fail" } else { "pass" }, "label": format!("ask {i}")}],
+            "done": i,
+        });
+        for i in 1..300 {
+            s.call("run", "push", push(i), "agent").unwrap();
+        }
+        let before = s.get("run").unwrap().state.clone();
+        s.call("run", "push", push(300), "agent").unwrap();
+
+        let state = serde_json::to_vec(&s.get("run").unwrap().state).unwrap().len();
+        let file = fs::metadata(dir.path().join("jellies").join("run.json")).unwrap().len() as usize;
+        assert!(state > 100_000, "the state is {state} bytes");
+        assert!(file <= view.len() + MONITOR_VERBS.len() + 4 * state, "{file} bytes of file for {state} of state");
+
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().state, before, "undo restores the state before the last push exactly");
+        s.reshape("run", Some("<p>new</p>".into()), None, None, "agent").unwrap();
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().view, view);
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().state["done"], 298, "older pushes undo too, after a restart");
+    }
+
+    #[test]
+    fn whole_state_rewrites_stay_within_the_undo_budget_and_the_newest_always_undoes() {
+        let (dir, mut s) = store();
+        let big = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
+        s.create("j", "".into(), VERBS.into(), big(0), "agent", false, "", "").unwrap();
+        for i in 1..30 {
+            s.set_state("j", "", Some(big(i)), "agent").unwrap();
+        }
+        let path = dir.path().join("jellies").join("j.json");
+        let file = fs::metadata(&path).unwrap().len() as usize;
+        let state = serde_json::to_vec(&big(29)).unwrap().len();
+        assert!(file <= 4 * state, "{file} bytes of file for {state} of state");
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, big(28));
+
+        // One step bigger than the whole budget of the small state it leaves.
+        s.set_state("j", "", Some(json!({})), "agent").unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, big(28), "the newest step stays, however big");
+    }
+
+    #[test]
+    fn jellies_saved_with_full_snapshots_keep_their_undo() {
+        let (dir, mut s) = store();
+        s.create("j", "<p>v2</p>".into(), VERBS.into(), json!({"labels": {"a": "x", "b": "y"}}), "agent", false, "", "").unwrap();
+        let path = dir.path().join("jellies").join("j.json");
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["jelly"]["view_rev"] = json!(2);
+        saved["undo"] = json!([
+            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {}}, "view_rev": 1},
+            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {"a": "x"}}, "view_rev": 1},
+        ]);
+        saved.as_object_mut().unwrap().remove("steps");
+        fs::write(&path, saved.to_string()).unwrap();
+        drop(s);
+
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        let j = s.get("j").unwrap();
+        assert_eq!((j.state.clone(), j.view.as_str(), j.view_rev), (json!({"labels": {"a": "x"}}), "<p>v1</p>", 3));
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, json!({"labels": {}}));
+        assert!(s.undo("j", "person").is_err());
+        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("undo").is_none() && saved.get("steps").is_some());
+    }
+
+    #[test]
+    fn migration_preserves_large_legacy_undo_until_new_history_replaces_it() {
+        let (dir, mut s) = store();
+        let old = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
+        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        let path = dir.path().join("jellies").join("j.json");
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["undo"] = json!([
+            {"view": "", "verbs": VERBS, "state": old(0), "view_rev": 1},
+            {"view": "", "verbs": VERBS, "state": old(1), "view_rev": 1},
+        ]);
+        saved.as_object_mut().unwrap().remove("steps");
+        let legacy = saved.to_string();
+        fs::write(&path, &legacy).unwrap();
+        drop(s);
+
+        s = Store::open(dir.path()).unwrap();
+        s.set_state("j", "/new", Some(json!(true)), "agent").unwrap();
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, json!({}));
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(1));
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(0));
+        assert!(s.undo("j", "person").is_err());
+
+        fs::write(&path, legacy).unwrap();
+        s = Store::open(dir.path()).unwrap();
+        for i in 0..UNDO_DEPTH {
+            s.set_state("j", "/new", Some(json!(i)), "agent").unwrap();
+        }
+        assert!(fs::metadata(&path).unwrap().len() < UNDO_SLACK as u64,
+            "legacy history ages out at the depth limit");
+        for _ in 0..UNDO_DEPTH {
+            s.undo("j", "person").unwrap();
+        }
+        assert_eq!(s.get("j").unwrap().state, json!({}));
+        assert!(s.undo("j", "person").is_err());
+
+        fs::write(&path, saved.to_string()).unwrap();
+        s = Store::open(dir.path()).unwrap();
+        s.set_state("j", "", Some(old(2)), "agent").unwrap();
+        s.set_state("j", "", Some(json!({})), "agent").unwrap();
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(2), "the newest step survives the byte limit");
+        assert!(s.undo("j", "person").is_err(), "new history still obeys the byte budget");
+    }
+
+    fn logged(s: &Store) -> Vec<String> {
+        let mut lines = Vec::new();
+        s.events_back(|l| { lines.push(l.to_string()); Ok(true) }).unwrap();
+        lines.reverse();
+        lines
+    }
+
+    #[test]
+    fn the_log_reads_back_whole_lines_across_chunks() {
+        let (dir, s) = store();
+        let text: String = (0..400).map(|i| format!("{{\"seq\":{i},\"pad\":\"{}\"}}\n", "x".repeat(i * 7 % 1500))).collect();
+        assert!(text.len() as u64 > 3 * LOG_CHUNK);
+        fs::write(dir.path().join("events.jsonl"), &text).unwrap();
+        assert_eq!(logged(&s), text.lines().collect::<Vec<_>>());
+        let mut seen = 0;
+        s.events_back(|_| { seen += 1; Ok(seen < 3) }).unwrap();
+        assert_eq!(seen, 3, "stopping stops");
+    }
+
+    #[test]
+    fn trimming_the_log_keeps_the_newest_lines_and_the_persons_events() {
+        let (dir, mut s) = store();
+        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        for i in 0..60 {
+            let by = if i % 10 == 3 { "person" } else { "agent" };
+            s.call("j", "label", json!({"id": format!("k{i}"), "value": "v"}), by).unwrap();
+        }
+        let path = s.events_path();
+        let before = fs::read_to_string(&path).unwrap();
+        let keep = before.len() / 4;
+        s.trim_events(keep, 1 << 20).unwrap();
+
+        // The newest `keep` bytes of whole lines, after the person's older events.
+        let (mut start, mut expected, mut tail) = (0, Vec::new(), Vec::new());
+        for l in before.lines() {
+            if start >= before.len() - keep {
+                tail.push(l.to_string());
+            } else if l.contains("\"by\":\"person\"") {
+                expected.push(l.to_string());
+            }
+            start += l.len() + 1;
+        }
+        assert!(!expected.is_empty() && !tail.is_empty());
+        expected.extend(tail);
+        let after = logged(&s);
+        assert_eq!(after, expected);
+        let events: Vec<Event> = after.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert!(events.windows(2).all(|w| w[0].seq < w[1].seq), "seq still ascends");
+
+        let last = events.last().unwrap().seq;
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(s.call("j", "label", json!({"id": "z", "value": "v"}), "agent").unwrap().seq, last + 1);
     }
 
     #[test]
