@@ -1631,15 +1631,17 @@ mod tests {
     #[tokio::test]
     async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
         let (_d, app) = app();
-        let mut store = app.store.lock().unwrap();
-        store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
-        let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
-        recent.state = None;
-        let mut older = recent.clone();
-        older.seq += 1;
-        older.at_ms = 1;
-        std::fs::write(store.events_path(), format!("{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
-        drop(store);
+        let recent = {
+            let mut store = app.store.lock().unwrap();
+            store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
+            let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
+            recent.state = None;
+            let mut older = recent.clone();
+            older.seq += 1;
+            older.at_ms = 1;
+            std::fs::write(store.events_path(), format!("{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
+            recent
+        };
         let result = inbox(State(app), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
         assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq]);
     }
