@@ -859,7 +859,7 @@ impl Store {
         let line = serde_json::to_string(ev).expect("an event serializes");
         let file = fs::OpenOptions::new().create(true).append(true).open(self.dir.join("events.jsonl"));
         if let Err(e) = file.and_then(|mut f| writeln!(f, "{line}")) {
-            eprintln!("could not log event: {e}");
+            let _ = writeln!(std::io::stderr().lock(), "could not log event: {e}");
         }
     }
 
