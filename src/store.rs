@@ -432,6 +432,10 @@ impl Store {
                 let entry = serde_json::from_slice::<Entry>(&bytes).map_err(|e| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
                 })?;
+                // The name becomes a path under `assets/`, so a hand-edited one must not escape the home.
+                valid_name(&entry.jelly.name).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
+                })?;
                 jellies.insert(entry.jelly.name.clone(), entry);
             }
         }
@@ -1557,6 +1561,28 @@ mod tests {
             assert_eq!(fs::read_to_string(&broken).unwrap(), contents);
             fs::remove_file(broken).unwrap();
             assert!(Store::open(dir.path()).unwrap().get("valid").is_ok());
+        }
+    }
+
+    #[test]
+    fn persisted_names_must_pass_name_validation() {
+        let (dir, mut s) = store();
+        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.create("p:k", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        drop(s);
+        let s = Store::open(dir.path()).unwrap();
+        assert!(s.get("j").is_ok() && s.get("p:k").is_ok());
+        drop(s);
+        let file = dir.path().join("jellies/j.json");
+        let original = fs::read_to_string(&file).unwrap();
+        for bad in ["/tmp/outside", "../outside"] {
+            let mut entry: Value = serde_json::from_str(&original).unwrap();
+            entry["jelly"]["name"] = json!(bad);
+            fs::write(&file, entry.to_string()).unwrap();
+            let error = Store::open(dir.path()).err().expect("an escaping name must prevent startup");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(message.contains(file.to_str().unwrap()) && message.contains(&format!("{bad:?}")), "{message}");
         }
     }
 
