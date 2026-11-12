@@ -639,8 +639,13 @@
       };
       return items.map((a) => {
         try {
-          const element = a.anchor?.selector ? (inline() && a.anchor.selector.startsWith("#q-") ? document.getElementById(a.anchor.selector.slice(1)) : document.querySelector(selectorWithFocus(a.anchor.selector))) : null;
-          return { element };
+          const selector = a.anchor?.selector;
+          if (inline() && selector?.startsWith("#q-")) {
+            const element = document.getElementById(selector.slice(1));
+            if (!element) document.createDocumentFragment().querySelector(selector);
+            return { element };
+          }
+          return { element: typeof selector === "string" ? document.querySelector(selectorWithFocus(selector)) : null };
         } catch { return { element: null, invalid: true }; }
       });
     } finally {
@@ -837,13 +842,13 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
+          inline: inline(), page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
           fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) location.reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   function anchorsThat(kind) {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
+    return attention.filter((a) => isOpen(a) && typeof a.anchor?.selector === "string" && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());

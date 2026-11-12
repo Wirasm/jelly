@@ -10,7 +10,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -584,8 +584,9 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
         match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
-            Ok((place, exposed)) => {
+            Ok(AnchorMeasurement { place, exposed, inline }) => {
                 out["anchor"] = json!(place.status());
+                if inline { out["anchor_inline"] = json!(true); }
                 if exposed { out["anchor_exposed"] = json!(true); }
                 if let AnchorPlace::Fallback(f) = place {
                     out["anchor_destination"] = json!(f.destination);
@@ -602,7 +603,7 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Placement from a fresh browser snapshot; failure to render does not undo the ask.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<(AnchorPlace, bool), String> {
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<AnchorMeasurement, String> {
     let owner = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(name).map_err(|e| e.to_string())?;
@@ -616,7 +617,7 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
     loop {
         let snap = app.screen(name, &owner).map_err(|_| "the jelly changed during the anchor check".to_string())?
             .filter(|s| s.version >= version && s.at_ms >= asked);
-        if let Some(measured) = snap.and_then(|s| s.placement(item).map(|place| (place, s.exposed.iter().any(|id| id == item)))) {
+        if let Some(measured) = snap.and_then(|s| s.placement(item).map(|place| AnchorMeasurement { place, exposed: s.exposed.iter().any(|id| id == item), inline: s.inline })) {
             return Ok(measured);
         }
         match &rendered {
@@ -730,6 +731,24 @@ struct AnchorFallback {
     reason: String,
 }
 
+#[derive(Debug)]
+struct AnchorMeasurement {
+    place: AnchorPlace,
+    exposed: bool,
+    inline: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AnchorStatus {
+    Below,
+    Invalid,
+    Missing,
+    Floating,
+    Hidden,
+    Fallback,
+}
+
 #[derive(Debug, PartialEq)]
 enum AnchorPlace {
     Below,
@@ -741,14 +760,14 @@ enum AnchorPlace {
 }
 
 impl AnchorPlace {
-    fn status(&self) -> &'static str {
+    fn status(&self) -> AnchorStatus {
         match self {
-            Self::Below => "below",
-            Self::Invalid => "invalid",
-            Self::Missing => "missing",
-            Self::Floating => "floating",
-            Self::Hidden => "hidden",
-            Self::Fallback(_) => "fallback",
+            Self::Below => AnchorStatus::Below,
+            Self::Invalid => AnchorStatus::Invalid,
+            Self::Missing => AnchorStatus::Missing,
+            Self::Floating => AnchorStatus::Floating,
+            Self::Hidden => AnchorStatus::Hidden,
+            Self::Fallback(_) => AnchorStatus::Fallback,
         }
     }
 }
@@ -763,6 +782,8 @@ struct Screen {
     version: u64,
     #[serde(default)]
     at_ms: u64,
+    #[serde(default)]
+    inline: bool,
     /// Errors the page threw or logged.
     #[serde(default)]
     errors: Vec<String>,
@@ -992,17 +1013,18 @@ where
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
     if let Some(sc) = &snap {
         for e in &sc.errors { line(&mut out, format!("error    {e}")); }
+        let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
         for m in &sc.invalid {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which has invalid CSS selector syntax; it shows at the top instead"));
+            line(&mut out, format!("!        {id} asks about {sel}, which has invalid CSS selector syntax; {fallback}"));
         }
         for m in &sc.missing {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; it shows at the top instead"));
+            line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; {fallback}"));
         }
         for m in &sc.floating {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; it shows at the top instead"));
+            line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; {fallback}"));
         }
         for f in &sc.fallback {
             line(&mut out, format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
@@ -1161,7 +1183,7 @@ mod placement_tests {
         assert_eq!(screen.placement("a1"), Some(AnchorPlace::Missing));
         screen.invalid.push("a3 [".into());
         assert_eq!(screen.placement("a3"), Some(AnchorPlace::Invalid));
-        assert_eq!(screen.placement("a3").unwrap().status(), "invalid");
+        assert_eq!(screen.placement("a3").unwrap().status(), AnchorStatus::Invalid);
     }
 
     #[tokio::test]
@@ -1463,7 +1485,7 @@ mod tests {
         let mut sc = snapshot(&current, "ASK PAGE", version);
         sc.missing.push("a2 #q-q1".into());
         post(&app, sc).await.unwrap();
-        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap().0, AnchorPlace::Missing);
+        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap().place, AnchorPlace::Missing);
         // The wait must ignore a screen from before the ask and an older state.
         app.screens.lock().unwrap().get_mut("test:x").unwrap().screen.as_mut().unwrap().at_ms = asked - 1;
         let checking = anchor_place(&app, 1, "test:x", "a2", version, asked);
@@ -1474,7 +1496,7 @@ mod tests {
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap().0, AnchorPlace::Below);
+        assert_eq!(result.unwrap().place, AnchorPlace::Below);
         let checking = anchor_place(&app, 1, "test:x", "a2", version + 1, asked);
         let update = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1483,7 +1505,7 @@ mod tests {
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap().0, AnchorPlace::Hidden);
+        assert_eq!(result.unwrap().place, AnchorPlace::Hidden);
         let checking = anchor_place(&app, 1, "test:x", "a2", version + 2, now_ms());
         let replace = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;

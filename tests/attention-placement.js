@@ -120,8 +120,8 @@ async (page) => {
       for(const pos of ['fixed','sticky','absolute']) addCase(pos,`<div style="position:${pos}"><span id="${pos}">Floating</span></div>`,'#'+pos);
       addCase('hidden','<div hidden><button id="hidden">Hidden</button></div>','#hidden');
       addCase('missing','', '#missing'); addCase('invalid','', '['); addCase('top','');
-      for (const [id,selector] of [['look-missing','#missing'],['look-invalid','[']]) {
-        items.push({id,kind:'look',title:id,by:'test',anchor:{selector}});
+      for (const [id,selector] of [['look-missing','#missing'],['look-invalid','['],['empty',''],['look-empty',''],['inline-invalid','#q-absent['],['look-inline-invalid','#q-absent[']]) {
+        items.push({id,kind:id.startsWith('look-')?'look':'ask',title:id,by:'test',anchor:{selector}});
       }
       addCase('ul','<ul id="ul"><li id="ul1">One</li><li>Two</li></ul>','#ul1');
       addCase('reverse','<ol id="reverse" reversed><li id="rev1">Three</li><li>Two</li><li>One</li></ol>','#rev1');
@@ -213,6 +213,7 @@ async (page) => {
       for(const prefix of ['', 'look-']) {
         assert(screen.missing.includes(prefix+'missing #missing'),prefix+'missing diagnostic');
         assert(screen.invalid?.includes(prefix+'invalid ['),prefix+'invalid syntax diagnostic');
+        assert(screen.invalid.includes(prefix+'empty '),prefix+'empty selector diagnostic');
         assert(!screen.missing.includes(prefix+'invalid ['),prefix+'invalid is not missing');
         for (const suffix of ['missing','invalid']) assert(host(prefix+suffix).closest('.jf-ask-top'),prefix+suffix+' fallback at top');
       }
@@ -250,6 +251,10 @@ async (page) => {
     await page.evaluate(()=>{
       assert(stablePositions.every(([el,top])=>rect(el).top===top),'settled geometry stable');
       assert(movementCount===0,'no redraw loop'); moveObserver.disconnect();
+      document.body.insertAdjacentHTML('beforeend','<section id="q-good" class="present">Good</section><section id="q-punct[">Literal ID</section>');
+      for (const [id,selector] of [['inline-good','#q-good'],['inline-literal','#q-punct['],['inline-absent','#q-good.present']]) {
+        items.push({id,kind:'ask',title:id,by:'test',anchor:{selector}});
+      }
       document.head.insertAdjacentHTML('beforeend','<meta name="jelly-attention" content="inline">');
       refresh();
     });
@@ -257,9 +262,16 @@ async (page) => {
     await page.evaluate(()=>{
       assert(!document.querySelector('.jf-slot'),'inline attention opts out');
       const screen=screens.at(-1);
+      assert(screen.inline === true,'snapshot identifies view-owned placement');
+      assert(screen.missing.includes('inline-absent #q-good.present'),'unmatched inline literal ID remains missing');
+      for(const id of ['inline-good','inline-literal']) {
+        assert(!screen.invalid.some(m=>m.startsWith(id+' ')) && !screen.missing.some(m=>m.startsWith(id+' ')),id+' literal ID remains supported');
+      }
       for(const prefix of ['', 'look-']) {
         assert(screen.missing.includes(prefix+'missing #missing'),'inline missing diagnostic');
         assert(screen.invalid.includes(prefix+'invalid ['),'inline invalid diagnostic');
+        assert(screen.invalid.includes(prefix+'empty '),'empty selector diagnostic');
+        assert(screen.invalid.includes(prefix+'inline-invalid #q-absent['),'unmatched inline selector diagnostic');
         assert(!screen.missing.includes(prefix+'invalid ['),'inline invalid is not missing');
       }
       assert(screen.floating.some(m=>m.startsWith('fixed ')),'inline floating diagnostic');

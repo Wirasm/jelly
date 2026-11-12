@@ -108,8 +108,8 @@ the card is shown at the top and the reply says so after the browser measures it
 If row insertion is unsafe, the reply and `see` name the actual fallback destination.
 Without a measurement for that question, the reply says it was not checked. Pages
 that render their own inline attention retain invalid, missing, floating and hidden anchor
-diagnostics; the runtime cannot confirm where their visible questions appear. Clear your own
-test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
+diagnostics; the reply marks placement as not checked because the view places its
+own attention, as does `see` when reporting selector warnings. Clear your own test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
 ## Ask the person: attention

@@ -850,16 +850,24 @@ fn report_line(ev: &Value) -> String {
 /// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
     let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
-    if ev["anchor_exposed"] == true && ev["anchor"] != "invalid" {
+    use server::AnchorStatus;
+    let status = AnchorStatus::deserialize(&ev["anchor"]).ok();
+    let inline = ev["anchor_inline"] == true;
+    if ev["anchor_exposed"] == true && status != Some(AnchorStatus::Invalid) {
         return format!("{at} is in a part that is unavailable right now, so the question is shown at the top");
     }
-    match ev["anchor"].as_str() {
-        Some("below") => format!("it shows on the page below {at}"),
-        Some("invalid") => format!("{at} has invalid CSS selector syntax, so it shows at the top"),
-        Some("missing") => format!("{at} matches nothing on the page, so it shows at the top"),
-        Some("floating") => format!("{at} is in a fixed or sticky part of the page, so it shows at the top"),
-        Some("hidden") => format!("it shows below {at}, which is not on screen right now"),
-        Some("fallback") => {
+    let fallback = if inline { "placement not checked: the view places its own attention" } else { "so it shows at the top" };
+    match status {
+        Some(AnchorStatus::Below) => format!("it shows on the page below {at}"),
+        Some(AnchorStatus::Invalid) => format!("{at} has invalid CSS selector syntax, {fallback}"),
+        Some(AnchorStatus::Missing) => format!("{at} matches nothing on the page, {fallback}"),
+        Some(AnchorStatus::Floating) => format!("{at} is in a fixed or sticky part of the page, {fallback}"),
+        Some(AnchorStatus::Hidden) => if inline {
+            format!("{at} is not on screen right now, placement not checked: the view places its own attention")
+        } else {
+            format!("it shows below {at}, which is not on screen right now")
+        },
+        Some(AnchorStatus::Fallback) => {
             let destination = server::AnchorDestination::deserialize(&ev["anchor_destination"])
                 .map_or_else(|_| "somewhere else".into(), |d| d.describe());
             format!("it shows {destination} instead; {}", ev["anchor_reason"].as_str().unwrap_or(""))
@@ -1118,6 +1126,9 @@ mod tests {
         assert_eq!(at(json!({"anchor": "below"})), "it shows on the page below #list");
         for exposed in [false, true] {
             assert_eq!(placement(&json!({"args":{"anchor":{"selector":"["}}, "anchor":"invalid", "anchor_exposed":exposed})), "[ has invalid CSS selector syntax, so it shows at the top");
+        }
+        for (status, diagnosis) in [("invalid", "has invalid CSS selector syntax"), ("missing", "matches nothing on the page"), ("floating", "is in a fixed or sticky part of the page"), ("hidden", "is not on screen right now")] {
+            assert_eq!(at(json!({"anchor": status, "anchor_inline": true})), format!("#list {diagnosis}, placement not checked: the view places its own attention"));
         }
         assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
