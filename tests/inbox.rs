@@ -317,3 +317,21 @@ fn inbox_failed_progress_commit_reports_failure_and_replays() {
     has_event(&stdout(read(false)));
     empty(&stdout(read(false)));
 }
+
+#[test]
+fn closed_stdout_leaves_inbox_events_available_for_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(temp.path());
+    daemon.person_event();
+    for hook in [false, true] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut cmd = daemon.command(temp.path());
+        cmd.args(["--as", "retry", "inbox"]).stdout(Stdio::from(writer));
+        if hook { cmd.arg("--hook"); }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{out:?}");
+    }
+    has_event(&stdout(daemon.command(temp.path()).args(["--as", "retry", "inbox"]).output().unwrap()));
+    empty(&stdout(daemon.command(temp.path()).args(["--as", "retry", "inbox"]).output().unwrap()));
+}

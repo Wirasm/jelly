@@ -15,8 +15,17 @@ of it. You hear all of it.
 thinking: lay out the options, what each gains and costs, what each looks like,
 and which you recommend. Their job is to react, not to write your spec.
 
-Check the daemon first: `jelly ls` (this project's jellies; `--all` for every project). If it cannot be reached, ask the person to run
-`jelly serve`; do not start it yourself unless they asked.
+Use jelly directly: the first client command starts the default daemon in the
+background and waits for it, printing one startup line on stderr. `jelly ls`
+lists this project's jellies (`--all` for every project).
+
+Startup uses the same home as `jelly serve`: `$JELLY_HOME` or `~/.jelly`, at
+http://127.0.0.1:7878 (also localhost:7878 and equivalent spellings). Other
+`--url` / `JELLY_URL` targets must already be running.
+If startup fails, run `jelly serve` in the foreground to see the cause.
+`jelly inbox --hook` starts silently, suppresses startup errors, and prints only
+new inbox items. Outside a project it attempts startup and exits successfully
+without inbox output.
 
 ## Make a jelly
 
@@ -60,6 +69,40 @@ const stop = jelly.onAttend(item => {             // when the dock opens this qu
 
 Keep data in state, not in page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at them.
+
+### Place the Comment button
+
+A standalone jelly (`/j/<id>/`) has a Comment button 10px from the bottom-right
+corner. Reserve a clear spot for it when your view has fixed or sticky controls.
+Set `--jelly-comment-inset` on `:root` or `body`; the button inherits it. The value
+uses CSS `inset` order: top, right, bottom, left. Use all four values, with `auto`
+for the opposite edges, so the button keeps its natural size.
+
+```css
+/* Above a bottom control bar. */
+:root { --jelly-comment-inset: auto 10px 78px auto; }
+
+/* Top right. */
+:root { --jelly-comment-inset: 10px 10px auto auto; }
+
+/* A bottom bar whose height the view already measures. */
+:root { --jelly-comment-inset: auto 10px calc(var(--foot, 68px) + 10px) auto; }
+
+/* Move it only while a mobile tracing panel is open. */
+@media (max-width: 900px) {
+  body.tracing { --jelly-comment-inset: 10px 10px auto auto; }
+}
+```
+
+Media queries, class changes and updated CSS variables move the button immediately.
+Placement follows normal CSS rules; the runtime does not detect obstacles. Check
+that Comment and your controls remain visible and clickable at supported sizes
+and states, including the longer label while commenting.
+
+On the jelly page, the header supplies Comment and embedded jellies omit their
+local button. A view with its own comment control can still omit the standalone
+button with `<meta name="jelly-comment" content="off">`; Option-click remains
+available. That metadata does not set placement.
 
 ## Recipes
 

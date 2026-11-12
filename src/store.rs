@@ -561,12 +561,13 @@ impl Store {
         for file in fs::read_dir(dir.join("jellies"))? {
             let path = file?.path();
             if path.extension().is_some_and(|e| e == "json") {
-                match serde_json::from_slice::<Entry>(&fs::read(&path)?) {
-                    Ok(entry) => {
-                        jellies.insert(entry.jelly.name.clone(), entry);
-                    }
-                    Err(e) => eprintln!("skipping {}: {e}", path.display()),
-                }
+                let bytes = fs::read(&path).map_err(|e| {
+                    std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
+                })?;
+                let entry = serde_json::from_slice::<Entry>(&bytes).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
+                })?;
+                jellies.insert(entry.jelly.name.clone(), entry);
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
@@ -2088,6 +2089,24 @@ mod tests {
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(s.call("j", "label", json!({"id": "z", "value": "v"}), "agent").unwrap().seq, last + 1);
+    }
+
+    #[test]
+    fn malformed_persisted_jellies_refuse_to_open_without_changing_files() {
+        for contents in ["{", "{}"] {
+            let (dir, mut s) = store();
+            s.create("valid", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+            drop(s);
+            let broken = dir.path().join("jellies/broken.json");
+            fs::write(&broken, contents).unwrap();
+            fs::write(dir.path().join("jellies/notes.txt"), "not a jelly").unwrap();
+            let error = Store::open(dir.path()).err().expect("must not serve a partial store");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(broken.to_str().unwrap()));
+            assert_eq!(fs::read_to_string(&broken).unwrap(), contents);
+            fs::remove_file(broken).unwrap();
+            assert!(Store::open(dir.path()).unwrap().get("valid").is_ok());
+        }
     }
 
     #[test]

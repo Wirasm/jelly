@@ -44,6 +44,29 @@ fn open_always_prints_the_address_and_reports_browser_failures() {
                 cmd.arg(name);
             }
             let output = cmd.output().unwrap();
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            if exit.is_some() {
+                std::fs::remove_file(&arguments).unwrap();
+            }
+            let closed = cmd
+                .stdout(std::process::Stdio::from(writer))
+                .output()
+                .unwrap();
+            assert!(closed.status.success(), "{closed:?}");
+            if exit == Some(0) {
+                assert!(closed.stderr.is_empty(), "{closed:?}");
+            } else {
+                let stderr = String::from_utf8(closed.stderr).unwrap();
+                assert!(stderr.contains("could not open a browser"), "{stderr}");
+                assert!(stderr.contains(&url), "{stderr}");
+            }
+            if exit.is_some() {
+                assert_eq!(
+                    std::fs::read_to_string(&arguments).unwrap(),
+                    format!("{url}\n")
+                );
+            }
             assert!(output.status.success(), "{output:?}");
             assert_eq!(
                 String::from_utf8(output.stdout).unwrap(),
@@ -54,6 +77,7 @@ fn open_always_prints_the_address_and_reports_browser_failures() {
                 assert!(stderr.is_empty(), "{stderr}");
             } else {
                 assert!(stderr.contains("could not open a browser"), "{stderr}");
+                assert!(stderr.contains(&url), "{stderr}");
             }
             if exit.is_some() {
                 assert_eq!(
