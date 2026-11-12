@@ -44,6 +44,21 @@ fn open_always_prints_the_address_and_reports_browser_failures() {
                 cmd.arg(name);
             }
             let output = cmd.output().unwrap();
+            if exit == Some(0) {
+                let (reader, writer) = std::io::pipe().unwrap();
+                drop(reader);
+                std::fs::remove_file(&arguments).unwrap();
+                let closed = cmd
+                    .stdout(std::process::Stdio::from(writer))
+                    .output()
+                    .unwrap();
+                assert!(closed.status.success(), "{closed:?}");
+                assert!(closed.stderr.is_empty(), "{closed:?}");
+                assert_eq!(
+                    std::fs::read_to_string(&arguments).unwrap(),
+                    format!("{url}\n")
+                );
+            }
             assert!(output.status.success(), "{output:?}");
             assert_eq!(
                 String::from_utf8(output.stdout).unwrap(),
