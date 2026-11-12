@@ -3,6 +3,7 @@
 mod design;
 mod server;
 mod store;
+mod startup;
 mod verbs;
 
 use clap::{Parser, Subcommand};
@@ -16,7 +17,7 @@ use std::process::ExitCode;
 #[command(name = "jelly", about = "Small live apps that agents and people shape while they run")]
 struct Cli {
     /// Daemon address for client commands.
-    #[arg(long, env = "JELLY_URL", default_value = "http://127.0.0.1:7878", global = true)]
+    #[arg(long, env = "JELLY_URL", default_value = startup::DEFAULT_URL, global = true)]
     url: String,
     /// Who this change is from, recorded on every event (default: agent).
     #[arg(long = "as", env = "JELLY_AS", global = true)]
@@ -282,7 +283,7 @@ enum Cmd {
     /// Reader identity: explicit --as / JELLY_AS, then --session-id /
     /// JELLY_SESSION_ID, Claude session environment or hook input, then the
     /// invoking parent's PID and start time. Conversation IDs survive resume.
-    /// With --hook, prints nothing when there is nothing new or no daemon, so
+    /// With --hook, starts silently and prints nothing when there is nothing new, so
     /// it can run at the start of every agent turn.
     Inbox {
         #[arg(long)]
@@ -347,7 +348,24 @@ fn main() -> ExitCode {
     }
 }
 
+fn daemon_command() -> Result<std::process::Command, String> {
+    let mut command = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    command.arg("serve");
+    Ok(command)
+}
+
 fn run(cli: Cli) -> Result<(), CommandError> {
+    run_with_start(cli, |url, quiet| startup::ensure_running(url, quiet, daemon_command()?))
+}
+
+fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
+    if !matches!(cli.cmd, Cmd::Serve { .. }) && startup::is_default_endpoint(&cli.url) {
+        cli.url = startup::DEFAULT_URL.into();
+        let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
+        if let Err(e) = start(&cli.url, quiet) {
+            return if quiet { Ok(()) } else { Err(e.into()) };
+        }
+    }
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     // Only commands that make or open jellies need it, so git runs only for those.
@@ -383,9 +401,13 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 .or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".jelly")))
                 .ok_or("set --home, JELLY_HOME or HOME")?;
-            let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-            rt.block_on(server::serve(store, port)).map_err(|e| e.to_string().into())
+            rt.block_on(async {
+                // Reserve the endpoint before store initialization can write anything.
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
+                let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
+                server::serve(store, listener).await.map_err(|e| e.to_string().into())
+            })
         }
         Cmd::Ls { all, json } => {
             let p = if all { String::new() } else { project() };
@@ -1032,7 +1054,7 @@ fn describe(e: ureq::Error) -> String {
             .ok()
             .and_then(|v| v.get("error").and_then(Value::as_str).map(String::from))
             .unwrap_or_else(|| "request failed".into()),
-        ureq::Error::Transport(t) => format!("cannot reach the daemon ({t}); start it with `jelly serve`"),
+        ureq::Error::Transport(t) => format!("cannot reach the selected daemon ({t}); check --url / JELLY_URL and the server"),
     }
 }
 
@@ -1056,6 +1078,49 @@ mod tests {
     use super::{answer_line, placement, wait_line, write_output};
     use std::io::{self, Write};
     use serde_json::json;
+
+    #[test]
+    fn startup_precedes_dispatch_and_hooks_suppress_its_errors() {
+        use super::{run_with_start, Cli};
+        use clap::Parser;
+        let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap();
+        let command = super::daemon_command().unwrap();
+        assert_eq!(command.get_program(), std::env::current_exe().unwrap());
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["serve"]);
+        assert_eq!(command.get_envs().count(), 0, "inherit home and other environment defaults");
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "open"]);
+        let result = run_with_start(cli, |url, quiet| {
+            assert_eq!(url, super::startup::DEFAULT_URL);
+            assert!(!quiet);
+            Err("startup failed before opening a browser".into())
+        });
+        assert_eq!(result.unwrap_err().to_string(), "startup failed before opening a browser");
+        for alias in ["http://localhost:7878/", "HTTP://127.1:7878"] {
+            let cli = parse(&["jelly", "--url", alias, "open"]);
+            assert_eq!(run_with_start(cli, |url, quiet| {
+                assert_eq!(url, super::startup::DEFAULT_URL);
+                assert!(!quiet);
+                Err("alias startup".into())
+            }).unwrap_err().to_string(), "alias startup");
+        }
+        for project in ["", "test"] {
+            let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "inbox", "--hook"]);
+            assert!(run_with_start(cli, |_, quiet| {
+                assert!(quiet);
+                Err("startup failed".into())
+            }).is_ok());
+        }
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", "", "inbox", "--hook"]);
+        let mut called = false;
+        assert!(run_with_start(cli, |_, quiet| { called = true; assert!(quiet); Ok(()) }).is_ok());
+        assert!(called, "outside-project hook must start before its early return");
+
+        let home = tempfile::NamedTempFile::new().unwrap();
+        let cli = parse(&["jelly", "serve", "--port", "0", "--home", home.path().to_str().unwrap()]);
+        assert!(run_with_start(cli, |_, _| panic!("serve must bypass startup")).is_err());
+        let cli = parse(&["jelly", "--url", "http://127.0.0.1:9999", "--project", "", "inbox", "--hook"]);
+        assert!(run_with_start(cli, |_, _| panic!("custom URL must bypass startup")).is_ok());
+    }
 
     #[test]
     fn output_preserves_write_and_flush_errors() {
