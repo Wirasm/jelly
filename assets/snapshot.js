@@ -154,10 +154,10 @@
       return resource(clean) + url.slice(clean.length) + descriptor;
     });
   }
-  // Detached images can finish loading before ever joining the observed tree.
-  for (const name of ["src", "srcset"]) {
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, name);
-    Object.defineProperty(HTMLImageElement.prototype, name, {
+  // Resource loads can start before the mutation observer gets a turn.
+  for (const [prototype, name] of [[HTMLImageElement.prototype, "src"], [HTMLImageElement.prototype, "srcset"], [HTMLObjectElement.prototype, "data"]]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    Object.defineProperty(prototype, name, {
       ...descriptor,
       set(value) { descriptor.set.call(this, name === "srcset" ? srcset(String(value)) : resource(String(value))); },
     });
@@ -169,11 +169,12 @@
       if (key === "src") value = resource(String(value));
       if (key === "srcset") value = srcset(String(value));
     }
+    if (this instanceof HTMLObjectElement && key === "data") value = resource(String(value));
     return setAttribute.call(this, name, value);
   };
   const setAttributeNS = Element.prototype.setAttributeNS;
   Element.prototype.setAttributeNS = function(namespace, name, value) {
-    if (!namespace && this instanceof HTMLImageElement) return this.setAttribute(name, value);
+    if (!namespace && (this instanceof HTMLImageElement || this instanceof HTMLObjectElement)) return this.setAttribute(name, value);
     return setAttributeNS.call(this, namespace, name, value);
   };
   function reconcile(element) {

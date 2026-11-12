@@ -668,6 +668,7 @@ async fn asset(State(app): State<Shared>, Path((name, file)): Path<(String, Stri
 /// inlined, and a read-only `jelly` in place of the live runtime.
 async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
     use base64::Engine as _;
+    use lol_html::html_content::UserData as _;
     let (j, dir, files) = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(&name)?.clone();
@@ -688,16 +689,46 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
     let html = lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
-        element_content_handlers: vec![lol_html::element!("template", |element| {
-            if element.get_attribute("shadowrootmode").is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed")) {
-                element.prepend(&format!("<{marker} hidden></{marker}>"), lol_html::html_content::ContentType::Html);
-            }
-            element.after(&format!("<script data-{marker}>window.__JELLY__.finishTemplate()</script>"), lol_html::html_content::ContentType::Html);
-            Ok(())
-        })],
+        element_content_handlers: vec![
+            lol_html::element!("template object", |element| {
+                element.set_user_data(true);
+                Ok(())
+            }),
+            lol_html::element!("object[data]", |element| {
+                // Inert template markup must survive export unchanged.
+                if element.user_data().downcast_ref::<bool>() == Some(&true) { return Ok(()); }
+                let value = element.get_attribute("data").expect("matched data attribute");
+                if let Some(uri) = shared_object_asset(&value, &assets) {
+                    // An object can commit its missing-file fallback before the DOM observer runs.
+                    element.set_attribute("data", &uri)?;
+                }
+                Ok(())
+            }),
+            lol_html::element!("template", |element| {
+                if element.get_attribute("shadowrootmode").is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed")) {
+                    element.prepend(&format!("<{marker} hidden></{marker}>"), lol_html::html_content::ContentType::Html);
+                }
+                element.after(&format!("<script data-{marker}>window.__JELLY__.finishTemplate()</script>"), lol_html::html_content::ContentType::Html);
+                Ok(())
+            }),
+        ],
         ..Default::default()
     }).map_err(|e| ApiError::Internal(format!("could not prepare shared view: {e}")))?;
     Ok(Html(inject_head(&html, &inject)))
+}
+
+fn shared_object_asset(value: &str, assets: &[(String, String)]) -> Option<String> {
+    let mut relative = value.trim_matches([' ', '\t', '\n', '\r', '\x0c']);
+    while let Some(rest) = relative.strip_prefix("./") { relative = rest; }
+    // Only directory-independent local references can be resolved before the output file is named.
+    if !relative.starts_with("assets/") { return None; }
+    let base = url::Url::parse(if cfg!(windows) { "file:///C:/" } else { "file:///" }).expect("valid local URL");
+    let directory = base.join("assets/").expect("valid asset directory").to_file_path().ok()?;
+    let url = base.join(relative).ok()?;
+    let path = url.to_file_path().ok()?;
+    let file = path.strip_prefix(directory).ok()?.to_str()?;
+    let (_, uri) = assets.iter().find(|(name, _)| name == file)?;
+    Some(format!("{uri}{}", url.fragment().map(|hash| format!("#{hash}")).unwrap_or_default()))
 }
 
 #[derive(Deserialize)]
@@ -1373,6 +1404,30 @@ mod share_tests {
         let html = exported(app).await;
         assert_eq!(boot(&html)["assets"], json!([]));
         assert!(html.contains("<p>No assets</p>"));
+    }
+
+    #[tokio::test]
+    async fn share_embeds_parsed_objects_before_browser_loads() {
+        let inert = "<object data='assets/green.svg'></object>";
+        let view = format!("<head></head><object data='assets/green.svg'></object><template>{inert}</template><script>const markup = \"{inert}\";</script>");
+        let (_dir, app) = fixture(&view);
+        app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+        let html = exported(app).await;
+        assert!(html.contains("<object data=\"data:image/svg+xml;base64,c3Zn\"></object>"));
+        assert!(html.contains(&format!("<template>{inert}</template>")));
+        assert!(html.contains(&format!("const markup = \"{inert}\";")));
+    }
+
+    #[test]
+    fn share_object_resource_paths() {
+        let assets = vec![("a b.svg".into(), "data:image/svg+xml;base64,c3Zn".into())];
+        for path in ["assets/a b.svg", "./assets/a%20b.svg", " ././assets/a%20b.svg?download ", "assets/sub/../a%20b.svg"] {
+            assert_eq!(shared_object_asset(path, &assets).as_deref(), Some("data:image/svg+xml;base64,c3Zn"), "{path}");
+        }
+        assert_eq!(shared_object_asset("assets/a%20b.svg?q#part", &assets).as_deref(), Some("data:image/svg+xml;base64,c3Zn#part"));
+        for path in ["assets/absent.svg", "assets/../a%20b.svg", "../assets/a%20b.svg", "/assets/a%20b.svg", "https://example.com/assets/a%20b.svg", "data:image/svg+xml,svg"] {
+            assert_eq!(shared_object_asset(path, &assets), None, "{path}");
+        }
     }
 
     #[tokio::test]
