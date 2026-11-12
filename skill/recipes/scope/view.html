@@ -7,6 +7,7 @@
 <style>
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
+    --jelly-comment-inset: auto 10px 78px auto;
     --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
     --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
     --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --bad-soft: #fde7e4; --idle: #b9b0b5;
@@ -110,7 +111,6 @@
   .locked .tile, .locked #chart g.pt { cursor: default; }
 
   /* ---- lock: the outcome in a sentence, and the one button ---- */
-  .jf-btn { bottom: 78px !important; } /* jelly's own Comment button, clear of the lock bar */
   #lockbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
   #lockbar .in { max-width: 1000px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 14px; align-items: center; }
   #lockbar .txt { flex: 1; min-width: 0; line-height: 1.3; } #lockbar .txt b { display: block; } #lockbar .txt span { color: var(--muted); font-size: 13px; }
@@ -120,6 +120,7 @@
   #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 7; max-width: min(92vw, 560px); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); }
   #toast:empty { display: none; }
   @media (max-width: 720px) {
+    :root { --jelly-comment-inset: auto 10px 110px auto; }
     #result { grid-template-columns: 1fr; } #when { font-size: 44px; }
     #board { grid-template-columns: 1fr; } #chart-box { position: static; }
     .capbar .mark span { font-size: 10px; }

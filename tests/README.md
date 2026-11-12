@@ -15,7 +15,7 @@ printf 'const verbs = {};\n' > /tmp/jelly-visibility-verbs.js
 Run the browser from a scratch directory so generated browser files stay outside
 the checkout. A home created by an earlier build retains its stored jelly page;
 use a fresh home, or update that test page with
-`jelly --url http://127.0.0.1:17881 reshape surface --view assets/surface.html`
+`/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 reshape surface --view assets/surface.html`
 from the checkout before running. The program takes the daemon URL from the open page and creates
 fresh jellies through the API. Use an absolute path to the test:
 
@@ -89,9 +89,45 @@ The test exports a jelly to a temporary HTML file, opens it through `file://`
 and checks image pixels, CSS resources and keyframe edits, native CSSOM calls,
 open/closed imperative and declarative shadow roots, unchanged inert templates
 and custom-element registrations, embedded objects, uploaded stylesheets
-(including all stylesheet relationship-token case variants, late link charset
+(including lowercase and mixed-case stylesheet relationship tokens, late link charset
 selection, `jelly.asset` resolution and imports) and scripts, collection of
 discarded roots with continued observation of live closed roots, captured
 attention readers and read-only mutations.
 It uses a temporary browser profile and a loopback test-result receiver, and
 requires no daemon or real jelly home.
+
+# Stream header browser check
+
+Requires Cargo, Chrome and `playwright-cli`. Build from the checkout and start a
+fresh throwaway daemon (substitute your scratch paths and port):
+
+```sh
+cargo build --locked --target-dir /tmp/jelly-stream-target
+/tmp/jelly-stream-target/debug/jelly serve --port 17850 --home /tmp/jelly-stream-home
+```
+
+From a scratch directory, run with an absolute path to the script:
+
+```sh
+playwright-cli -s=stream open http://127.0.0.1:17850/
+playwright-cli -s=stream run-code --filename=/path/to/jelly/tests/stream-header.js
+playwright-cli -s=stream close
+```
+
+The script creates and deletes only its own fixtures through the existing API.
+It checks the actual served stream in a touch-enabled mobile context at 390px,
+with device-width and scale assertions, and at 320, 900, 901 and 1280px. Normal,
+long and unbroken titles and metadata, status badges, activity, and expanded
+Comment labels must fit without overlap or horizontal overflow. It checks action
+hit targets, responsive visibility, desktop reveal, forward/reverse tab order,
+visible keyboard focus, Comment and iframe Escape, c, j/k, Enter, Open, Back,
+Pin persistence, and cancelled/confirmed Remove. Project and All identification
+are checked at 390 and 1280px.
+
+It returns measurements and saves `stream-390.png`, `stream-390-expanded.png` and
+`stream-1280.png` in the scratch directory. Inspect these images for readability.
+Run `full-view-header.js` against the same daemon to check full-view behavior.
+Stop the daemon afterward with Ctrl-C. Existing homes retain their stored jelly
+page; use a fresh home to test the newly built bundled view. To explicitly update
+a stored page, use `jelly --url http://127.0.0.1:17850 reshape surface --view assets/surface.html`
+from the checkout, merging these changes into any customized view first.

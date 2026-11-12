@@ -3,6 +3,7 @@
 mod design;
 mod server;
 mod store;
+mod startup;
 mod verbs;
 
 use clap::{Parser, Subcommand};
@@ -16,7 +17,7 @@ use std::process::ExitCode;
 #[command(name = "jelly", about = "Small live apps that agents and people shape while they run")]
 struct Cli {
     /// Daemon address for client commands.
-    #[arg(long, env = "JELLY_URL", default_value = "http://127.0.0.1:7878", global = true)]
+    #[arg(long, env = "JELLY_URL", default_value = startup::DEFAULT_URL, global = true)]
     url: String,
     /// Who this change is from, recorded on every event (default: agent).
     #[arg(long = "as", env = "JELLY_AS", global = true)]
@@ -234,12 +235,15 @@ enum Cmd {
     /// Block until someone other than you changes the jelly, then print what
     /// they did in one line. This is how an agent waits for the person.
     Wait {
+        /// Exclusive starting point from a mutation (seq:N). Replays recorded events, without state.
+        #[arg(long)]
+        since: Option<SequenceToken>,
         /// Leave out to wait on every jelly (the jelly page's own changes are skipped).
         name: Option<String>,
         /// Give up after this many seconds (exit 2).
         #[arg(long)]
         timeout: Option<u64>,
-        /// Print the full event and the state as JSON.
+        /// Print the full event as JSON (recorded events omit state).
         #[arg(long)]
         json: bool,
     },
@@ -282,7 +286,7 @@ enum Cmd {
     /// Reader identity: explicit --as / JELLY_AS, then --session-id /
     /// JELLY_SESSION_ID, Claude session environment or hook input, then the
     /// invoking parent's PID and start time. Conversation IDs survive resume.
-    /// With --hook, prints nothing when there is nothing new or no daemon, so
+    /// With --hook, starts silently and prints nothing when there is nothing new, so
     /// it can run at the start of every agent turn.
     Inbox {
         #[arg(long)]
@@ -302,6 +306,21 @@ enum Cmd {
     },
 }
 
+
+#[derive(Clone, Debug)]
+struct SequenceToken(u64);
+
+impl std::str::FromStr for SequenceToken {
+    type Err = String;
+
+    fn from_str(token: &str) -> Result<Self, Self::Err> {
+        token.strip_prefix("seq:")
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|n| n.parse().ok())
+            .map(Self)
+            .ok_or_else(|| "use seq:N from a mutation's output (N is an unsigned 64-bit sequence)".into())
+    }
+}
 
 #[derive(Debug)]
 enum CommandError {
@@ -347,35 +366,37 @@ fn main() -> ExitCode {
     }
 }
 
+fn daemon_command() -> Result<std::process::Command, String> {
+    let mut command = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    command.arg("serve");
+    Ok(command)
+}
+
 fn run(cli: Cli) -> Result<(), CommandError> {
+    run_with_start(cli, |url, quiet| startup::ensure_running(url, quiet, daemon_command()?))
+}
+
+fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
+    if !matches!(cli.cmd, Cmd::Serve { .. }) && startup::is_default_endpoint(&cli.url) {
+        cli.url = startup::DEFAULT_URL.into();
+        let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
+        if let Err(e) = start(&cli.url, quiet) {
+            return if quiet { Ok(()) } else { Err(e.into()) };
+        }
+    }
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     // Only commands that make or open jellies need it, so git runs only for those.
     let project = || detect_project(cli.project.clone());
     // Names are unique per project: a short name means this project's jelly
     // when there is one, and `project:name` always means exactly that jelly.
-    let id = |name: &str| -> String {
+    let id = |name: &str| -> Result<String, String> {
         if name.contains(':') || name == store::PAGE {
-            return name.into();
+            return Ok(name.into());
         }
-        let p = project();
-        if !p.is_empty() {
-            let q = format!("{p}:{name}");
-            if ureq::get(&api(&format!("/{q}/state"))).call().is_ok() {
-                return q;
-            }
-        }
-        // Outside a repo: a short name that exists in exactly one project means that one.
-        if let Ok(list) = get(&api("")) {
-            let hits: Vec<String> = list.as_array().into_iter().flatten()
-                .filter_map(|j| j["name"].as_str())
-                .filter(|n| n.split_once(':').is_some_and(|(_, short)| short == name))
-                .map(String::from).collect();
-            if hits.len() == 1 {
-                return hits[0].clone();
-            }
-        }
-        name.into()
+        let list = get(&api(""))?;
+        Ok(store::resolve_name(name, &project(), list.as_array().into_iter().flatten()
+            .filter_map(|j| j["name"].as_str())))
     };
     match cli.cmd {
         Cmd::Serve { port, home } => {
@@ -383,9 +404,13 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 .or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".jelly")))
                 .ok_or("set --home, JELLY_HOME or HOME")?;
-            let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-            rt.block_on(server::serve(store, port)).map_err(|e| e.to_string().into())
+            rt.block_on(async {
+                // Reserve the endpoint before store initialization can write anything.
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
+                let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
+                server::serve(store, listener).await.map_err(|e| e.to_string().into())
+            })
         }
         Cmd::Ls { all, json } => {
             let p = if all { String::new() } else { project() };
@@ -435,7 +460,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         }
         Cmd::Call { name, verb, args } => {
             let args = json_arg(&args, "args")?;
-            report(send("POST", &api(&format!("/{}/call", id(&name))), json!({"verb": verb, "args": args, "by": by}))?)
+            report(send("POST", &api(&format!("/{}/call", id(&name)?)), json!({"verb": verb, "args": args, "by": by}))?)
         }
         Cmd::Set { name, value, at, rm } => {
             let value = match (rm, value) {
@@ -443,23 +468,23 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 (false, Some(v)) => json_arg(&v, "value")?,
                 (false, None) => return Err("give a value, or --rm".into()),
             };
-            report(send("POST", &api(&format!("/{}/set", id(&name))), json!({"pointer": at, "value": value, "remove": rm, "by": by}))?)
+            report(send("POST", &api(&format!("/{}/set", id(&name)?)), json!({"pointer": at, "value": value, "remove": rm, "by": by}))?)
         }
         Cmd::State { name, pointer } => {
             let p = pointer.map(|p| format!("?pointer={}", encode(&p))).unwrap_or_default();
-            print(get(&api(&format!("/{}/state{p}", id(&name))))?)
+            print(get(&api(&format!("/{}/state{p}", id(&name)?)))?)
         }
         Cmd::Reshape { name, view, verbs, about } => {
             let body = json!({"view": view.map(|p| read(&p)).transpose()?, "verbs": verbs.map(|p| read(&p)).transpose()?, "about": about, "by": by});
-            report(send("POST", &api(&format!("/{}/reshape", id(&name))), body)?)
+            report(send("POST", &api(&format!("/{}/reshape", id(&name)?)), body)?)
         }
-        Cmd::Undo { name } => report(send("POST", &api(&format!("/{}/undo", id(&name))), json!({"by": by}))?),
-        Cmd::Pin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": true}))?),
-        Cmd::Unpin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name))), json!({"by": by, "pinned": false}))?),
-        Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name), encode(&by))), Value::Null)?),
-        Cmd::Show { name } => print(get(&api(&format!("/{}", id(&name))))?),
+        Cmd::Undo { name } => report(send("POST", &api(&format!("/{}/undo", id(&name)?)), json!({"by": by}))?),
+        Cmd::Pin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": true}))?),
+        Cmd::Unpin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": false}))?),
+        Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name)?, encode(&by))), Value::Null)?),
+        Cmd::Show { name } => print(get(&api(&format!("/{}", id(&name)?)))?),
         Cmd::Events { name, state } => {
-            let name = name.map(|n| id(&n));
+            let name = name.map(|n| id(&n)).transpose()?;
             let q = name.map(|n| format!("?jelly={}", encode(&n))).unwrap_or_default();
             let resp = ureq::get(&format!("{}/api/events{q}", cli.url)).call().map_err(describe)?;
             for line in BufReader::new(resp.into_reader()).lines() {
@@ -482,7 +507,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             }).collect::<Result<_, String>>()?;
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "ask", "title": q, "options": options, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
-            let ev = send("POST", &api(&format!("/{}/attention", id(&name))), body)?;
+            let ev = send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?;
             if !wait {
                 return report(ev);
             }
@@ -503,7 +528,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Cmd::Look { name, what, at, context } => {
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
-            report(send("POST", &api(&format!("/{}/attention", id(&name))), body)?)
+            report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
         }
         Cmd::Attention { all, json } => {
             let p = if all { String::new() } else { project() };
@@ -521,26 +546,48 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             }
             Ok(())
         }
-        Cmd::Withdraw { name, id: aid } => report(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name), encode(&aid))), json!({"by": by}))?),
-        Cmd::Focus { name } => report(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)), "by": by}))?),
-        Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": what, "by": by}))?),
-        Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": null, "by": by}))?),
+        Cmd::Withdraw { name, id: aid } => report(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name)?, encode(&aid))), json!({"by": by}))?),
+        Cmd::Focus { name } => report(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)).transpose()?, "by": by}))?),
+        Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
+        Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": null, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
         Cmd::Ask { name, spec: Some(spec), json, .. } => {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
             // The store's rule: a spec without `questions` is one question.
             let questions = spec.get("questions").map_or(1, |q| q.as_array().map_or(0, Vec::len));
-            let r = send("POST", &api(&format!("/{}/ask", id(&name))), json!({"spec": spec, "project": project(), "by": by}))?;
+            let r = send("POST", &api(&format!("/{}/ask", id(&name)?)), json!({"spec": spec, "project": project(), "by": by}))?;
             let jelly = r["jelly"].as_str().unwrap_or(&name).to_string();
             let round = &r["state"]["round"];
+            let since = format!("seq:{}", r["seq"]);
             if json {
-                return print(json!({"jelly": jelly, "round": round, "questions": questions, "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}));
+                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json: the answers arrive as answer events")}));
             }
-            output(format_args!("{}\n", ask_line(&jelly, round, questions)))?;
+            output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
         }
-        Cmd::Wait { name, timeout, json } => {
-            let name = name.map(|n| id(&n));
+        Cmd::Wait { name, timeout, since, json } => {
+            let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
+                .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
+            let name = name.map(|n| id(&n)).transpose()?;
+            if let Some(SequenceToken(seq)) = since {
+                let mut req = ureq::get(&format!("{}/api/wait", cli.url))
+                    .query("since", &seq.to_string()).query("by", &by);
+                if let Some(n) = &name { req = req.query("jelly", n); }
+                if let Some(preferred) = project_jelly {
+                    req = req.query("project_jelly", &preferred);
+                }
+                if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
+                let resp = req.call().map_err(describe)?;
+                if resp.status() == 204 {
+                    let what = name.as_deref().unwrap_or("any jelly");
+                    eprintln!("jelly: nobody changed {what} in time");
+                    std::process::exit(2);
+                }
+                let ev = resp.into_json().map_err(|e| e.to_string())?;
+                if json { return print(ev); }
+                output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
+                return Ok(());
+            }
             let filter = name.as_deref().map(|n| format!("?jelly={}", encode(n))).unwrap_or_default();
             let mut req = ureq::get(&format!("{}/api/events{filter}", cli.url));
             if let Some(t) = timeout {
@@ -575,7 +622,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Cmd::Comments { name, all, json } => {
             let one = name.is_some();
             let names: Vec<String> = match name {
-                Some(n) => vec![id(&n)],
+                Some(n) => vec![id(&n)?],
                 None => {
                     let p = project();
                     get(&api(""))?.as_array().into_iter().flatten()
@@ -609,21 +656,21 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             }
             Ok(())
         }
-        Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
-        Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name))), json!({"project": project, "by": by}))?),
+        Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
+        Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
         Cmd::See { name, width, png, full } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
             if png || full { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
-            let url = api(&format!("/{}/see?{}", id(&name), q.join("&")));
+            let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
             let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
             output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
             Ok(())
         }
-        Cmd::Note { name, text } => report(send("POST", &api(&format!("/{}/note", id(&name))), json!({"text": text, "by": by}))?),
+        Cmd::Note { name, text } => report(send("POST", &api(&format!("/{}/note", id(&name)?)), json!({"text": text, "by": by}))?),
         Cmd::Pull { name, dir } => {
-            let name = id(&name);
+            let name = id(&name)?;
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
             let dir = dir.unwrap_or_else(|| PathBuf::from(&short));
             let j = get(&api(&format!("/{name}")))?;
@@ -650,7 +697,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             Ok(())
         }
         Cmd::Dev { name, dir } => {
-            let name = id(&name);
+            let name = id(&name)?;
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
             let dir = dir.unwrap_or_else(|| PathBuf::from(&short));
             let stamp = |f: &str| std::fs::metadata(dir.join(f)).and_then(|m| m.modified()).ok();
@@ -685,17 +732,17 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 None => { output(format_args!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?))?; Ok(()) }
             }
         }
-        Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by}))?),
-        Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by}))?),
+        Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name)?)), json!({"by": by}))?),
+        Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name)?)), json!({"by": by}))?),
         Cmd::Asset { name, files } => {
-            let added = add_assets(&api(&format!("/{}", id(&name))), &files, &by)?;
+            let added = add_assets(&api(&format!("/{}", id(&name)?)), &files, &by)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
             }
             Ok(())
         }
         Cmd::Share { name, out } => {
-            let name = id(&name);
+            let name = id(&name)?;
             let resp = ureq::get(&api(&format!("/{name}/share"))).call().map_err(describe)?;
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
@@ -706,10 +753,10 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             Ok(())
         }
         Cmd::Inbox { hook, session_id } => inbox(&cli.url, &project(), hook, cli.by, session_id),
-        Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name))), json!({"id": cid, "by": by}))?),
+        Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
-                (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)),
+                (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)?),
                 (None, "") => format!("{}/", cli.url),
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
@@ -935,12 +982,12 @@ fn report_line(ev: &Value) -> String {
     };
     let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
     let changed = match changed.len() { 0 => String::new(), 1..=6 => format!(" · changed {}", changed.join(" ")), n => format!(" · changed {n} places") };
-    format!("{} v{}: {what}{changed}", s(&ev["jelly"]), ev["version"])
+    format!("{} v{}: {what}{changed} · since seq:{}", s(&ev["jelly"]), ev["version"], ev["seq"])
 }
 
 /// What `jelly ask --spec` did, in one line.
-fn ask_line(jelly: &str, round: &Value, questions: usize) -> String {
-    format!("{jelly} round {round}: asked {questions} question{}. Answers arrive in `jelly inbox`, or block on `jelly wait {jelly}`", if questions == 1 { "" } else { "s" })
+fn ask_line(jelly: &str, round: &Value, questions: usize, since: &str) -> String {
+    format!("{jelly} round {round}: asked {questions} question{}. Answers arrive in `jelly inbox`, or block on `jelly wait {jelly} --since {since}`", if questions == 1 { "" } else { "s" })
 }
 
 /// One comment and its thread, for an agent's to-do list.
@@ -1032,7 +1079,7 @@ fn describe(e: ureq::Error) -> String {
             .ok()
             .and_then(|v| v.get("error").and_then(Value::as_str).map(String::from))
             .unwrap_or_else(|| "request failed".into()),
-        ureq::Error::Transport(t) => format!("cannot reach the daemon ({t}); start it with `jelly serve`"),
+        ureq::Error::Transport(t) => format!("cannot reach the selected daemon ({t}); check --url / JELLY_URL and the server"),
     }
 }
 
@@ -1056,6 +1103,49 @@ mod tests {
     use super::{answer_line, placement, wait_line, write_output};
     use std::io::{self, Write};
     use serde_json::json;
+
+    #[test]
+    fn startup_precedes_dispatch_and_hooks_suppress_its_errors() {
+        use super::{run_with_start, Cli};
+        use clap::Parser;
+        let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap();
+        let command = super::daemon_command().unwrap();
+        assert_eq!(command.get_program(), std::env::current_exe().unwrap());
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["serve"]);
+        assert_eq!(command.get_envs().count(), 0, "inherit home and other environment defaults");
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "open"]);
+        let result = run_with_start(cli, |url, quiet| {
+            assert_eq!(url, super::startup::DEFAULT_URL);
+            assert!(!quiet);
+            Err("startup failed before opening a browser".into())
+        });
+        assert_eq!(result.unwrap_err().to_string(), "startup failed before opening a browser");
+        for alias in ["http://localhost:7878/", "HTTP://127.1:7878"] {
+            let cli = parse(&["jelly", "--url", alias, "open"]);
+            assert_eq!(run_with_start(cli, |url, quiet| {
+                assert_eq!(url, super::startup::DEFAULT_URL);
+                assert!(!quiet);
+                Err("alias startup".into())
+            }).unwrap_err().to_string(), "alias startup");
+        }
+        for project in ["", "test"] {
+            let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "inbox", "--hook"]);
+            assert!(run_with_start(cli, |_, quiet| {
+                assert!(quiet);
+                Err("startup failed".into())
+            }).is_ok());
+        }
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", "", "inbox", "--hook"]);
+        let mut called = false;
+        assert!(run_with_start(cli, |_, quiet| { called = true; assert!(quiet); Ok(()) }).is_ok());
+        assert!(called, "outside-project hook must start before its early return");
+
+        let home = tempfile::NamedTempFile::new().unwrap();
+        let cli = parse(&["jelly", "serve", "--port", "0", "--home", home.path().to_str().unwrap()]);
+        assert!(run_with_start(cli, |_, _| panic!("serve must bypass startup")).is_err());
+        let cli = parse(&["jelly", "--url", "http://127.0.0.1:9999", "--project", "", "inbox", "--hook"]);
+        assert!(run_with_start(cli, |_, _| panic!("custom URL must bypass startup")).is_ok());
+    }
 
     #[test]
     fn output_preserves_write_and_flush_errors() {
