@@ -95,16 +95,24 @@ the jelly or ask about it. `see` lists the errors your page threw (`error` lines
 and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
 `jelly look` say in their reply where the card landed: below the element, at the
 top because nothing matched or the element is in a fixed or sticky part, or below
-an element that is not on screen right now. Clear your own
+an element that is not on screen right now. If row insertion is unsafe, the
+reply and `see` name the actual fallback destination. Without a measurement for
+that question, the reply says it was not checked. Pages that render their own
+inline attention retain missing, floating and hidden anchor diagnostics; the
+runtime cannot confirm where their visible questions appear. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
 ## Ask the person: attention
 
 Attention is everything you need from the person. Each question shows as a card
-in the page itself, right below the element `--at` points to (or at the top), and
+in the page itself, below the element `--at` points to (or at the top), and
 in their attention dock on the jelly page. They answer in place; an answered card
-shrinks to one line they can change.
+shrinks to one line they can change. In a grid or wrapping flex group, the card
+spans the group's width after the item's row, before later rows. List items and
+table rows get a full-width question row too. An anchor inside an SVG puts the
+card below the whole drawing. Layouts that cannot take a question row keep their
+layout; the reply names the group the card follows, or says it went to the top.
 
 One question on an existing jelly, about one part of it:
 
