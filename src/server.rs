@@ -1160,7 +1160,7 @@ async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<
 }
 
 #[cfg(test)]
-mod tests {
+mod share_tests {
     use super::*;
     use base64::Engine as _;
 
@@ -1180,7 +1180,7 @@ mod tests {
     }
 
     async fn exported(app: Shared) -> String {
-        share(State(app), Path("test:share".into())).await.unwrap_or_else(|e| panic!("{}", e.0)).0
+        share(State(app), Path("test:share".into())).await.unwrap_or_else(|e| panic!("{e:?}")).0
     }
 
     fn boot(html: &str) -> Value {
@@ -1227,7 +1227,7 @@ mod tests {
         let path = app.store.lock().unwrap().asset_dir("test:share").join("broken.png");
         std::fs::create_dir_all(path).unwrap();
         let error = share(State(app), Path("test:share".into())).await.expect_err("a directory cannot be read as an asset");
-        assert!(error.0.to_string().contains("could not share asset broken.png"));
+        assert!(format!("{error:?}").contains("could not share asset broken.png"));
     }
 
     #[tokio::test]
