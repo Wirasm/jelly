@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, EventKind, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -155,7 +155,8 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
-        .route("/api/inbox", get(inbox))
+        .route("/api/inbox", get(inbox).post(read_inbox))
+        .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
@@ -540,14 +541,26 @@ async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value
     let path = app.store.lock().expect("store lock").events_path();
     let since = q.since.unwrap_or(0);
     let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    let prefix = q.project.filter(|p| !p.is_empty()).map(|p| format!("{p}:"));
     let items: Vec<Value> = text.lines()
         .filter_map(|l| serde_json::from_str::<Event>(l).ok())
-        .filter(|e| e.at_ms > since && e.by == PERSON && e.jelly != PAGE && e.kind.is_for_agent())
-        .filter(|e| prefix.as_deref().is_none_or(|p| e.jelly.starts_with(p)))
-        .map(|e| { let text = e.describe(); let mut v = json!(e); v["text"] = json!(text); v })
+        .filter(|e| e.at_ms > since && e.is_inbox_item(q.project.as_deref().unwrap_or("")))
+        .map(inbox_item)
         .collect();
     Json(json!(items))
+}
+
+
+fn inbox_item(event: Event) -> Value {
+    json!(InboxItem::from(event))
+}
+
+async fn read_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<InboxBatch>, ApiError> {
+    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req.project, &req.reader)?))
+}
+
+async fn commit_inbox(State(app): State<Shared>, Json(req): Json<InboxCommit>) -> Result<Json<Value>, ApiError> {
+    app.store.lock().expect("store lock").commit_inbox(req)?;
+    Ok(Json(json!({"ok": true})))
 }
 
 
