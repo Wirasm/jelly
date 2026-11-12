@@ -126,3 +126,26 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     assert_eq!((full["jelly"].as_str(), full["verb"].as_str()), (Some("p:w"), Some("click")));
     assert!(full["state"]["clicks"].as_u64().unwrap() > 0, "{full}");
 }
+
+#[test]
+fn item_commands_finish_quietly_with_closed_stdout() {
+    let temp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(temp.path());
+    daemon.post("/api/jellies", json!({"name":"p:x", "view":"<p>x</p>", "verbs":"const verbs = {};", "by":"agent"}));
+    let spec = temp.path().join("spec.json");
+    std::fs::write(&spec, json!({"question":"Which?", "options":[{"id":"a", "label":"A"}]}).to_string()).unwrap();
+    for populated in [false, true] {
+        if populated {
+            daemon.post("/api/jellies/p:x/attention", json!({"kind":"ask", "title":"Which?", "options":[{"id":"a", "label":"A"}], "by":"agent"}));
+            daemon.post("/api/jellies/p:x/comment", json!({"text":"bigger", "by":"person"}));
+        }
+        for args in [vec!["attention"], vec!["comments", "p:x"], vec!["ask", "p:s", "--spec", spec.to_str().unwrap()]] {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            let out = daemon.command(temp.path(), "p", &args).stdout(Stdio::from(writer)).output().unwrap();
+            assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {out:?}");
+        }
+    }
+    let created: Value = ureq::get(&format!("{}/api/jellies/p:s", daemon.url)).call().unwrap().into_json().unwrap();
+    assert_eq!(created["state"]["round"], 2);
+}

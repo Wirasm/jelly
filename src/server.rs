@@ -120,7 +120,7 @@ impl App {
     }
 }
 
-pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
+pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
         store
@@ -144,7 +144,13 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         }
     });
 
-    let router = Router::new()
+    let port = listener.local_addr()?.port();
+    eprintln!("jelly on http://127.0.0.1:{port}");
+    axum::serve(listener, router(app)).await
+}
+
+fn router(app: Shared) -> Router {
+    Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
         .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
@@ -190,12 +196,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
         .route("/api/jellies/{name}/reply", post(reply))
-        .with_state(app);
-
-    // Loopback only: anything that reaches this port can run verbs.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    eprintln!("jelly on http://127.0.0.1:{port}");
-    axum::serve(listener, router).await
+        .with_state(app)
 }
 
 #[derive(Debug)]
@@ -646,10 +647,17 @@ fn content_type(file: &str) -> &'static str {
 }
 
 async fn asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>) -> Response {
-    let dir = app.store.lock().expect("store lock").asset_dir(&name);
     if file.starts_with('.') || file.contains('/') {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // Only a known jelly id names a directory; an absolute or `..` name would escape `assets/`.
+    let dir = {
+        let store = app.store.lock().expect("store lock");
+        match store.get(&name) {
+            Ok(_) => store.asset_dir(&name),
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    };
     match tokio::fs::read(dir.join(&file)).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, content_type(&file))], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
@@ -1783,6 +1791,48 @@ mod tests {
         for file in [".hidden", ".", "..", "../secret.txt", "sub/secret.txt"] {
             let response = asset(State(app.clone()), Path(("test:x".into(), file.into()))).await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{file}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn asset_urls_only_reach_an_existing_jellys_assets() {
+        let (home, app) = app();
+        create_page(&app, "PAGE", false).await;
+        for (file, bytes) in [("shot.png", &b"png bytes"[..]), ("notes..v2.txt", b"two dots")] {
+            let _ = put_asset(State(app.clone()), Path(("test:x".into(), file.into())),
+                Query(AssetQ { by: Some("test".into()) }), Bytes::copy_from_slice(bytes)).await.unwrap();
+        }
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("note.txt"), b"SECRET-OUTSIDE").unwrap();
+        for dir in [home.path().join("beside"), home.path().join("assets/test:missing")] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("note.txt"), b"SECRET-OUTSIDE").unwrap();
+        }
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(std::future::IntoFuture::into_future(axum::serve(listener, router(app))));
+        let fetch = |path: String| {
+            let url = format!("{base}{path}");
+            tokio::task::spawn_blocking(move || match ureq::get(&url).call() {
+                Ok(r) | Err(ureq::Error::Status(_, r)) => {
+                    let (status, kind) = (r.status(), r.content_type().to_string());
+                    let mut body = Vec::new();
+                    r.into_reader().read_to_end(&mut body).unwrap();
+                    (status, kind, body)
+                }
+                Err(e) => panic!("{url}: {e}"),
+            })
+        };
+
+        let absolute = outside.path().to_str().unwrap().replace('/', "%2F");
+        for name in [absolute.as_str(), "..%2Fbeside", "test%3Amissing"] {
+            let (status, _, body) = fetch(format!("/j/{name}/assets/note.txt")).await.unwrap();
+            assert_eq!(status, 404, "{name}");
+            assert!(!String::from_utf8_lossy(&body).contains("SECRET-OUTSIDE"), "{name}");
+        }
+        for (file, kind, bytes) in [("shot.png", "image/png", &b"png bytes"[..]), ("notes..v2.txt", "text/plain", b"two dots")] {
+            assert_eq!(fetch(format!("/j/test:x/assets/{file}")).await.unwrap(), (200, kind.to_string(), bytes.to_vec()));
         }
     }
 

@@ -7,6 +7,7 @@
 <style>
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
+    --jelly-comment-inset: auto 10px 78px auto;
     --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
     --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
     --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
@@ -109,7 +110,6 @@
   .compose button { border: 0; border-radius: 12px; padding: 11px 18px; font-weight: 600; }
 
   #whole-row { margin-top: 18px; }
-  .jf-btn { bottom: 78px !important; } /* jelly's own Comment button, clear of the go bar */
   /* ---- go: progress and the next step, always in reach ---- */
   #go { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
   #go .in { max-width: 960px; margin: 0 auto; padding: 10px 20px; display: flex; gap: 14px; align-items: center; }
@@ -118,6 +118,7 @@
   #go button { border: 0; border-radius: 12px; padding: 11px 26px; font-weight: 700; font-size: 16px; }
   #go button[disabled] { background: var(--idle); cursor: default; }
   @media (max-width: 640px) {
+    :root { --jelly-comment-inset: auto 10px 90px auto; }
     #map { gap: 0 34px; } .node { padding: 8px 9px; font-size: 13px; gap: 7px; } .node .n { display: none; }
     .hero { grid-template-columns: 1fr; } .card { padding: 14px; } .card h2 { font-size: 19px; } .said { max-width: 100%; }
   }

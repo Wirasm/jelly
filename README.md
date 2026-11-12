@@ -28,7 +28,7 @@ prose, and whenever you need them to choose.
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
-jelly ls                                         # is the daemon up? (the person runs `jelly serve`)
+jelly ls                                         # list jellies; starts the daemon on first use
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
@@ -37,6 +37,12 @@ jelly inbox                                      # what they did since you last 
 jelly see plan                                   # what is on screen, as text
 ```
 
+When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
+Finite commands finish their changes before printing. `events`/`watch` and `dev`
+stop when an output write detects closure; while idle, they keep waiting. `wait`
+keeps its event selection and timeout behavior, detecting closure only when it
+prints a qualifying event. `serve` continues serving when stdout closes.
+
 The full guide is [`skill/SKILL.md`](skill/SKILL.md). Install it as a skill so every
 session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 
@@ -44,25 +50,39 @@ session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 
 ```bash
 cargo install --path .
-jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
+jelly ls               # starts on first use: http://127.0.0.1:7878
 ```
 
+The first client command starts a detached daemon if needed, waits for it, and
+prints one startup line on stderr. Data lives in `$JELLY_HOME` or `~/.jelly`, just
+as with `jelly serve`. No login service or extra install step is needed.
+
+`jelly serve` still runs in the foreground for manual use and startup diagnostics.
+Unreadable or malformed persisted jellies prevent startup rather than serving a
+partial store. Run `jelly serve` to see the affected file and error.
+For an isolated run: `jelly serve --port 7879 --home /tmp/jelly-test`, then use
+`jelly --url http://127.0.0.1:7879 ls`. On-demand startup applies only to the default
+local endpoint, including `http://localhost:7878` and equivalent URL spellings;
+other `--url` / `JELLY_URL` targets must already be running.
+
 When upgrading, existing homes keep their stored jelly page, including any
-customizations. To install the bundled dock changes for opening and focusing
-questions, run this from the updated checkout against your running daemon:
+customizations. To install the bundled dock improvements and responsive full-view
+header, run this from the updated checkout against your running daemon:
 
 ```bash
 jelly reshape surface --view assets/surface.html
 ```
 
 This replaces the jelly page's view and keeps its state. If you customized that
-view, incorporate the dock changes from `assets/surface.html` into your version
+view, incorporate the improvements from `assets/surface.html` into your version
 and reshape with that file instead. There is no automatic upgrade or compatibility
 layer for stored jelly pages.
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new or the daemon
-is unavailable. Reader identification, decoding and daemon read or progress-commit
+`UserPromptSubmit` hook. It starts the default daemon silently, suppresses startup
+errors, and prints nothing when there is nothing new. Outside a project it still
+attempts startup, then exits successfully without inbox output. Reader
+identification, decoding and daemon read or progress-commit
 failures appear in hook output as `jelly inbox failed: ...`. Failed reads do not
 advance progress. Claude's
 `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
