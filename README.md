@@ -54,8 +54,8 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
 When upgrading, existing homes keep their stored jelly page, including any
-customizations. To install the bundled dock improvements and responsive full-view
-header, run this from the updated checkout against your running daemon:
+customizations. To install the bundled dock improvements and responsive stream and
+full-view headers, run this from the updated checkout against your running daemon:
 
 ```bash
 jelly reshape surface --view assets/surface.html
