@@ -117,3 +117,18 @@ fn an_unanswered_ask_times_out_with_exit_2() {
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(out.stdout.is_empty(), "{out:?}");
 }
+
+#[test]
+fn answered_ask_exits_quietly_with_closed_stdout() {
+    let d = daemon();
+    let person = react(&d.url, Duration::ZERO, "answer", json!({"option":"a", "by":"person"}));
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["--url", &d.url, "ask", "t:q", "Q", "--option", "a=A", "--wait", "--timeout", "20"])
+        .stdout(std::process::Stdio::from(writer)).output().unwrap();
+    person.join().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("asked a1") && !stderr.contains("panicked"), "{stderr}");
+}
