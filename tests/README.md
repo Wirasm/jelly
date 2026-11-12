@@ -63,10 +63,12 @@ playwright-cli -s=header run-code --filename=/path/to/jelly/tests/full-view-head
 playwright-cli -s=header close
 ```
 
-The script creates and cleans up its own fixtures. It checks title and metadata
-geometry, action reachability, wrapping and truncation at 320, 390, 900, 901 and
-1280px. At phone and desktop widths it also checks Comment, iframe Escape, the
-parent c shortcut, Undo, tab order, Pin/Unpin, Back, Enter, Escape and Remove.
+The script creates and cleans up its own fixtures. It uses a mobile browser context
+at 390px and checks that the layout viewport matches the device width at full scale.
+It checks title and metadata geometry, action reachability, wrapping and truncation
+at 320, 390, 900, 901 and 1280px. At phone and desktop widths it also checks
+Comment, iframe Escape, the parent c shortcut, Undo, tab order, Pin/Unpin, Back,
+Enter, Escape and Remove.
 It returns measurements and saves `header-390.png` and `header-1280.png` in the
 scratch directory. Stop the throwaway daemon afterward. Existing homes retain
 their stored surface; use a fresh home for the newly built bundled view.
