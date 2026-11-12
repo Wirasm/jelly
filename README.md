@@ -85,9 +85,10 @@ read responses do not consume events. Ambiguous output, failed acknowledgements
 or client crashes may replay events. GET `/api/inbox?project=...&since=...` remains
 a non-consuming timestamp query returning an array.
 
-The daemon refuses startup if an existing event log cannot be read or contains
-malformed events, so new events cannot reuse positions already passed by inbox
-readers.
+The daemon refuses startup if an existing event log cannot be read, contains
+malformed events or is nonempty and missing its final newline. This prevents
+reusing positions already passed by inbox readers or corrupting the final record
+on the next append.
 
 ## How it works
 

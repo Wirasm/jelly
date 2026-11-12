@@ -428,6 +428,9 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let log = read_optional(&dir.join("events.jsonl"))?;
+        if !log.is_empty() && !log.ends_with('\n') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
+        }
         let seq = log.lines().try_fold(0, |seq, line| -> std::io::Result<u64> {
             let event: Event = serde_json::from_str(line)?;
             Ok(seq.max(event.seq))
@@ -1085,6 +1088,54 @@ mod tests {
         fs::remove_dir(dir.path().join("events.jsonl")).unwrap();
         fs::write(dir.path().join("events.jsonl"), [0xff]).unwrap();
         assert_eq!(Store::open(dir.path()).err().unwrap().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn inbox_startup_refuses_unterminated_event_log() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "existing".into() };
+        consume_inbox(&mut s, "p", reader).unwrap();
+        let saved = fs::read(dir.path().join("inbox-readers.json")).unwrap();
+        let log = fs::read_to_string(s.events_path()).unwrap();
+        let record = log.trim_end();
+        for prefix in ["", log.as_str()] {
+            for suffix in ["", "\r"] {
+                let unterminated = format!("{prefix}{record}{suffix}");
+                fs::write(s.events_path(), &unterminated).unwrap();
+                let error = Store::open(dir.path()).err().expect("unterminated logs must prevent startup");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                assert_eq!(fs::read_to_string(s.events_path()).unwrap(), unterminated);
+                assert_eq!(fs::read(dir.path().join("inbox-readers.json")).unwrap(), saved);
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_accepted_log_remains_readable_after_append_and_restart() {
+        for ending in [None, Some("\n"), Some("\r\n")] {
+            let (dir, mut s) = store();
+            s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+            let log = fs::read_to_string(s.events_path()).unwrap();
+            let log = ending.map_or_else(String::new, |ending| format!("{}{ending}", log.trim_end()));
+            fs::write(s.events_path(), log).unwrap();
+            let mut s = Store::open(dir.path()).unwrap();
+            let readers = ["a", "b"].map(|name| InboxReader::Named { name: name.into() });
+            for reader in &readers {
+                assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
+            }
+            let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+            let mut s = Store::open(dir.path()).unwrap();
+            for reader in &readers {
+                let events = consume_inbox(&mut s, "p", reader.clone()).unwrap();
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].seq, event.seq);
+            }
+            let mut s = Store::open(dir.path()).unwrap();
+            for reader in readers {
+                assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+            }
+        }
     }
 
     #[test]
