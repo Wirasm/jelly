@@ -17,6 +17,7 @@ const document = {
   body: { children: [] },
   documentElement: { scrollHeight: 900 },
   createElement() { return {}; },
+  querySelector() { return null; },
 };
 const innerWidth = 1280, innerHeight = 900;
 function addEventListener(type, fn) { (handlers[type] ||= []).push(fn); }

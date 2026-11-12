@@ -251,7 +251,7 @@ fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
         );
         let mut req = fixture.request();
         assert_eq!(req.path, "/api/events");
-        write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
+        write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"seq\":1,\"at_ms\":1,\"kind\":\"call\",\"version\":1,\"view_rev\":1,\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
         req.stream.flush().unwrap();
         child.quiet(); // req keeps the stream open until after the child exits
     }

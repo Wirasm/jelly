@@ -53,8 +53,69 @@ cargo install --path .
 jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
+When upgrading, existing homes keep their stored jelly page, including any
+customizations. To install the bundled dock changes for opening and focusing
+questions, run this from the updated checkout against your running daemon:
+
+```bash
+jelly reshape surface --view assets/surface.html
+```
+
+This replaces the jelly page's view and keeps its state. If you customized that
+view, incorporate the dock changes from `assets/surface.html` into your version
+and reshape with that file instead. There is no automatic upgrade or compatibility
+layer for stored jelly pages.
+
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new.
+`UserPromptSubmit` hook. It prints nothing when there is nothing new or the daemon
+is unavailable. Reader identification, decoding and daemon read or progress-commit
+failures appear in hook output as `jelly inbox failed: ...`. Failed reads do not
+advance progress. Claude's
+`CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
+commands and resumed conversations. JSON `session_id` identifies hook invocations
+only. To share that progress with ordinary commands, supply the same conversation
+ID through `inbox --session-id` or `JELLY_SESSION_ID` (or use the same explicit
+`--as` / `JELLY_AS` name for both).
+
+Inbox identity uses explicit `--as` / `JELLY_AS` first, then
+`inbox --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
+`session_id` from hook stdin. Other agents should export a stable, distinct
+conversation token as `JELLY_SESSION_ID`. Without one, the invoking parent
+process's PID and start time identify the reader for that process's lifetime;
+a new parent starts a new reader. Shared names or conversation tokens intentionally
+share progress. Event attribution still defaults to `agent`.
+
+Progress is stored in the daemon's home (`inbox-readers.json`), per reader and
+project, and survives daemon restarts. A new reader sees the last hour; later
+reads use event positions. Upgrading leaves old client `inbox/` timestamps unused,
+so each new reader can replay the recent hour. Use a matching CLI and daemon.
+The non-consuming POST `/api/inbox` accepts `{ "project": "...", "reader": ... }`
+with reader forms `{ "kind": "named", "name": "..." }`,
+`{ "kind": "conversation", "id": "..." }`, or
+`{ "kind": "parent", "pid": 123, "start_time": 456 }` (Unix seconds).
+Omitting `project` or using an empty string reads all projects. The response is
+`{ "events": [...], "through": 123 }`; events include `text`. The first read
+registers a fixed one-hour starting window, so uncommitted events remain available
+on retry even after that hour passes. After decoding and successfully writing and
+flushing output, the CLI sends POST `/api/inbox/commit` with the same project and
+reader plus the returned `through` position. Commits only move that reader's
+progress forward and leave events newer than `through` unread. Lost or undecodable
+read responses do not consume events. Ambiguous output, failed acknowledgements
+or client crashes may replay events. GET `/api/inbox?project=...&since=...` remains
+a non-consuming timestamp query returning an array.
+
+The daemon refuses startup if an existing event log cannot be read, contains
+malformed events or is nonempty and missing its final newline. This prevents
+reusing positions already passed by inbox readers or corrupting the final record
+on the next append.
+
+`jelly pull` gets asset names and bytes from the selected daemon, regardless of
+its home or the client's home. GET `/api/jellies/{name}/assets` returns a sorted
+JSON array of filenames, `[]` for an existing jelly without assets, or a JSON 404
+error for an unknown jelly. Directory enumeration errors return a JSON 500 error.
+Bytes come from `/j/{name}/assets/{file}`. Pull reports
+success only after every listed file is written; inventory or download failures
+return an error and may leave a partial destination folder.
 
 ## How it works
 
