@@ -1642,8 +1642,17 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let empty = inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms) })).await.unwrap();
         assert!(empty.0.as_array().unwrap().is_empty());
-        let result = inbox(State(app), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
+        let result = inbox(State(app.clone()), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
         assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq]);
+        let mut shifted = std::fs::read(&path).unwrap();
+        shifted.insert(0, b'\n');
+        std::fs::write(&path, shifted).unwrap();
+        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms - 1) })).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());
+        let reader = crate::store::InboxReader::Named { name: "unreadable".into() };
+        assert!(app.store.lock().unwrap().read_inbox("test", &reader).is_err());
     }
 
     #[test]

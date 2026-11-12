@@ -1030,12 +1030,19 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is not a file"));
+        }
         let mut events = Vec::new();
-        for (_, &(offset, length)) in self.timestamps.range((std::ops::Bound::Excluded((since, u64::MAX)), std::ops::Bound::Unbounded)) {
+        for (&(at_ms, seq), &(offset, length)) in self.timestamps.range((std::ops::Bound::Excluded((since, u64::MAX)), std::ops::Bound::Unbounded)) {
             file.seek(SeekFrom::Start(offset))?;
             let mut bytes = vec![0; length];
             file.read_exact(&mut bytes)?;
-            events.push(serde_json::from_slice::<Event>(&bytes)?);
+            let event: Event = serde_json::from_slice(&bytes)?;
+            if !bytes.ends_with(b"\n") || (event.at_ms, event.seq) != (at_ms, seq) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log no longer matches its timestamp index"));
+            }
+            events.push(event);
         }
         events.sort_unstable_by_key(|e| e.seq);
         Ok(events)
