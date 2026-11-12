@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jelly</title>
 <meta name="jelly-comment" content="off">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2040%2040%22%3E%3Cpath%20d%3D%22M8%2030%20C4%2022%206%2010%2020%209%20C34%2010%2036%2022%2032%2030%20C29%2035%2011%2035%208%2030Z%22%20fill%3D%22%23ff4f8b%22/%3E%3Cellipse%20cx%3D%2215%22%20cy%3D%2216%22%20rx%3D%224%22%20ry%3D%222.4%22%20fill%3D%22%23fff%22%20opacity%3D%22.7%22/%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2224%22%20r%3D%221.9%22%20fill%3D%22%233b0a1e%22/%3E%3Ccircle%20cx%3D%2224%22%20cy%3D%2224%22%20r%3D%221.9%22%20fill%3D%22%233b0a1e%22/%3E%3C/svg%3E">
@@ -115,10 +116,16 @@
   .full { position: fixed; inset: 44px 0 0 0; z-index: 10; display: flex; flex-direction: column; background: var(--page); animation: open .18s ease-out; }
   @keyframes open { from { opacity: 0; transform: scale(.985); } }
   .full[hidden] { display: none; }
-  .fbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--line); min-height: 54px; }
+  .fbar { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--line); min-height: 54px; }
   .fbar .title { flex: 1; min-width: 0; }
   .fbar h1 { font-size: 15px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .full iframe { flex: 1; width: 100%; border: 0; background: var(--card); }
+  .fbar .who { overflow-wrap: anywhere; }
+  .factions { display: flex; align-items: center; gap: 12px; flex: none; }
+  @media (max-width: 900px) {
+    .fbar { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 12px; }
+    .factions { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
+  }
+  .full iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--card); }
 
   /* ---- brand and motion: calm base, jelly physics at key moments ---- */
   .logo { flex: none; transform-origin: 50% 90%; cursor: pointer; }
@@ -187,10 +194,12 @@
   <div class="fbar">
     <button class="btn" id="back" title="Back to the stream (Esc)">← Back</button>
     <div class="title"><h1 id="ftitle"></h1><div class="who" id="fmeta"></div></div>
-    <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
-    <button class="btn quiet" id="fundo">Undo</button>
-    <button class="btn quiet" id="fpin"></button>
-    <button class="btn quiet" id="frm">Remove</button>
+    <div class="factions">
+      <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
+      <button class="btn quiet" id="fundo">Undo</button>
+      <button class="btn quiet" id="fpin"></button>
+      <button class="btn quiet" id="frm">Remove</button>
+    </div>
   </div>
 </section>
 <script>
