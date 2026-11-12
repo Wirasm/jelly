@@ -212,7 +212,7 @@ fn creation_and_asset_uploads_finish_before_output() {
                 assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies"));
                 let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
                 assert_eq!(body["name"], "probe:x");
-                req.reply(r#"{"jelly":"probe:x","version":1,"kind":"new"}"#);
+                req.reply(r#"{"jelly":"probe:x","version":1,"seq":1,"kind":"new"}"#);
             }
             for file in &files {
                 let name = file.file_name().unwrap().to_str().unwrap();
@@ -230,7 +230,7 @@ fn creation_and_asset_uploads_finish_before_output() {
             if !closed {
                 let expected = format!(
                     "{}assets/a.txt  (1 KB)\nassets/b.txt  (1 KB)\nassets/c.txt  (1 KB)\n",
-                    if new { "probe:x v1: made\n" } else { "" }
+                    if new { "probe:x v1: made · since seq:1\n" } else { "" }
                 );
                 assert_eq!(String::from_utf8(out.stdout).unwrap(), expected);
             }
@@ -394,4 +394,29 @@ fn non_broken_pipe_stdout_failure_exits_with_a_diagnostic() {
     let out = child.finish();
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert_eq!(out.stderr, format!("jelly: {error}\n").as_bytes());
+}
+
+#[test]
+fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
+    for json in [false, true] {
+        let fixture = Fixture::new();
+        let mut args = vec!["wait", "probe:x", "--since", "seq:1"];
+        if json { args.push("--json"); }
+        let mut child = Process(command(&fixture.url, &args).stdout(closed_pipe()).spawn().unwrap());
+        let mut req = fixture.request();
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax");
+        req.reply(r#"{"seq":2,"at_ms":1,"kind":"call","version":2,"view_rev":1,"by":"person","jelly":"probe:x"}"#);
+        child.quiet();
+
+        let spec = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(spec.path(), r#"{"question":"Which?","options":[{"id":"a","label":"A"}]}"#).unwrap();
+        let mut args = vec!["ask", "probe:x", "--spec", spec.path().to_str().unwrap()];
+        if json { args.push("--json"); }
+        let mut child = Process(command(&fixture.url, &args).stdout(closed_pipe()).spawn().unwrap());
+        let mut req = fixture.request();
+        assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies/probe:x/ask"));
+        req.reply(r#"{"jelly":"probe:x","seq":3,"state":{"round":1}}"#);
+        child.quiet();
+    }
 }
