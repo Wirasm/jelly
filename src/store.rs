@@ -3,7 +3,8 @@
 //! A jelly is a view (HTML), verbs (JavaScript) and state (JSON) held together
 //! under one name. State changes only through verbs, so a person's click and an
 //! agent's call go through the same code and produce the same event. Every
-//! change keeps an undo snapshot and is appended to `events.jsonl`.
+//! change keeps an undo step, what it takes to go back, and is appended to
+//! `events.jsonl`.
 
 use crate::verbs;
 use serde::{Deserialize, Serialize};
@@ -11,11 +12,27 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Undo keeps the last `UNDO_DEPTH` changes, and drops the oldest sooner once
+/// all steps together hold more than twice the state plus `UNDO_SLACK`, so a
+/// few whole-state `set`s cannot grow a jelly's file to many copies of its
+/// state. The newest step always stays: the last change can always be undone.
 const UNDO_DEPTH: usize = 100;
+const UNDO_SLACK: usize = 64 * 1024;
+/// Myers diffing is quadratic on unrelated text. Past this it settles for a
+/// coarser diff, which is still exact.
+const DIFF_DEADLINE: Duration = Duration::from_millis(50);
+/// `events.jsonl` is trimmed once it passes `LOG_LIMIT`, down to the newest
+/// `LOG_KEEP` plus up to `PERSON_CARRY` of the person's older events, which
+/// are what the inbox and `jelly see` report.
+const LOG_LIMIT: u64 = 8 << 20;
+const LOG_KEEP: usize = 4 << 20;
+const PERSON_CARRY: usize = 1 << 20;
+/// How much of `events.jsonl` a backwards read takes at a time.
+const LOG_CHUNK: u64 = 64 * 1024;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Jelly {
@@ -210,7 +227,57 @@ pub struct Reply {
     pub at_ms: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// What it takes to go back one change. `state` turns the pretty-printed
+/// state after the change back into the one before; `view` and `verbs` hold
+/// what a reshape replaced, and are absent when it kept them.
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct Step {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    state: Vec<Hunk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    view: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verbs: Option<String>,
+    view_rev: u64,
+}
+
+/// Replace `remove` lines of the pretty-printed state, starting at line `at`, with `lines`.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Hunk {
+    at: usize,
+    remove: usize,
+    lines: Vec<String>,
+}
+
+impl Step {
+    fn for_rev(view_rev: u64) -> Step {
+        Step { view_rev, ..Step::default() }
+    }
+
+    fn bytes(&self) -> usize {
+        let lines: usize = self.state.iter().flat_map(|h| &h.lines).map(String::len).sum();
+        lines + self.view.as_ref().map_or(0, String::len) + self.verbs.as_ref().map_or(0, String::len)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(from = "EntryOnDisk")]
+struct Entry {
+    jelly: Jelly,
+    steps: Vec<Step>,
+}
+
+/// Reads jellies saved when undo kept a full copy of view, verbs and state per change.
+#[derive(Deserialize)]
+struct EntryOnDisk {
+    jelly: Jelly,
+    #[serde(default)]
+    undo: Vec<Snapshot>,
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+
+#[derive(Deserialize)]
 struct Snapshot {
     view: String,
     verbs: String,
@@ -218,10 +285,32 @@ struct Snapshot {
     view_rev: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Entry {
-    jelly: Jelly,
-    undo: Vec<Snapshot>,
+impl From<EntryOnDisk> for Entry {
+    fn from(d: EntryOnDisk) -> Self {
+        if d.undo.is_empty() {
+            return Entry { jelly: d.jelly, steps: d.steps };
+        }
+        // Newest first: each snapshot is what the change after it replaced.
+        let budget = undo_budget(&d.jelly.state);
+        let (mut steps, mut total) = (Vec::new(), 0);
+        let (mut view, mut verbs, mut state) = (&d.jelly.view, &d.jelly.verbs, &d.jelly.state);
+        for snap in d.undo.iter().rev().take(UNDO_DEPTH) {
+            let step = Step {
+                state: state_step(state, &snap.state),
+                view: (snap.view != *view).then(|| snap.view.clone()),
+                verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
+                view_rev: snap.view_rev,
+            };
+            total += step.bytes();
+            if !steps.is_empty() && total > budget {
+                break;
+            }
+            steps.push(step);
+            (view, verbs, state) = (&snap.view, &snap.verbs, &snap.state);
+        }
+        steps.reverse();
+        Entry { jelly: d.jelly, steps }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -364,11 +453,15 @@ impl Store {
                 }
             }
         }
+        let mut store = Store { dir: dir.to_path_buf(), jellies, seq: 0, source: None };
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let seq = fs::read_to_string(dir.join("events.jsonl")).ok()
-            .and_then(|t| t.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()?["seq"].as_u64()))
-            .unwrap_or(0);
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None })
+        let mut seq = 0;
+        store.events_back(|l| {
+            seq = serde_json::from_str::<Value>(l).ok().and_then(|v| v["seq"].as_u64()).unwrap_or(0);
+            seq == 0
+        })?;
+        store.seq = seq;
+        Ok(store)
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -418,7 +511,7 @@ impl Store {
             working: None,
             notes: Vec::new(),
         };
-        self.jellies.insert(name.into(), Entry { jelly, undo: Vec::new() });
+        self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new() });
         self.commit(name, EventKind::New, by, None, None, vec![String::new()])
     }
 
@@ -432,8 +525,9 @@ impl Store {
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        snapshot(entry);
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
         entry.jelly.state = next;
+        push_step(entry, step);
         self.source = source;
         self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed)
     }
@@ -452,14 +546,11 @@ impl Store {
             entry.jelly.about = a.trim().into();
         }
         if view.is_some() || verbs_src.is_some() {
-            snapshot(entry);
-            if let Some(v) = view {
-                entry.jelly.view = v;
-            }
-            if let Some(v) = verbs_src {
-                entry.jelly.verbs = v;
-            }
-            entry.jelly.view_rev += 1;
+            let j = &mut entry.jelly;
+            let replaced = |old: &mut String, new: Option<String>| new.filter(|n| n != old).map(|n| std::mem::replace(old, n));
+            let step = Step { view: replaced(&mut j.view, view), verbs: replaced(&mut j.verbs, verbs_src), ..Step::for_rev(j.view_rev) };
+            j.view_rev += 1;
+            push_step(entry, step);
         }
         self.commit(name, EventKind::Reshape, by, None, None, Vec::new())
     }
@@ -473,20 +564,27 @@ impl Store {
         set_at(&mut next, pointer, value).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        snapshot(entry);
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
         entry.jelly.state = next;
+        push_step(entry, step);
         self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed)
     }
 
     pub fn undo(&mut self, name: &str, by: &str) -> Result<Event, Error> {
         let entry = self.entry(name)?;
-        let snap = entry.undo.pop().ok_or_else(|| Error::Invalid(format!("{name} has nothing to undo")))?;
+        let step = entry.steps.last().ok_or_else(|| Error::Invalid(format!("{name} has nothing to undo")))?;
+        let state = restore(&entry.jelly.state, &step.state).map_err(|e| Error::Invalid(format!("the undo history of {name} is damaged: {e}")))?;
+        let step = entry.steps.pop().expect("checked above");
         let mut changed = Vec::new();
-        diff(&entry.jelly.state, &snap.state, &mut String::new(), &mut changed);
-        entry.jelly.view = snap.view;
-        entry.jelly.verbs = snap.verbs;
-        entry.jelly.state = snap.state;
-        if entry.jelly.view_rev != snap.view_rev {
+        diff(&entry.jelly.state, &state, &mut String::new(), &mut changed);
+        entry.jelly.state = state;
+        if let Some(v) = step.view {
+            entry.jelly.view = v;
+        }
+        if let Some(v) = step.verbs {
+            entry.jelly.verbs = v;
+        }
+        if entry.jelly.view_rev != step.view_rev {
             // A new number, not the old one: views opened on the undone
             // version must notice and reload.
             entry.jelly.view_rev += 1;
@@ -768,9 +866,17 @@ impl Store {
 
     fn log(&self, ev: &Event) {
         let line = serde_json::to_string(ev).expect("an event serializes");
-        let file = fs::OpenOptions::new().create(true).append(true).open(self.dir.join("events.jsonl"));
-        if let Err(e) = file.and_then(|mut f| writeln!(f, "{line}")) {
-            eprintln!("could not log event: {e}");
+        let path = self.events_path();
+        let appended = fs::OpenOptions::new().create(true).append(true).open(&path)
+            .and_then(|mut f| { writeln!(f, "{line}")?; f.metadata() });
+        match appended {
+            Ok(m) if m.len() > LOG_LIMIT => {
+                if let Err(e) = trim_log(&path, LOG_KEEP, PERSON_CARRY) {
+                    eprintln!("could not trim the event log: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("could not log event: {e}"),
         }
     }
 
@@ -778,17 +884,141 @@ impl Store {
         self.dir.join("events.jsonl")
     }
 
+    /// Hands the lines of `events.jsonl` to `visit`, newest first, until it
+    /// returns false. Reads only as far back as `visit` asks for.
+    pub fn events_back(&self, mut visit: impl FnMut(&str) -> bool) -> std::io::Result<()> {
+        let mut file = match fs::File::open(self.events_path()) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        // The start of a line whose beginning is in an earlier chunk.
+        let mut pending = Vec::new();
+        let mut end = file.metadata()?.len();
+        while end > 0 {
+            let start = end.saturating_sub(LOG_CHUNK);
+            let mut data = vec![0; (end - start) as usize];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut data)?;
+            data.extend_from_slice(&pending);
+            let mut lines = data.split(|&b| b == b'\n');
+            let partial = if start > 0 { lines.next() } else { None };
+            for line in lines.rev() {
+                if let Ok(l) = std::str::from_utf8(line) {
+                    if !l.is_empty() && !visit(l) {
+                        return Ok(());
+                    }
+                }
+            }
+            pending = partial.unwrap_or_default().to_vec();
+            end = start;
+        }
+        Ok(())
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join("jellies").join(format!("{name}.json"))
     }
 }
 
-fn snapshot(entry: &mut Entry) {
-    let j = &entry.jelly;
-    entry.undo.push(Snapshot { view: j.view.clone(), verbs: j.verbs.clone(), state: j.state.clone(), view_rev: j.view_rev });
-    if entry.undo.len() > UNDO_DEPTH {
-        entry.undo.remove(0);
+/// Keeps `step` for undo, then drops the oldest steps past the depth or the byte budget.
+fn push_step(entry: &mut Entry, step: Step) {
+    let steps = &mut entry.steps;
+    steps.push(step);
+    let budget = undo_budget(&entry.jelly.state);
+    let mut drop = steps.len().saturating_sub(UNDO_DEPTH);
+    let mut total: usize = steps[drop..].iter().map(Step::bytes).sum();
+    while drop + 1 < steps.len() && total > budget {
+        total -= steps[drop].bytes();
+        drop += 1;
     }
+    steps.drain(..drop);
+}
+
+fn undo_budget(state: &Value) -> usize {
+    2 * serde_json::to_vec(state).map_or(0, |b| b.len()) + UNDO_SLACK
+}
+
+fn pretty(v: &Value) -> String {
+    serde_json::to_string_pretty(v).expect("a state serializes")
+}
+
+/// The hunks that turn the pretty-printed `after` back into `before`, by
+/// line, so a push that shifts an array costs the lines that moved in and out.
+fn state_step(after: &Value, before: &Value) -> Vec<Hunk> {
+    if after == before {
+        return Vec::new();
+    }
+    let (a, b) = (pretty(after), pretty(before));
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    let ops = similar::capture_diff_slices_deadline(similar::Algorithm::Myers, &a, &b, Some(Instant::now() + DIFF_DEADLINE));
+    ops.iter().filter_map(|op| {
+        let (at, remove, from, len) = match *op {
+            similar::DiffOp::Equal { .. } => return None,
+            similar::DiffOp::Delete { old_index, old_len, new_index } => (old_index, old_len, new_index, 0),
+            similar::DiffOp::Insert { old_index, new_index, new_len } => (old_index, 0, new_index, new_len),
+            similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => (old_index, old_len, new_index, new_len),
+        };
+        Some(Hunk { at, remove, lines: b[from..from + len].iter().map(|l| l.to_string()).collect() })
+    }).collect()
+}
+
+/// Applies `state_step`'s hunks to `current`, giving the state before the change.
+fn restore(current: &Value, hunks: &[Hunk]) -> Result<Value, String> {
+    if hunks.is_empty() {
+        return Ok(current.clone());
+    }
+    let text = pretty(current);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut pos = 0;
+    for h in hunks {
+        if h.at < pos || h.at + h.remove > lines.len() {
+            return Err(format!("a step does not fit the state (line {} of {})", h.at, lines.len()));
+        }
+        out.extend(&lines[pos..h.at]);
+        out.extend(h.lines.iter().map(String::as_str));
+        pos = h.at + h.remove;
+    }
+    out.extend(&lines[pos..]);
+    serde_json::from_str(&out.join("\n")).map_err(|e| e.to_string())
+}
+
+/// Rewrites the log as its newest `keep` bytes of whole lines (at least the
+/// newest line), preceded by up to `carry` bytes of the person's older events.
+/// Lines are copied as they are, so `seq` still ascends through the file.
+pub fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
+    let text = fs::read(path)?;
+    let body = text.strip_suffix(b"\n").unwrap_or(&text);
+    let from = text.len().saturating_sub(keep);
+    let split = match from {
+        0 => 0,
+        _ => text[from - 1..].iter().position(|&b| b == b'\n').map(|i| from + i).filter(|&i| i < body.len())
+            .unwrap_or_else(|| body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)),
+    };
+    let mut carried = Vec::new();
+    let mut room = carry;
+    for line in text[..split].split(|&b| b == b'\n').rev() {
+        let theirs = line.windows(13).any(|w| w == b"\"by\":\"person\"")
+            && serde_json::from_slice::<Event>(line).is_ok_and(|e| e.by == PERSON);
+        if theirs {
+            if line.len() + 1 > room {
+                break;
+            }
+            room -= line.len() + 1;
+            carried.push(line);
+        }
+    }
+    let mut out = Vec::with_capacity(carry - room + text.len() - split + 1);
+    for line in carried.iter().rev() {
+        out.extend_from_slice(line);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(&text[split..]);
+    if !out.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    write_atomic(path, &out)
 }
 
 /// Puts `value` at a JSON pointer (adding an object key or appending to an
@@ -1133,6 +1363,123 @@ mod tests {
         assert!(!f.resolved, "a follow-up opens the thread again");
         assert_eq!(f.replies.iter().map(|r| r.by.as_str()).collect::<Vec<_>>(), ["claude", "person"]);
         assert!(s.reply("j", "c9", "x", "claude", false).is_err());
+    }
+
+    const MONITOR_VERBS: &str = include_str!("../skill/recipes/monitor/verbs.js");
+
+    #[test]
+    fn hundreds_of_pushes_keep_the_file_near_the_state_and_undo_exact() {
+        let (dir, mut s) = store();
+        let mut state: Value = serde_json::from_str(include_str!("../skill/recipes/monitor/start.json")).unwrap();
+        state["notes"] = json!("n".repeat(95_000));
+        let view = format!("<main>{}</main>", "<p>row</p>".repeat(5_000));
+        s.create("run", view.clone(), MONITOR_VERBS.into(), state, "agent", false, "", "").unwrap();
+        let push = |i: u64| json!({
+            "points": [{"m": "latency", "v": 100.0 + (i % 17) as f64 * 1.37}, {"m": "browsers", "v": (i % 3) as f64}, {"m": "memory", "v": 40.0 + i as f64 / 7.0}],
+            "items": [{"r": if i.is_multiple_of(9) { "fail" } else { "pass" }, "label": format!("ask {i}")}],
+            "done": i,
+        });
+        for i in 1..300 {
+            s.call("run", "push", push(i), "agent").unwrap();
+        }
+        let before = s.get("run").unwrap().state.clone();
+        s.call("run", "push", push(300), "agent").unwrap();
+
+        let state = serde_json::to_vec(&s.get("run").unwrap().state).unwrap().len();
+        let file = fs::metadata(dir.path().join("jellies").join("run.json")).unwrap().len() as usize;
+        assert!(state > 100_000, "the state is {state} bytes");
+        assert!(file <= view.len() + MONITOR_VERBS.len() + 4 * state, "{file} bytes of file for {state} of state");
+
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().state, before, "undo restores the state before the last push exactly");
+        s.reshape("run", Some("<p>new</p>".into()), None, None, "agent").unwrap();
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().view, view);
+        s.undo("run", "person").unwrap();
+        assert_eq!(s.get("run").unwrap().state["done"], 298, "older pushes undo too, after a restart");
+    }
+
+    #[test]
+    fn jellies_saved_with_full_snapshots_keep_their_undo() {
+        let (dir, mut s) = store();
+        s.create("j", "<p>v2</p>".into(), VERBS.into(), json!({"labels": {"a": "x", "b": "y"}}), "agent", false, "", "").unwrap();
+        let path = dir.path().join("jellies").join("j.json");
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["jelly"]["view_rev"] = json!(2);
+        saved["undo"] = json!([
+            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {}}, "view_rev": 1},
+            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {"a": "x"}}, "view_rev": 1},
+        ]);
+        saved.as_object_mut().unwrap().remove("steps");
+        fs::write(&path, saved.to_string()).unwrap();
+        drop(s);
+
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        let j = s.get("j").unwrap();
+        assert_eq!((j.state.clone(), j.view.as_str(), j.view_rev), (json!({"labels": {"a": "x"}}), "<p>v1</p>", 3));
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, json!({"labels": {}}));
+        assert!(s.undo("j", "person").is_err());
+        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("undo").is_none() && saved.get("steps").is_some());
+    }
+
+    fn logged(s: &Store) -> Vec<String> {
+        let mut lines = Vec::new();
+        s.events_back(|l| { lines.push(l.to_string()); true }).unwrap();
+        lines.reverse();
+        lines
+    }
+
+    #[test]
+    fn the_log_reads_back_whole_lines_across_chunks() {
+        let (dir, s) = store();
+        let text: String = (0..400).map(|i| format!("{{\"seq\":{i},\"pad\":\"{}\"}}\n", "x".repeat(i * 7 % 1500))).collect();
+        assert!(text.len() as u64 > 3 * LOG_CHUNK);
+        fs::write(dir.path().join("events.jsonl"), &text).unwrap();
+        assert_eq!(logged(&s), text.lines().collect::<Vec<_>>());
+        let mut seen = 0;
+        s.events_back(|_| { seen += 1; seen < 3 }).unwrap();
+        assert_eq!(seen, 3, "stopping stops");
+    }
+
+    #[test]
+    fn trimming_the_log_keeps_the_newest_lines_and_the_persons_events() {
+        let (dir, mut s) = store();
+        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        for i in 0..60 {
+            let by = if i % 10 == 3 { "person" } else { "agent" };
+            s.call("j", "label", json!({"id": format!("k{i}"), "value": "v"}), by).unwrap();
+        }
+        let path = s.events_path();
+        let before = fs::read_to_string(&path).unwrap();
+        let keep = before.len() / 4;
+        trim_log(&path, keep, 1 << 20).unwrap();
+
+        // The newest `keep` bytes of whole lines, after the person's older events.
+        let (mut start, mut expected, mut tail) = (0, Vec::new(), Vec::new());
+        for l in before.lines() {
+            if start >= before.len() - keep {
+                tail.push(l.to_string());
+            } else if l.contains("\"by\":\"person\"") {
+                expected.push(l.to_string());
+            }
+            start += l.len() + 1;
+        }
+        assert!(!expected.is_empty() && !tail.is_empty());
+        expected.extend(tail);
+        let after = logged(&s);
+        assert_eq!(after, expected);
+        let events: Vec<Event> = after.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert!(events.windows(2).all(|w| w[0].seq < w[1].seq), "seq still ascends");
+
+        let last = events.last().unwrap().seq;
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(s.call("j", "label", json!({"id": "z", "value": "v"}), "agent").unwrap().seq, last + 1);
     }
 
     #[test]

@@ -260,7 +260,8 @@ enum Cmd {
     },
     /// What the person did in this project's jellies since you last asked.
     /// With --hook, prints nothing when there is nothing new or no daemon, so
-    /// it can run at the start of every agent turn.
+    /// it can run at the start of every agent turn, and one line when the
+    /// daemon does not answer.
     Inbox {
         #[arg(long)]
         hook: bool,
@@ -648,9 +649,18 @@ fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
     let resp = ureq::get(&format!("{url}/api/inbox?project={}&since={since}", encode(project)))
         .timeout(std::time::Duration::from_secs(1))
         .call();
-    let items: Vec<Value> = match resp.map_err(describe).and_then(|r| r.into_json().map_err(|e| e.to_string())) {
+    let got = match resp {
+        Err(ureq::Error::Transport(t)) if hook && t.kind() == ureq::ErrorKind::ConnectionFailed => return Ok(()), // no daemon
+        Err(ureq::Error::Transport(t)) if hook => Err(t.to_string()),
+        resp => resp.map_err(describe).and_then(|r| r.into_json::<Vec<Value>>().map_err(|e| e.to_string())),
+    };
+    let items = match got {
         Ok(v) => v,
-        Err(_) if hook => return Ok(()),
+        // The hook's output goes to the agent: silence would read as "nothing new".
+        Err(e) if hook => {
+            println!("jelly inbox: the daemon at {url} did not answer ({e}). The person's latest actions may be waiting; run `jelly inbox` to check.");
+            return Ok(());
+        }
         Err(e) => return Err(e),
     };
     let _ = std::fs::create_dir_all(cursor.parent().expect("has a parent"));

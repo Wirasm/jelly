@@ -48,7 +48,11 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new.
+`UserPromptSubmit` hook. It prints nothing when there is nothing new or no daemon,
+and one line when the daemon does not answer.
+
+`~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
+to 1 MiB of your older events, so the inbox and `jelly see` still have them.
 
 ## How it works
 
