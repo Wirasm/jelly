@@ -1270,7 +1270,7 @@ mod share_tests {
         let path = dir.path().join("shared.html");
         std::fs::write(&path, html).unwrap();
         let mut browser = tokio::process::Command::new(browser)
-            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check"])
+            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--enable-automation", "--disable-background-timer-throttling", "--disable-component-update"])
             .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
             .arg(format!("file://{}", path.display()))
             .stdout(std::process::Stdio::null())
