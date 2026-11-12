@@ -99,9 +99,10 @@ position.
 Upgrading changes how a jelly's file stores undo: it now keeps each change's
 difference instead of a full copy of view, verbs and state. The new daemon reads
 old files and keeps their undo, and rewrites each file in the new form at that
-jelly's next change. An older binary cannot read a rewritten file: it skips
-that jelly with a `missing field` error. To go back to an
-older binary, keep a copy of `~/.jelly/jellies/` from before the upgrade.
+jelly's next change. Converted history is exempt from the new byte budget until
+new history displaces it, within the same 100-step limit. An older binary cannot
+read a rewritten file: it skips that jelly with a `missing field` error. To go
+back to an older binary, keep a copy of `~/.jelly/jellies/` from before the upgrade.
 
 ## How it works
 

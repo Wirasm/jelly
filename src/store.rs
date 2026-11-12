@@ -17,9 +17,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Undo keeps the last `UNDO_DEPTH` changes, and drops the oldest sooner once
-/// all steps together hold more than twice the state plus `UNDO_SLACK`, so a
+/// new steps together hold more than twice the state plus `UNDO_SLACK`, so a
 /// few whole-state `set`s cannot grow a jelly's file to many copies of its
-/// state. The newest step always stays: the last change can always be undone.
+/// state. Converted legacy steps are exempt from the byte budget until new
+/// history displaces them. The newest step always stays: the last change can
+/// always be undone.
 const UNDO_DEPTH: usize = 100;
 const UNDO_SLACK: usize = 64 * 1024;
 /// Myers diffing is quadratic on unrelated text. Past this it settles for a
@@ -232,6 +234,9 @@ pub struct Reply {
 /// what a reshape replaced, and are absent when it kept them.
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct Step {
+    /// Existing snapshot history must survive upgrade, even above the new byte budget.
+    #[serde(default)]
+    legacy: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     state: Vec<Hunk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,7 +259,10 @@ impl Step {
         Step { view_rev, ..Step::default() }
     }
 
-    fn bytes(&self) -> usize {
+    fn budget_bytes(&self) -> usize {
+        if self.legacy {
+            return 0;
+        }
         let lines: usize = self.state.iter().flat_map(|h| &h.lines).map(String::len).sum();
         lines + self.view.as_ref().map_or(0, String::len) + self.verbs.as_ref().map_or(0, String::len)
     }
@@ -298,12 +306,13 @@ impl From<EntryOnDisk> for Entry {
                 None => (&entry.jelly.view, &entry.jelly.verbs, &entry.jelly.state),
             };
             let step = Step {
+                legacy: true,
                 state: state_step(state, &snap.state),
                 view: (snap.view != *view).then(|| snap.view.clone()),
                 verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
                 view_rev: snap.view_rev,
             };
-            push_step(&mut entry, step);
+            entry.steps.push(step);
         }
         entry
     }
@@ -1051,9 +1060,9 @@ fn push_step(entry: &mut Entry, step: Step) {
     steps.push(step);
     let budget = undo_budget(&entry.jelly.state);
     let mut drop = steps.len().saturating_sub(UNDO_DEPTH);
-    let mut total: usize = steps[drop..].iter().map(Step::bytes).sum();
+    let mut total: usize = steps[drop..].iter().map(Step::budget_bytes).sum();
     while drop + 1 < steps.len() && total > budget {
-        total -= steps[drop].bytes();
+        total -= steps[drop].budget_bytes();
         drop += 1;
     }
     steps.drain(..drop);
@@ -1845,6 +1854,60 @@ mod tests {
         assert!(s.undo("j", "person").is_err());
         let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert!(saved.get("undo").is_none() && saved.get("steps").is_some());
+    }
+
+    #[test]
+    fn migration_preserves_large_legacy_undo_until_new_history_replaces_it() {
+        let (dir, mut s) = store();
+        let old = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
+        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        let path = dir.path().join("jellies").join("j.json");
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["undo"] = json!([
+            {"view": "", "verbs": VERBS, "state": old(0), "view_rev": 1},
+            {"view": "", "verbs": VERBS, "state": old(1), "view_rev": 1},
+        ]);
+        saved.as_object_mut().unwrap().remove("steps");
+        let legacy = saved.to_string();
+        fs::write(&path, &legacy).unwrap();
+        drop(s);
+
+        s = Store::open(dir.path()).unwrap();
+        s.set_state("j", "/new", Some(json!(true)), "agent").unwrap();
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, json!({}));
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(1));
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(0));
+        assert!(s.undo("j", "person").is_err());
+
+        fs::write(&path, legacy).unwrap();
+        s = Store::open(dir.path()).unwrap();
+        for i in 0..UNDO_DEPTH {
+            s.set_state("j", "/new", Some(json!(i)), "agent").unwrap();
+        }
+        assert!(fs::metadata(&path).unwrap().len() < UNDO_SLACK as u64,
+            "legacy history ages out at the depth limit");
+        for _ in 0..UNDO_DEPTH {
+            s.undo("j", "person").unwrap();
+        }
+        assert_eq!(s.get("j").unwrap().state, json!({}));
+        assert!(s.undo("j", "person").is_err());
+
+        fs::write(&path, saved.to_string()).unwrap();
+        s = Store::open(dir.path()).unwrap();
+        s.set_state("j", "", Some(old(2)), "agent").unwrap();
+        s.set_state("j", "", Some(json!({})), "agent").unwrap();
+        drop(s);
+        s = Store::open(dir.path()).unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, old(2), "the newest step survives the byte limit");
+        assert!(s.undo("j", "person").is_err(), "new history still obeys the byte budget");
     }
 
     fn logged(s: &Store) -> Vec<String> {
