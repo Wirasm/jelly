@@ -249,6 +249,37 @@ async page => {
     groupedId = item.id;
     if (item !== inlineItems.at(-1)) await frame.locator(`[data-pick="${item.id}|y"]`).click();
   }
+  // Tall inline questions must not focus an unseen choice that Enter submits.
+  for (const content of ['preview', 'context']) {
+    const tallName = `visibility:tall-${content}-${Date.now()}`;
+    await post(`/api/jellies/${tallName}/ask`, {spec:{title:'Detailed choice',questions:[{
+      id:'detail',question:'Which format should we book?',
+      context:content === 'context' ? 'Consider the venue, travel and guest experience. '.repeat(60) : 'Compare the preview and tradeoffs before choosing.',
+      recommend:'y',why:'Lets guests meet the team.',
+      options:[{id:'y',label:'In person',does:'Book the venue for 40 guests.',
+        gains:['Direct feedback'],costs:['Venue cost'],
+        ...(content === 'preview' ? {preview:'<h1>Venue layout</h1><p>Tables around a stage</p>'} : {})},
+        {id:'n',label:'Online',does:'Stream from the studio.'}]
+    }]}});
+    await page.locator(`#dock-list [data-goto="${tallName}"]`).waitFor({state:'attached'});
+    const tallId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
+    frame = await dock(tallName, tallId);
+    const opening = await frame.evaluate(() => {
+      const heading = document.querySelector('.q h2').getBoundingClientRect();
+      const focus = document.activeElement.getBoundingClientRect();
+      const bar = document.getElementById('bar').getBoundingClientRect();
+      return {heading:heading.top >= bar.bottom && heading.bottom <= innerHeight,
+        focus:focus.top >= bar.bottom && focus.bottom <= innerHeight};
+    });
+    assert(opening.heading && opening.focus, `tall ${content} opening shows heading and focus: ${JSON.stringify(opening)}`);
+    if (await frame.evaluate(() => !document.activeElement.matches('[data-pick]'))) {
+      await page.keyboard.press('Enter');
+      const unanswered = await (await page.request.get(`${base}/api/jellies/${tallName}`)).json();
+      assert(!unanswered.attention.find(a => a.id === tallId).answer, `Enter at the tall ${content} heading does not choose an answer`);
+    }
+    await frame.locator(`[data-pick="${tallId}|y"]`).click();
+    await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'y', tallId);
+  }
   // History changes the URL without replacing the loaded view.
   frame = await dock(name, twin.args.id);
   for (const [method,url] of [['pushState','#tucked'],['pushState','?tab=details'],['replaceState','?tab=other'],['pushState','/visibility-stage']]) {

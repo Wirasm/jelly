@@ -558,9 +558,16 @@
     const host = inline() ? anchorElement(item) : cards.get(id);
     if (!host) return;
     const root = host.shadowRoot || host;
-    const control = root.querySelector("button.o:not(:disabled), [data-pick]") || root.querySelector("textarea:not(:disabled)") || root.querySelector("button:not(:disabled)") || root.querySelector(".c") || host;
-    if (!control.hasAttribute("tabindex") && control === host) control.tabIndex = -1;
+    let control = root.querySelector("button.o:not(:disabled), [data-pick]") || root.querySelector("textarea:not(:disabled)") || root.querySelector("button:not(:disabled)") || root.querySelector(".c") || host;
     host.scrollIntoView({ block: inline() ? "start" : "center" });
+    if (inline()) {
+      const r = control.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) {
+        control = root.querySelector("h1, h2, h3") || host;
+        control.tabIndex = -1;
+      }
+    }
+    if (!control.hasAttribute("tabindex") && control === host) control.tabIndex = -1;
     control.focus({ preventScroll: true });
     if (!inline()) control.scrollIntoView({ block: "nearest" });
     const c = root.querySelector(".c");
