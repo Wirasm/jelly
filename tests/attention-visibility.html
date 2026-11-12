@@ -1,0 +1,33 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body { min-height: 4000px; margin: 16px; font: 16px system-ui; }
+section { margin: 12px 0; }
+[data-visible="false"] { opacity: 0; }
+.concealed { visibility: hidden; }
+.clipped { height: 50px; overflow: hidden; }
+.clipped p { transform: translateY(200px); }
+</style>
+<button id="show" onclick="details.hidden = !details.hidden">Show details</button>
+<section id="details" hidden><p id="tucked">The tucked-away part</p></section>
+<details><summary>Closed section</summary><p id="closed">Inside details</p></details>
+<section data-visible="false"><p id="attribute">Attribute controlled</p></section>
+<section class="concealed"><p id="invisible">Invisible</p></section>
+<section style="opacity:0"><p id="transparent">Transparent</p></section>
+<section inert><p id="inert">Inert</p></section>
+<section class="clipped"><p id="clipped">Off stage</p></section>
+<section style="height:50px;overflow:clip"><p id="short">Anchor fits, card does not</p></section>
+<section style="height:50px;overflow:clip"><div style="display:flex"><button id="clipped-fallback">A layout without a question row</button></div></section>
+<section><div id="contents" style="display:contents"><p>Rendered descendant</p></div></section>
+<svg width="100" height="40"><text id="svg" y="20">Drawing</text></svg>
+<div style="position:fixed;right:0;bottom:0" id="floating">Floating</div>
+<section style="margin-top:1200px"><p id="below">Below the fold</p></section>
+<script>
+window.openings = [];
+window.reveal = 'none';
+if (jelly.onAttend) jelly.onAttend(item => {
+  openings.push({ id: item.id, selector: item.anchor?.selector });
+  if (reveal === 'immediate') details.hidden = false;
+  if (reveal === 'delayed') window.finishReveal = () => { details.hidden = false; };
+});
+</script>
