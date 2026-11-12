@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Comment placement check</title>
+<style>
+  :root.raised-comment { --jelly-comment-inset: auto 10px 78px auto; }
+  body.top-comment { --jelly-comment-inset: 10px 10px auto auto; }
+  #save { position: fixed; right: 12px; bottom: 12px; padding: 10px 18px; }
+</style>
+<button id="save" data-clicks="0">Save</button>
+<script>
+  document.getElementById('save').onclick = (event) => {
+    const button = event.currentTarget;
+    button.dataset.clicks = Number(button.dataset.clicks) + 1;
+  };
+  window.__JELLY__ = { name: 'test:comment-placement', state: {}, version: 1, viewRev: 1 };
+  window.WebSocket = class {};
+  window.fetch = async () => ({ ok: true, json: async () => ({}) });
+</script>
+<script src="../assets/runtime.js"></script>
