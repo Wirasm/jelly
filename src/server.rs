@@ -1623,31 +1623,34 @@ mod tests {
     #[tokio::test]
     async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
         let (dir, app) = app();
-        let recent = {
+        let (recent, later) = {
             let mut store = app.store.lock().unwrap();
             store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
             let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
             recent.state = None;
-            let mut older = recent.clone();
+            let mut later = recent.clone();
+            later.seq += 1;
+            later.at_ms -= 1;
+            let mut older = later.clone();
             older.seq += 1;
             older.at_ms = 1;
-            std::fs::write(store.events_path(), format!("{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
-            recent
+            std::fs::write(store.events_path(), format!("{}\n{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&later).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
+            (recent, later)
         };
         *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
         let path = app.store.lock().unwrap().events_path();
         let mut bytes = std::fs::read(&path).unwrap();
-        let old_start = bytes.iter().position(|&b| b == b'\n').unwrap() + 1;
+        let old_start = bytes[..bytes.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
         bytes[old_start] = 0xff;
         std::fs::write(&path, bytes).unwrap();
         let empty = inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms) })).await.unwrap();
         assert!(empty.0.as_array().unwrap().is_empty());
-        let result = inbox(State(app.clone()), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
-        assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq]);
+        let result = inbox(State(app.clone()), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 2) })).await.unwrap();
+        assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq, later.seq]);
         let mut shifted = std::fs::read(&path).unwrap();
         shifted.insert(0, b'\n');
         std::fs::write(&path, shifted).unwrap();
-        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms - 1) })).await.is_err());
+        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms - 2) })).await.is_err());
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());

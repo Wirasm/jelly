@@ -1027,7 +1027,7 @@ impl Store {
     pub fn events_since(&self, since: u64) -> std::io::Result<Vec<Event>> {
         let mut file = match fs::File::open(self.events_path()) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.timestamps.is_empty() => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
         if !file.metadata()?.is_file() {
@@ -1572,6 +1572,17 @@ mod tests {
     }
 
     #[test]
+    fn inbox_without_history_needs_no_event_log() {
+        let (_dir, s) = store();
+        assert!(!s.events_path().exists());
+        assert!(s.events_since(0).unwrap().is_empty());
+        let reader = InboxReader::Named { name: "new".into() };
+        let batch = s.read_inbox("p", &reader).unwrap();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.through, 0);
+    }
+
+    #[test]
     fn inbox_initial_window_stays_fixed_until_commit() {
         let (dir, mut s) = store();
         s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
@@ -1580,7 +1591,7 @@ mod tests {
         let reader = InboxReader::Named { name: "retry".into() };
         let first_read_at = 7_200_000;
         let mut events = Vec::new();
-        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at - 3_599_999), (3, first_read_at), (4, first_read_at - 3_600_002)] {
+        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at), (3, first_read_at - 3_599_999), (4, first_read_at - 3_600_002)] {
             event.seq = seq;
             event.at_ms = at_ms;
             events.push(serde_json::to_string(&event).unwrap());
