@@ -509,8 +509,42 @@ pub struct Store {
     dir: PathBuf,
     jellies: BTreeMap<String, Entry>,
     seq: u64,
+    recent: BTreeMap<String, RecentEvents>,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
+}
+
+#[derive(Default)]
+struct RecentEvents {
+    last: Option<Event>,
+    person: Vec<Event>,
+}
+
+impl RecentEvents {
+    fn push(&mut self, event: Event) {
+        if event.by == PERSON {
+            if self.person.len() == 8 {
+                self.person.remove(0);
+            }
+            self.person.push(event.clone());
+        }
+        self.last = Some(event);
+    }
+}
+
+fn read_event_history(path: &Path) -> std::io::Result<(u64, BTreeMap<String, RecentEvents>)> {
+    let log = read_optional(path)?;
+    if !log.is_empty() && !log.ends_with('\n') {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
+    }
+    let mut seq = 0;
+    let mut recent = BTreeMap::<String, RecentEvents>::new();
+    for line in log.lines() {
+        let event: Event = serde_json::from_str(line)?;
+        seq = seq.max(event.seq);
+        recent.entry(event.jelly.clone()).or_default().push(event);
+    }
+    Ok((seq, recent))
 }
 
 impl Store {
@@ -529,15 +563,8 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let log = read_optional(&dir.join("events.jsonl"))?;
-        if !log.is_empty() && !log.ends_with('\n') {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
-        }
-        let seq = log.lines().try_fold(0, |seq, line| -> std::io::Result<u64> {
-            let event: Event = serde_json::from_str(line)?;
-            Ok(seq.max(event.seq))
-        })?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None })
+        let (seq, recent) = read_event_history(&dir.join("events.jsonl"))?;
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, source: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -953,20 +980,36 @@ impl Store {
         }
     }
 
-    fn log(&self, ev: &Event) {
+    fn log(&mut self, ev: &Event) {
         let line = serde_json::to_string(ev).expect("an event serializes");
         let path = self.events_path();
         let appended = fs::OpenOptions::new().create(true).append(true).open(&path)
             .and_then(|mut f| { writeln!(f, "{line}")?; f.metadata() });
         match appended {
-            Ok(m) if m.len() > LOG_LIMIT => {
-                if let Err(e) = trim_log(&path, LOG_KEEP, PERSON_CARRY) {
-                    eprintln!("could not trim the event log: {e}");
+            Ok(m) => {
+                self.recent.entry(ev.jelly.clone()).or_default().push(ev.clone());
+                if m.len() > LOG_LIMIT {
+                    if let Err(e) = self.trim_events(LOG_KEEP, PERSON_CARRY) {
+                        eprintln!("could not trim the event log: {e}");
+                    }
                 }
             }
-            Ok(_) => {}
             Err(e) => eprintln!("could not log event: {e}"),
         }
+    }
+
+    pub(crate) fn trim_events(&mut self, keep: usize, carry: usize) -> std::io::Result<()> {
+        trim_log(&self.events_path(), keep, carry)?;
+        let (_, recent) = read_event_history(&self.events_path())?;
+        self.recent = recent;
+        Ok(())
+    }
+
+    /// Last retained change and the person's last eight events, oldest first.
+    /// Built during startup validation and maintained on append and trim so a
+    /// see never searches through unrelated history.
+    pub fn recent_events(&self, name: &str) -> (Option<Event>, Vec<Event>) {
+        self.recent.get(name).map(|r| (r.last.clone(), r.person.clone())).unwrap_or_default()
     }
 
     pub fn events_path(&self) -> PathBuf {
@@ -1028,7 +1071,7 @@ impl Store {
             let position = existing.map_or(&initial, |c| &c.position);
             let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => 0 };
             let mut events = Vec::new();
-            // Back to the position only: the daemon appends in seq order and a trim keeps it.
+            // Sequence positions are ordered; wall-clock timestamps can move backwards.
             self.events_back(|line| {
                 let event: Event = serde_json::from_str(line)?;
                 through = through.max(event.seq);
@@ -1039,7 +1082,7 @@ impl Store {
                 if unread && event.is_inbox_item(project) {
                     events.push(event.into());
                 }
-                Ok(unread)
+                Ok(match position { InboxPosition::After { .. } => unread, InboxPosition::Recent { .. } => true })
             })?;
             events.reverse();
             if existing.is_none() {
@@ -1141,7 +1184,7 @@ fn restore(current: &Value, hunks: &[Hunk]) -> Result<Value, String> {
 /// Rewrites the log as its newest `keep` bytes of whole lines (at least the
 /// newest line), preceded by up to `carry` bytes of the person's older events.
 /// Lines are copied as they are, so `seq` still ascends through the file.
-pub fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
+fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
     let text = fs::read(path)?;
     let body = text.strip_suffix(b"\n").unwrap_or(&text);
     let from = text.len().saturating_sub(keep);
@@ -1499,7 +1542,7 @@ mod tests {
         let reader = InboxReader::Named { name: "retry".into() };
         let first_read_at = 7_200_000;
         let mut events = Vec::new();
-        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at - 3_599_999), (3, first_read_at)] {
+        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at - 3_599_999), (3, first_read_at), (4, first_read_at - 3_600_002)] {
             event.seq = seq;
             event.at_ms = at_ms;
             events.push(serde_json::to_string(&event).unwrap());
@@ -1961,7 +2004,7 @@ mod tests {
         let path = s.events_path();
         let before = fs::read_to_string(&path).unwrap();
         let keep = before.len() / 4;
-        trim_log(&path, keep, 1 << 20).unwrap();
+        s.trim_events(keep, 1 << 20).unwrap();
 
         // The newest `keep` bytes of whole lines, after the person's older events.
         let (mut start, mut expected, mut tail) = (0, Vec::new(), Vec::new());

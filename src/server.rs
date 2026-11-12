@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -548,17 +548,14 @@ struct InboxQ {
 
 /// What the person did since `since`, for jellies in `project`: the events an
 /// agent should hear about at the start of its next turn, each with a line of text.
-/// Reads the log back only to `since`, so it costs what is new, not the log's size.
+/// Timestamp queries filter the retained log without assuming wall-clock order.
 async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
     let project = q.project.unwrap_or_default();
     let mut items = Vec::new();
     let read = app.store.lock().expect("store lock").events_back(|l| {
         let Ok(e) = serde_json::from_str::<Event>(l) else { return Ok(true) };
-        if e.at_ms <= since {
-            return Ok(false);
-        }
-        if e.is_inbox_item(&project) {
+        if e.at_ms > since && e.is_inbox_item(&project) {
             items.push(inbox_item(e));
         }
         Ok(true)
@@ -950,22 +947,6 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     }).await
 }
 
-/// The last event on `name`, and the person's last 8 there, oldest first.
-fn recent_events(app: &App, name: &str) -> (Option<Event>, Vec<Event>) {
-    let needle = format!("\"jelly\":\"{name}\"");
-    let (mut last, mut mine) = (None, Vec::new());
-    let _ = app.store.lock().expect("store lock").events_back(|l| {
-        let Some(e) = l.contains(&needle).then(|| serde_json::from_str::<Event>(l).ok()).flatten() else { return Ok(true) };
-        if e.by == PERSON {
-            mine.push(e.clone());
-        }
-        last.get_or_insert(e);
-        Ok(mine.len() < 8)
-    });
-    mine.reverse();
-    (last, mine)
-}
-
 async fn see_with_renderer<F, Fut>(app: Shared, name: String, q: SeeQ, mut render_page: F) -> Result<Response, ApiError>
 where
     F: FnMut(u32, u32, Option<std::path::PathBuf>) -> Fut,
@@ -1014,7 +995,7 @@ where
     app.validate_see(&name, &owner, j.version)?;
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
-    let (last, mine) = recent_events(&app, &name);
+    let (last, mine) = app.store.lock().expect("store lock").recent_events(&name);
     // A trim can drop the newest event while an older one of the person's stays:
     // only the event that made this version says who made the last change.
     let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
@@ -1278,6 +1259,7 @@ mod placement_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::PERSON;
 
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
@@ -1642,9 +1624,62 @@ mod tests {
         }
         assert_eq!(ids(ask(since).await), ["second"]);
         assert_eq!(ids(ask(0).await), ["first", "second"]);
-        let path = app.store.lock().unwrap().events_path();
-        crate::store::trim_log(&path, 2_000, 1 << 20).unwrap();
+        app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
         assert_eq!(ids(ask(0).await), ["first", "second"], "the person's events outlive a trim");
+    }
+
+    #[tokio::test]
+    async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
+        let (_d, app) = app();
+        let mut store = app.store.lock().unwrap();
+        store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
+        let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
+        recent.state = None;
+        let mut older = recent.clone();
+        older.seq += 1;
+        older.at_ms = 1;
+        std::fs::write(store.events_path(), format!("{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
+        drop(store);
+        let result = inbox(State(app), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
+        assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq]);
+    }
+
+    #[test]
+    fn see_history_does_not_read_unrelated_retained_events() {
+        let (dir, app) = app();
+        let mut store = app.store.lock().unwrap();
+        for name in ["quiet", "busy"] {
+            store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "test").unwrap();
+        }
+        for i in 0..10 {
+            store.set_state("test:quiet", "/n", Some(json!(i)), PERSON).unwrap();
+        }
+        let last = store.set_state("test:quiet", "/n", Some(json!(10)), "agent").unwrap();
+        for i in 0..200 {
+            store.set_state("test:busy", "/n", Some(json!(i)), "agent").unwrap();
+        }
+        let path = store.events_path();
+        drop(store);
+        // Removing the backing log makes any per-see log read observable.
+        let saved = std::fs::read(&path).unwrap();
+        for restarted in [false, true] {
+            if restarted {
+                *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
+            }
+            std::fs::remove_file(&path).unwrap();
+            let (event, person) = app.store.lock().unwrap().recent_events("test:quiet");
+            assert_eq!(event.unwrap().seq, last.seq);
+            assert_eq!(person.iter().map(|e| e.version).collect::<Vec<_>>(), (4..12).collect::<Vec<_>>());
+            assert!(app.store.lock().unwrap().recent_events("test:busy").1.is_empty());
+            assert!(app.store.lock().unwrap().recent_events("test:missing").0.is_none());
+            std::fs::write(&path, &saved).unwrap();
+        }
+        let mut store = app.store.lock().unwrap();
+        store.trim_events(1, 0).unwrap();
+        assert!(store.recent_events("test:quiet").0.is_none());
+        assert!(store.recent_events("test:quiet").1.is_empty());
+        assert!(store.recent_events("test:busy").0.is_some());
+        assert!(store.recent_events("test:busy").0.unwrap().state.is_none());
     }
 
     #[tokio::test]
@@ -1674,8 +1709,7 @@ mod tests {
         let out = see_x().await;
         assert!(header(&out).ends_with("last change just now by agent"), "{out}");
         assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
-        let path = app.store.lock().unwrap().events_path();
-        crate::store::trim_log(&path, 2_000, 1 << 20).unwrap();
+        app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
         let out = see_x().await;
         assert!(header(&out).ends_with("last change just now"), "the agent's change was trimmed, so no author: {out}");
         assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");

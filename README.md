@@ -107,7 +107,10 @@ on the next append.
 `~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
 to 1 MiB of your older events, so the inbox and `jelly see` still have them. A trim
 keeps every event's position, and inbox reads go back only as far as the reader's
-position.
+position. `jelly see` uses the last change and last eight person events per jelly,
+kept in memory during startup validation and updated on append and trim; it does
+not scan the log on each request. Initial one-hour inbox windows and timestamp
+queries filter the retained log because wall-clock timestamps can move backwards.
 
 Upgrading changes how a jelly's file stores undo: it now keeps each change's
 difference instead of a full copy of view, verbs and state. The new daemon reads
