@@ -305,8 +305,8 @@ to `agent`. Use matching CLI and daemon versions. Inbox progress advances only
 after decoded events are successfully written and flushed to output. Lost or
 undecodable read responses leave events available for retry; ambiguous output,
 failed progress commits or client crashes may replay events. Hook diagnostics
-report reader identification, decoding and daemon read or commit failures;
-an empty inbox or unreachable daemon stays quiet.
+report a daemon that does not answer, reader identification, decoding and daemon
+read or commit failures; an empty inbox or no running daemon stays quiet.
 
 ## Projects and names
 

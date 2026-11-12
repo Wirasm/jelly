@@ -201,9 +201,9 @@
       "layer": "store",
       "label": "Undo",
       "kind": "store",
-      "what": "Before a call, set or reshape, the old view, verbs and state are kept, 100 deep.",
+      "what": "A call, set or reshape keeps what it takes to go back: the changed lines of state, and the view or verbs it replaced. 100 deep, within twice the state.",
       "files": [
-        "src/store.rs: snapshot, undo, UNDO_DEPTH"
+        "src/store.rs: Step, push_step, undo, UNDO_DEPTH"
       ],
       "risk": "Undo restores view, verbs and state only."
     },
@@ -243,9 +243,9 @@
       "layer": "disk",
       "label": "events.jsonl",
       "kind": "file",
-      "what": "Every event, one JSON line each, append only. `jelly inbox` and `jelly see` read it.",
+      "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. Inbox reads use sequence cursors to read from the end, or indexed byte ranges for timestamp windows. `jelly see` uses recent history kept in memory during startup, append and trim.",
       "files": [
-        "src/store.rs: Store::log, events_path",
+        "src/store.rs: Store::log, trim_events, events_back, events_since, recent_events",
         "src/server.rs: inbox"
       ],
       "risk": "An event's `state` goes to live listeners only, never into this file."
@@ -434,8 +434,8 @@
         },
         {
           "at": "undo",
-          "say": "The old view, verbs and state are pushed for undo.",
-          "cite": "src/store.rs: snapshot"
+          "say": "What it takes to go back is pushed for undo: the changed lines of state, and the view or verbs a reshape replaced.",
+          "cite": "src/store.rs: push_step"
         },
         {
           "at": "file",

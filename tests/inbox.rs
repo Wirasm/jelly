@@ -233,6 +233,38 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
 }
 
 #[test]
+fn inbox_missing_indexed_log_reports_failure_and_replays_after_restoration() {
+    let temp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(temp.path());
+    let request = json!({"project": "p", "reader": {"kind": "named", "name": "retry"}});
+    let event = daemon.person_event();
+    let first = daemon.post("/api/inbox", request);
+    assert_eq!(first["events"][0]["seq"], event["seq"]);
+    let cursors = temp.path().join("inbox-readers.json");
+    let saved_cursors = std::fs::read(&cursors).unwrap();
+    let path = temp.path().join("events.jsonl");
+    let saved_log = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    for reader in ["fresh", "retry"] {
+        let failed = daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap();
+        assert!(!failed.status.success());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("could not read inbox"));
+        let warning = stdout(daemon.command(temp.path()).args(["--as", reader, "inbox", "--hook"]).output().unwrap());
+        assert!(warning.contains("jelly inbox failed: could not read inbox"), "{warning}");
+        assert_eq!(std::fs::read(&cursors).unwrap(), saved_cursors);
+    }
+    for since in [0, u64::MAX] {
+        let response = ureq::get(&format!("{}/api/inbox?since={since}", daemon.url)).call();
+        assert!(matches!(response, Err(ureq::Error::Status(500, _))));
+    }
+    std::fs::write(&path, saved_log).unwrap();
+    for reader in ["fresh", "retry"] {
+        has_event(&stdout(daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap()));
+        empty(&stdout(daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap()));
+    }
+}
+
+#[test]
 fn inbox_uncommitted_reads_replay_and_commits_preserve_new_events() {
     let temp = tempfile::tempdir().unwrap();
     let daemon = Daemon::start(temp.path());
