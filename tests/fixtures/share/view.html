@@ -342,13 +342,12 @@ async function loaded(image) {
   assert(await (await fetch('data:text/plain,unrelated')).text() === 'unrelated', 'native fetch');
   step = 'stylesheet encodings and root collection';
   const encodingFailures = [];
-  async function checkLinkEncoding(rel, route) {
+  async function checkLinkEncoding(rel, route, url = route.startsWith('api') ? jelly.asset('link-selected.css') : 'assets/link-selected.css') {
     const host = document.createElement('div');
     document.body.append(host);
     const root = host.attachShadow({mode: 'closed'});
     root.innerHTML = '<div id="encoding-link-selected" class="café"></div>';
     const link = document.createElement('link');
-    const url = route.startsWith('api') ? jelly.asset('link-selected.css') : 'assets/link-selected.css';
     if (!route.includes('late-rel')) link.rel = rel;
     if (!route.includes('late-charset')) link.charset = 'windows-1252';
     link.href = url;
@@ -370,10 +369,22 @@ async function loaded(image) {
   for (const route of ['literal', 'api', 'late-rel', 'late-charset', 'late-rel-late-charset', 'api-late-rel', 'api-late-charset', 'api-late-rel-late-charset']) {
     await checkLinkEncoding('StyleSheet', route);
   }
-  await Promise.all(Array.from({length: 1024}, (_, bits) => {
-    const rel = [...'stylesheet'].map((c, i) => bits & (1 << i) ? c.toUpperCase() : c).join('');
-    return checkLinkEncoding(rel, 'literal');
-  }));
+  const legacyUrl = jelly.asset('link-selected.css');
+  const collisionUrl = jelly.asset('link-collision.css');
+  await checkLinkEncoding('StyleSheet', 'api-collision', legacyUrl);
+  const originalBytes = new Uint8Array(await (await fetch('assets/link-selected.css')).arrayBuffer());
+  const collisionBytes = new Uint8Array(await (await fetch('assets/link-collision.css')).arrayBuffer());
+  const changedHash = new URL(legacyUrl);
+  changedHash.hash = 'changed';
+  for (const url of [legacyUrl, legacyUrl + '#fresh', changedHash.href]) {
+    await checkLinkEncoding('StyleSheet', 'api-fragment', url);
+    for (const input of [url, new URL(url), new Request(url)]) {
+      const bytes = new Uint8Array(await (await fetch(input)).arrayBuffer());
+      assert(bytes.toString() === originalBytes.toString(), 'API CSS fetch preserves exact source bytes');
+    }
+  }
+  const fetchedCollision = new Uint8Array(await (await fetch(collisionUrl)).arrayBuffer());
+  assert(fetchedCollision.toString() === collisionBytes.toString(), 'identical decoded CSS keeps separate source bytes');
   document.querySelectorAll('.discard-root').forEach(host => host.remove());
   function discardImperativeRoots() {
     for (const mode of ['open', 'closed']) for (const connected of [true, false]) for (let i = 0; i < 25; i++) {

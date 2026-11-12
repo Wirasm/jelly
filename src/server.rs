@@ -1298,7 +1298,10 @@ mod share_tests {
                 let css = format!("#encoding-{file}.café {{ background-image: url(dot.png); }} #encoding-{file}.café::after {{ content: 'café'; }}");
                 store.put_asset("test:share", &format!("{file}.css"), css.as_bytes(), "agent").unwrap();
             }
-            store.put_asset("test:share", "link-selected.css", b"#encoding-link-selected.caf\xe9 { background-image: url(dot.png); } #encoding-link-selected.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
+            let link_selected = b"#encoding-link-selected.caf\xe9 { background-image: url(dot.png); } #encoding-link-selected.caf\xe9::after { content: 'caf\xe9'; }";
+            store.put_asset("test:share", "link-selected.css", link_selected, "agent").unwrap();
+            let collision = String::from_utf8_lossy(link_selected);
+            store.put_asset("test:share", "link-collision.css", collision.as_bytes(), "agent").unwrap();
             store.put_asset("test:share", "link-imported.css", b"@import 'link-child.css';", "agent").unwrap();
             store.put_asset("test:share", "link-child.css", b"#encoding-link-imported.caf\xe9 { background-image: url(dot.png); } #encoding-link-imported.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
             store.put_asset("test:share", "inherited.css", b"@charset \"windows-1252\"; @import 'child.css';", "agent").unwrap();

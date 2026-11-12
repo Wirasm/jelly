@@ -5,9 +5,16 @@
   const assets = new Map(boot.assets);
   const stylesheets = new Map();
   const assetBase = new URL("assets/", document.baseURI);
-  function resource(value, base = document.baseURI, imports = [], encoding = stylesheets.get(base)?.encoding ?? document.characterSet) {
+  function stylesheet(value) {
+    return stylesheets.get(String(value).split("#")[0]);
+  }
+  function resource(value, base = document.baseURI, imports = [], encoding = stylesheet(base)?.encoding ?? document.characterSet) {
+    const sheet = stylesheet(value);
     let url;
-    try { url = new URL(stylesheets.get(value)?.url ?? value, stylesheets.get(base)?.url ?? base); } catch { return value; }
+    try {
+      url = new URL(sheet?.url ?? value, stylesheet(base)?.url ?? base);
+      if (sheet) url.hash = new URL(value).hash;
+    } catch { return value; }
     if (url.protocol !== assetBase.protocol || url.host !== assetBase.host || !url.pathname.startsWith(assetBase.pathname)) return value;
     let file;
     try { file = decodeURIComponent(url.pathname.slice(assetBase.pathname.length)); } catch { return value; }
@@ -20,8 +27,11 @@
       const bytes = Uint8Array.from(atob(uri.split(",")[1]), c => c.charCodeAt(0));
       const decoded = decodeStylesheet(bytes, encoding);
       const text = css(decoded.text, url, [...imports, file], decoded.encoding);
-      uri = "data:text/css;charset=utf-8," + encodeURIComponent(text);
-      stylesheets.set(uri + url.hash, {url: url.href, source, encoding: decoded.encoding});
+      const sourceUrl = new URL(url);
+      sourceUrl.hash = "";
+      // Equal decoded text can come from different bytes or decoding contexts.
+      uri = `data:text/css;charset=utf-8;jelly-source=${encodeURIComponent(sourceUrl.href)};jelly-encoding=${decoded.encoding},` + encodeURIComponent(text);
+      stylesheets.set(uri, {url: sourceUrl.href, source, encoding: decoded.encoding});
     }
     return uri ? uri + url.hash : value;
   }
@@ -244,7 +254,7 @@
     const url = input instanceof Request ? input.url : String(input);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const resolved = resource(url);
-    const source = stylesheets.get(resolved)?.source ?? resolved;
+    const source = stylesheet(resolved)?.source ?? resolved;
     if (source === url || !["GET", "HEAD"].includes(method)) return fetch(input, init);
     return fetch(input instanceof Request ? new Request(source, input) : source, init);
   };
