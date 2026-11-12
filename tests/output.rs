@@ -40,15 +40,38 @@ impl Daemon {
         ureq::post(&format!("{}{path}", self.url)).send_json(body).unwrap().into_json().unwrap()
     }
 
-    /// Runs `jelly ARGS` in project `project` and returns its stdout.
-    fn jelly(&self, client: &Path, project: &str, args: &[&str]) -> String {
-        let output = Command::new(BIN).args(args)
+    fn command(&self, client: &Path, project: &str, args: &[&str]) -> Command {
+        let mut command = Command::new(BIN);
+        command.args(args)
             .env_remove("JELLY_AS").env_remove("JELLY_SESSION_ID").env_remove("CLAUDE_CODE_SESSION_ID")
             .env("JELLY_URL", &self.url).env("JELLY_PROJECT", project).env("JELLY_HOME", client)
-            .env("HOME", client).stdin(Stdio::null()).output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).unwrap()
+            .env("HOME", client).stdin(Stdio::null());
+        command
     }
+
+    /// Runs `jelly ARGS` in project `project` and returns its stdout.
+    fn jelly(&self, client: &Path, project: &str, args: &[&str]) -> String {
+        stdout(self.command(client, project, args).output().unwrap())
+    }
+
+    /// Runs `jelly wait ARGS` while the person clicks on `p:w`, and returns its stdout.
+    /// It clicks until `wait` exits, because `wait` subscribes some time after it starts.
+    fn wait(&self, client: &Path, args: &[&str]) -> String {
+        let mut wait = self.command(client, "p", &[&["wait"], args].concat())
+            .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while wait.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "jelly wait did not return");
+            self.post("/api/jellies/p:w/call", json!({"verb": "click", "args": {}, "by": "person"}));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        stdout(wait.wait_with_output().unwrap())
+    }
+}
+
+fn stdout(output: std::process::Output) -> String {
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap()
 }
 
 impl Drop for Daemon {
@@ -93,4 +116,11 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
         "p:s round 1: asked 2 questions. Answers arrive in `jelly inbox`, or block on `jelly wait p:s`\n");
     let full = parse(jelly(&["ask", "s", "--spec", spec, "--json"]));
     assert_eq!((full["jelly"].as_str(), full["round"].as_u64(), full["questions"].as_u64()), (Some("p:s"), Some(2), Some(2)));
+
+    daemon.post("/api/jellies", json!({"name": "w", "project": "p", "view": "<p>w</p>", "verbs": "const verbs = {click(s){s.clicks=(s.clicks||0)+1;}};", "state": {}, "by": "agent"}));
+    let line = daemon.wait(&client, &["w"]);
+    assert!(line.starts_with("p:w v") && line.ends_with(": person click {}\n") && line.lines().count() == 1, "{line}");
+    let full = parse(daemon.wait(&client, &["w", "--json"]));
+    assert_eq!((full["jelly"].as_str(), full["verb"].as_str()), (Some("p:w"), Some("click")));
+    assert!(full["state"]["clicks"].as_u64().unwrap() > 0, "{full}");
 }
