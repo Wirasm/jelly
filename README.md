@@ -48,15 +48,15 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
 When upgrading, existing homes keep their stored jelly page, including any
-customizations. To install the bundled dock changes for opening and focusing
-questions, run this from the updated checkout against your running daemon:
+customizations. To install the bundled dock improvements and responsive full-view
+header, run this from the updated checkout against your running daemon:
 
 ```bash
 jelly reshape surface --view assets/surface.html
 ```
 
 This replaces the jelly page's view and keeps its state. If you customized that
-view, incorporate the dock changes from `assets/surface.html` into your version
+view, incorporate the improvements from `assets/surface.html` into your version
 and reshape with that file instead. There is no automatic upgrade or compatibility
 layer for stored jelly pages.
 

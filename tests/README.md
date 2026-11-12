@@ -44,3 +44,29 @@ check that an opening waits for committed attention, including HTTP and network
 failures of the newest request.
 Hidden-section visibility fails on the pre-fix runtime. Stop the throwaway daemon
 after testing; no real jelly home is used.
+
+# Full-view header browser check
+
+Requires Cargo, Chrome and `playwright-cli`. Build from the checkout and start a
+fresh throwaway daemon (substitute your scratch paths and port):
+
+```sh
+cargo build --locked --target-dir /tmp/jelly-header-target
+/tmp/jelly-header-target/debug/jelly serve --port 17849 --home /tmp/jelly-header-home
+```
+
+From a scratch directory, run the check with an absolute path to the script:
+
+```sh
+playwright-cli -s=header open http://127.0.0.1:17849/
+playwright-cli -s=header run-code --filename=/path/to/jelly/tests/full-view-header.js
+playwright-cli -s=header close
+```
+
+The script creates and cleans up its own fixtures. It checks title and metadata
+geometry, action reachability, wrapping and truncation at 320, 390, 900, 901 and
+1280px. At phone and desktop widths it also checks Comment, iframe Escape, the
+parent c shortcut, Undo, tab order, Pin/Unpin, Back, Enter, Escape and Remove.
+It returns measurements and saves `header-390.png` and `header-1280.png` in the
+scratch directory. Stop the throwaway daemon afterward. Existing homes retain
+their stored surface; use a fresh home for the newly built bundled view.

@@ -115,10 +115,16 @@
   .full { position: fixed; inset: 44px 0 0 0; z-index: 10; display: flex; flex-direction: column; background: var(--page); animation: open .18s ease-out; }
   @keyframes open { from { opacity: 0; transform: scale(.985); } }
   .full[hidden] { display: none; }
-  .fbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--line); min-height: 54px; }
+  .fbar { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--line); min-height: 54px; }
   .fbar .title { flex: 1; min-width: 0; }
   .fbar h1 { font-size: 15px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .full iframe { flex: 1; width: 100%; border: 0; background: var(--card); }
+  .fbar .who { overflow-wrap: anywhere; }
+  .factions { display: flex; align-items: center; gap: 12px; flex: none; }
+  @media (max-width: 900px) {
+    .fbar { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 12px; }
+    .factions { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
+  }
+  .full iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--card); }
 
   /* ---- brand and motion: calm base, jelly physics at key moments ---- */
   .logo { flex: none; transform-origin: 50% 90%; cursor: pointer; }
@@ -187,10 +193,12 @@
   <div class="fbar">
     <button class="btn" id="back" title="Back to the stream (Esc)">← Back</button>
     <div class="title"><h1 id="ftitle"></h1><div class="who" id="fmeta"></div></div>
-    <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
-    <button class="btn quiet" id="fundo">Undo</button>
-    <button class="btn quiet" id="fpin"></button>
-    <button class="btn quiet" id="frm">Remove</button>
+    <div class="factions">
+      <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
+      <button class="btn quiet" id="fundo">Undo</button>
+      <button class="btn quiet" id="fpin"></button>
+      <button class="btn quiet" id="frm">Remove</button>
+    </div>
   </div>
 </section>
 <script>
