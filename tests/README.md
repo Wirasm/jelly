@@ -89,7 +89,9 @@ The test exports a jelly to a temporary HTML file, opens it through `file://`
 and checks image pixels, CSS resources and keyframe edits, native CSSOM calls,
 open/closed imperative and declarative shadow roots, unchanged inert templates
 and custom-element registrations, embedded objects, uploaded stylesheets
-(including link-selected encodings and imports) and scripts, captured
+(including all stylesheet relationship-token case variants, late link charset
+selection, `jelly.asset` resolution and imports) and scripts, collection of
+discarded roots with continued observation of live closed roots, captured
 attention readers and read-only mutations.
 It uses a temporary browser profile and a loopback test-result receiver, and
 requires no daemon or real jelly home.

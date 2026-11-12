@@ -7,7 +7,7 @@
   const assetBase = new URL("assets/", document.baseURI);
   function resource(value, base = document.baseURI, imports = [], encoding = stylesheets.get(base)?.encoding ?? document.characterSet) {
     let url;
-    try { url = new URL(value, stylesheets.get(base)?.url ?? base); } catch { return value; }
+    try { url = new URL(stylesheets.get(value)?.url ?? value, stylesheets.get(base)?.url ?? base); } catch { return value; }
     if (url.protocol !== assetBase.protocol || url.host !== assetBase.host || !url.pathname.startsWith(assetBase.pathname)) return value;
     let file;
     try { file = decodeURIComponent(url.pathname.slice(assetBase.pathname.length)); } catch { return value; }
@@ -172,7 +172,7 @@
       if (attr.name === "data" && element.localName !== "object") continue;
       const value = attr.value;
       let encoding = document.characterSet;
-      if (element instanceof HTMLLinkElement && element.relList.contains("stylesheet") && element.charset) {
+      if (element instanceof HTMLLinkElement && [...element.relList].some(token => token.toLowerCase() === "stylesheet") && element.charset) {
         try { encoding = new TextDecoder(element.charset).encoding; } catch { /* Unknown labels use the document encoding. */ }
       }
       const resolved = attr.name === "style" ? css(value) : attr.name === "srcset" ? srcset(value) : resource(value, document.baseURI, [], encoding);
@@ -202,9 +202,9 @@
       }
     }
   });
-  const observedRoots = new Set();
+  const templateRoots = [new WeakRef(document.documentElement)];
+  document.addEventListener("DOMContentLoaded", () => { templateRoots.length = 0; }, {once: true});
   function observe(root) {
-    observedRoots.add(root);
     observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
   }
   // Parser-created closed roots cannot be found from the document. The export's
@@ -213,6 +213,7 @@
     connectedCallback() {
       const root = this.getRootNode();
       if (!(root instanceof ShadowRoot)) return;
+      templateRoots.push(new WeakRef(root));
       observe(root);
       root.querySelectorAll("*").forEach(reconcile);
       this.remove();
@@ -222,7 +223,7 @@
   // Its following parser script removes all instrumentation before view scripts run.
   boot.finishTemplate = () => {
     // currentScript is null inside shadow trees, including closed declarative roots.
-    const script = [...observedRoots].map(root => root.querySelector(`script[data-${boot.rootMarker}]`)).find(Boolean);
+    const script = templateRoots.map(ref => ref.deref()?.querySelector(`script[data-${boot.rootMarker}]`)).find(Boolean);
     function clean(template) {
       template.content.querySelectorAll("template").forEach(clean);
       template.content.querySelectorAll(`${boot.rootMarker}, script[data-${boot.rootMarker}]`).forEach(node => node.remove());

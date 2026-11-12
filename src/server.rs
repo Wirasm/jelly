@@ -1262,6 +1262,9 @@ mod share_tests {
         }));
         let server = tokio::spawn(async move { axum::serve(listener, results).await.unwrap(); });
         let view = include_str!("../tests/fixtures/share/view.html")
+            .replace("__GC_ROOTS__", &["open", "closed"].into_iter().map(|mode| {
+                format!("<div class=discard-root><template shadowrootmode={mode}><share-gc-probe></share-gc-probe></template></div>").repeat(25)
+            }).collect::<String>())
             .replace("__TEST_RESULT__", &callback)
             .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS).unwrap().replace("</", "<\\/"))
             .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS).unwrap().replace("</", "<\\/"));
@@ -1308,7 +1311,7 @@ mod share_tests {
         let log = dir.path().join("browser.log");
         let stderr = std::fs::File::create(&log).unwrap();
         let mut browser = tokio::process::Command::new(browser)
-            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--enable-automation", "--disable-background-timer-throttling", "--disable-component-update"])
+            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--enable-automation", "--disable-background-timer-throttling", "--disable-component-update", "--js-flags=--expose-gc"])
             .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
             .arg(format!("file://{}", path.display()))
             .stdout(std::process::Stdio::null())
