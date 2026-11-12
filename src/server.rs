@@ -1293,18 +1293,21 @@ mod share_tests {
         let html = exported(app).await;
         let path = dir.path().join("shared.html");
         std::fs::write(&path, html).unwrap();
+        // Chrome's updater can inherit stderr and hold a pipe open after Chrome exits.
+        let log = dir.path().join("browser.log");
+        let stderr = std::fs::File::create(&log).unwrap();
         let mut browser = tokio::process::Command::new(browser)
-            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--enable-automation", "--disable-background-timer-throttling", "--disable-component-update", "--remote-debugging-port=0"])
+            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--enable-automation", "--disable-background-timer-throttling", "--disable-component-update"])
             .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
             .arg(format!("file://{}", path.display()))
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
+            .stderr(stderr)
             .kill_on_drop(true).spawn().expect("browser could not start");
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), receive.recv()).await;
         server.abort();
         browser.kill().await.expect("browser could not stop");
-        let output = browser.wait_with_output().await.expect("browser output unavailable");
-        let result = result.unwrap_or_else(|_| panic!("browser did not report a result within 30 seconds: {}", String::from_utf8_lossy(&output.stderr)))
+        browser.wait().await.expect("browser could not exit");
+        let result = result.unwrap_or_else(|_| panic!("browser did not report a result within 30 seconds: {}", std::fs::read_to_string(log).unwrap()))
             .expect("browser result channel closed");
         assert_eq!(result["complete"], true, "{result}");
         assert_eq!(result["ok"], true, "{result}");
