@@ -126,7 +126,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const L = (i) => String.fromCharCode(65 + i);
 const qid = (a) => a.anchor?.selector?.replace(/^#q-/, "") ?? a.id;
-new ResizeObserver(() => document.documentElement.style.setProperty("--bar-height", `${$("bar").offsetHeight}px`)).observe($("bar"));
+jelly.onAttend(() => document.documentElement.style.setProperty("--bar-height", `${$("bar").offsetHeight}px`));
 const big = new Set(); // previews opened large are rendered once
 const drafts = {};     // unsent note text per question, kept across re-renders
 
