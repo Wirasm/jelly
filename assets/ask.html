@@ -43,7 +43,7 @@
   .applied span { font-weight: 400; color: var(--ink-2); }
   .empty { margin-top: 40px; color: var(--muted); }
 
-  .q { margin-top: 26px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px 24px 20px; scroll-margin-top: 70px; }
+  .q { margin-top: 26px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px 24px 20px; scroll-margin-top: calc(var(--bar-height, 54px) + 16px); }
   .q.answered { border-color: var(--accent-line); }
   .qh { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: start; }
   .num { width: 30px; height: 30px; border-radius: 9px; background: var(--soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; }
@@ -125,7 +125,8 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const L = (i) => String.fromCharCode(65 + i);
-const qid = (a) => (a.anchor?.selector || "").replace(/^#q-/, "") || a.id;
+const qid = (a) => a.anchor?.selector?.replace(/^#q-/, "") ?? a.id;
+jelly.onAttend(() => document.documentElement.style.setProperty("--bar-height", `${$("bar").offsetHeight}px`));
 const big = new Set(); // previews opened large are rendered once
 const drafts = {};     // unsent note text per question, kept across re-renders
 

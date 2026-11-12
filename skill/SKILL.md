@@ -50,6 +50,12 @@ jelly.read("other"); jelly.watch("other", fn);  // another jelly's state
 jelly.focus("other");                           // open another jelly
 jelly.asset("shot.png");                        // URL of a file added with jelly asset
 jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a question about #thumbs
+const stop = jelly.onAttend(item => {             // when the dock opens this question
+  if (item.anchor?.selector === "#details-title") {
+    document.querySelector("#details").hidden = false;
+  }
+});
+// stop() unsubscribes; registration does not call the handler.
 ```
 
 Keep data in state, not in page variables or localStorage, so you and the person
@@ -95,11 +101,12 @@ the jelly or ask about it. `see` lists the errors your page threw (`error` lines
 and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
 `jelly look` say in their reply where the card landed: below the element, at the
 top because nothing matched or the element is in a fixed or sticky part, or below
-an element that is not on screen right now. If row insertion is unsafe, the
-reply and `see` name the actual fallback destination. Without a measurement for
-that question, the reply says it was not checked. Pages that render their own
-inline attention retain missing, floating and hidden anchor diagnostics; the
-runtime cannot confirm where their visible questions appear. Clear your own
+an element that is not on screen right now. If adjacent placement is unavailable,
+the card is shown at the top and the reply says so after the browser measures it.
+If row insertion is unsafe, the reply and `see` name the actual fallback destination.
+Without a measurement for that question, the reply says it was not checked. Pages
+that render their own inline attention retain missing, floating and hidden anchor
+diagnostics; the runtime cannot confirm where their visible questions appear. Clear your own
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
@@ -113,16 +120,31 @@ spans the group's width after the item's row, before later rows. List items and
 table rows get a full-width question row too. An anchor inside an SVG puts the
 card below the whole drawing. Layouts that cannot take a question row keep their
 layout; the reply names the group the card follows, or says it went to the top.
+If its anchor or adjacent card is hidden or clipped, the same card appears at the top with a line naming the part it is about.
+It returns beside the anchor when that part appears, keeping the draft and focus.
+
+`jelly.onAttend(fn)` notifies the view synchronously with the attention item before
+placement and focus, so it can reveal the part identified by `item.anchor.selector`.
+It returns an unsubscribe function. The runtime shows a fallback immediately;
+asynchronous reveals never delay it, and later DOM changes relocate the card.
+A presentation-only reveal can change the DOM as above; persistent selection
+changes still go through a verb with `jelly.call`.
 
 One question on an existing jelly, about one part of it:
 
 ```bash
 jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
   --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
-  --why "Calmer, and the button stands out more" --at "#hero"
+  --why "Calmer, and the button stands out more" --at "#hero" --wait
+# blocks; prints: a1 answered: quiet · "keep the button blue"
 jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
+
+`--wait` is the default way to ask one question: it blocks until the person answers
+(or the ask is withdrawn) and prints only that, with `--json` for the whole item.
+`--timeout SECONDS` gives up with exit code 2. Without `--wait`, the answer arrives in
+`jelly inbox` or `jelly wait`.
 
 Several related questions, with options laid out side by side, make an ask page:
 

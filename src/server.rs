@@ -401,7 +401,11 @@ struct ByQ {
 
 async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let stream = BroadcastStream::new(app.events.subscribe()).filter_map(move |ev| {
-        let ev = ev.ok()?;
+        let ev = match ev {
+            Ok(ev) => ev,
+            // Comments wake state readers without becoming events for CLI consumers.
+            Err(_) => return Some(Ok(SseEvent::default().comment("resync"))),
+        };
         if q.jelly.as_ref().is_some_and(|j| *j != ev.jelly) {
             return None;
         }
@@ -580,8 +584,9 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
         match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
-            Ok(place) => {
+            Ok((place, exposed)) => {
                 out["anchor"] = json!(place.status());
+                if exposed { out["anchor_exposed"] = json!(true); }
                 if let AnchorPlace::Fallback(f) = place {
                     out["anchor_destination"] = json!(f.destination);
                     out["anchor_reason"] = json!(f.reason);
@@ -597,7 +602,7 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Placement from a fresh browser snapshot; failure to render does not undo the ask.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<AnchorPlace, String> {
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<(AnchorPlace, bool), String> {
     let owner = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(name).map_err(|e| e.to_string())?;
@@ -611,8 +616,8 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
     loop {
         let snap = app.screen(name, &owner).map_err(|_| "the jelly changed during the anchor check".to_string())?
             .filter(|s| s.version >= version && s.at_ms >= asked);
-        if let Some(place) = snap.and_then(|s| s.placement(item)) {
-            return Ok(place);
+        if let Some(measured) = snap.and_then(|s| s.placement(item).map(|place| (place, s.exposed.iter().any(|id| id == item)))) {
+            return Ok(measured);
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
@@ -769,6 +774,9 @@ struct Screen {
     /// Open questions whose anchor is on the page but not shown right now.
     #[serde(default)]
     hidden: Vec<String>,
+    /// Cards measured at the top because adjacent placement was unavailable.
+    #[serde(default)]
+    exposed: Vec<String>,
     #[serde(default)]
     page_height: u32,
     #[serde(default)]
@@ -1103,6 +1111,19 @@ async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<
 }
 
 #[cfg(test)]
+mod screen_tests {
+    use super::Screen;
+
+    #[test]
+    fn older_screens_have_no_exposed_cards() {
+        let screen: Screen = serde_json::from_value(serde_json::json!({
+            "owner": "test", "text": "page", "width": 1280, "height": 900, "version": 1
+        })).unwrap();
+        assert!(screen.exposed.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod placement_tests {
     use super::*;
 
@@ -1190,6 +1211,22 @@ mod tests {
         let (events, _) = broadcast::channel(32);
         let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default() });
         (dir, app)
+    }
+
+    #[tokio::test]
+    async fn lagging_sse_subscribers_are_told_to_resync_even_when_filtered() {
+        for jelly in [None, Some("other:q".into())] {
+            let (_dir, app) = app();
+            let response = events(State(app.clone()), Query(ByQ { by: None, jelly })).await;
+            let mut body = response.into_response().into_body().into_data_stream();
+            create_page(&app, "PAGE", false).await;
+            for _ in 0..32 {
+                let _ = app.change(|s| s.set_state("test:x", "", Some(json!({})), "test")).unwrap();
+            }
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+                .await.expect("lag must wake the subscriber").unwrap().unwrap();
+            assert_eq!(&frame[..], b": resync\n\n");
+        }
     }
 
     async fn create_page(app: &Shared, text: &str, replace: bool) {
@@ -1411,7 +1448,7 @@ mod tests {
         let mut sc = snapshot(&current, "ASK PAGE", version);
         sc.missing.push("a2 #q-q1".into());
         post(&app, sc).await.unwrap();
-        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap(), AnchorPlace::Missing);
+        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap().0, AnchorPlace::Missing);
         // The wait must ignore a screen from before the ask and an older state.
         app.screens.lock().unwrap().get_mut("test:x").unwrap().screen.as_mut().unwrap().at_ms = asked - 1;
         let checking = anchor_place(&app, 1, "test:x", "a2", version, asked);
@@ -1422,7 +1459,7 @@ mod tests {
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap(), AnchorPlace::Below);
+        assert_eq!(result.unwrap().0, AnchorPlace::Below);
         let checking = anchor_place(&app, 1, "test:x", "a2", version + 1, asked);
         let update = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1431,7 +1468,7 @@ mod tests {
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap(), AnchorPlace::Hidden);
+        assert_eq!(result.unwrap().0, AnchorPlace::Hidden);
         let checking = anchor_place(&app, 1, "test:x", "a2", version + 2, now_ms());
         let replace = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
