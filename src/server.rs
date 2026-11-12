@@ -539,7 +539,16 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
-    Ok(Html(inject_head(&j.view, &inject)))
+    let html = lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![lol_html::element!("template[shadowrootmode]", |element| {
+            if element.get_attribute("shadowrootmode").is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed")) {
+                element.prepend("<jelly-snapshot-root hidden></jelly-snapshot-root>", lol_html::html_content::ContentType::Html);
+            }
+            Ok(())
+        })],
+        ..Default::default()
+    }).map_err(|e| ApiError::Internal(format!("could not prepare shared view: {e}")))?;
+    Ok(Html(inject_head(&html, &inject)))
 }
 
 #[derive(Deserialize)]
@@ -1265,6 +1274,21 @@ mod share_tests {
             store.put_asset("test:share", "theme.css", b"@import 'nested.css'; #linked { background-image: url(dot.png); }", "agent").unwrap();
             store.put_asset("test:share", "nested.css", b"@import 'theme.css'; #imported { background-image: url(dot.png); }", "agent").unwrap();
             store.put_asset("test:share", "helper.js", b"window.localHelper = true;", "agent").unwrap();
+            for (file, prefix, encoding) in [
+                ("legacy", "@charset \"windows-1252\";", "legacy"),
+                ("utf16", "", "utf16"),
+                ("utf8-bom", "@charset \"windows-1252\";", "utf8"),
+            ] {
+                let css = format!("{prefix} #encoding-{file}.café {{ background-image: url(dot.png); }} #encoding-{file}.café::after {{ content: \"café\"; }}");
+                let bytes = match encoding {
+                    "legacy" => css.chars().map(|c| c as u8).collect(),
+                    "utf16" => [vec![0xff, 0xfe], css.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat(),
+                    _ => [vec![0xef, 0xbb, 0xbf], css.into_bytes()].concat(),
+                };
+                store.put_asset("test:share", &format!("{file}.css"), &bytes, "agent").unwrap();
+            }
+            store.put_asset("test:share", "inherited.css", b"@charset \"windows-1252\"; @import 'child.css';", "agent").unwrap();
+            store.put_asset("test:share", "child.css", b"#encoding-inherited.caf\xe9 { background-image: url(dot.png); } #encoding-inherited.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
         }
         let html = exported(app).await;
         let path = dir.path().join("shared.html");

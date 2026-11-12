@@ -1,4 +1,13 @@
 <!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>
+window.declarativeRoots = [];
+customElements.define('share-root-probe', class extends HTMLElement {
+  connectedCallback() { declarativeRoots.push(this.getRootNode()); }
+});
+</script>
+<div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
+<div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
+<template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"></template>
 <img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
 <object id="literal-object" data="assets/green.svg" onload="this.dataset.loaded = 'yes'"></object>
 <script src="assets/helper.js"></script>
@@ -20,6 +29,8 @@ async function loaded(image) {
   assert(image.complete && image.naturalWidth > 0, `pixels: ${image.id}`);
 }
 (async () => {
+  assert('<template shadowrootmode="closed">'.indexOf('jelly-snapshot-root') === -1, 'template markup in script unchanged');
+  assert(document.getElementById('inert-template').innerHTML === '<img src="assets/dot.png">', 'invalid declarative mode remains inert');
   assert(jelly.state.picture === 'assets/dot.png', 'literal script value unchanged');
   assert(document.getElementById('literal-label').textContent === jelly.state.picture, 'ordinary text unchanged');
   assert('assets/dot.png.extra' === jelly.state.picture + '.extra', 'absent longer literal unchanged');
@@ -114,6 +125,28 @@ async function loaded(image) {
   rule.style = `background-image: url("${jelly.state.picture}")`;
   await backgroundPixels(cssomTarget, 'rule.style');
   assert(rule.style === rule.style, 'stable CSS declaration identity');
+  assert(CSSStyleDeclaration.prototype.getPropertyValue.call(rule.style, 'background-image').includes('data:image/'), 'native declaration receiver');
+  cssom.sheet.insertRule('@keyframes picture { from {} }', cssom.sheet.cssRules.length);
+  const keyframes = cssom.sheet.cssRules[cssom.sheet.cssRules.length - 1];
+  const animation = document.createElement('div');
+  animation.style.animation = 'picture 1s paused both';
+  document.body.append(animation);
+  const keyframe = keyframes.cssRules[0];
+  for (const write of [
+    () => { keyframe.style.backgroundImage = `url("${jelly.state.picture}")`; },
+    () => { keyframe.style.cssText = `background-image: url("${jelly.state.picture}")`; },
+    () => { keyframe.style = `background-image: url("${jelly.state.picture}")`; },
+    () => keyframe.style.setProperty('background-image', `url("${jelly.state.picture}")`),
+    () => { keyframes.deleteRule('0%'); keyframes.appendRule(`from { background-image: url("${jelly.state.picture}"); }`); },
+  ]) {
+    write();
+    assert(CSSStyleDeclaration.prototype.getPropertyValue.call(keyframes.cssRules[0].style, 'background-image').includes('data:image/'), 'native keyframe declaration receiver');
+    await backgroundPixels(animation, 'animated CSSOM');
+  }
+  cssom.sheet.insertRule(`@keyframes inserted { from { background-image: url("${jelly.state.picture}"); } }`, cssom.sheet.cssRules.length);
+  animation.style.animationName = 'inserted';
+  await backgroundPixels(animation, 'inserted keyframes');
+  animation.remove();
   cssom.sheet.insertRule('@media all {}');
   cssom.sheet.cssRules[0].insertRule(`#background { background-image: url("${jelly.state.picture}"); }`);
   assert(cssom.sheet.cssRules[0].cssRules[0].cssText.includes('data:image/png'), 'group CSSOM');
@@ -122,11 +155,22 @@ async function loaded(image) {
     await constructedSheet[method](`#background { background-image: url("${jelly.state.picture}"); }`);
     assert(constructedSheet.cssRules[0].cssText.includes('data:image/png'), `CSSOM ${method}`);
   }
-  const host = document.createElement('div');
-  document.body.append(host);
-  const shadow = host.attachShadow({mode: 'closed'});
-  shadow.innerHTML = `<img src="${jelly.state.picture}">`;
-  await loaded(shadow.querySelector('img'));
+  assert(declarativeRoots.length === 2, 'both declarative roots parsed');
+  for (const root of declarativeRoots) {
+    assert(!root.querySelector('jelly-snapshot-root'), 'observer marker removed');
+    await loaded(root.querySelector('img'));
+    await backgroundPixels(root.host, `declarative ${root.mode}`);
+    root.querySelector('img').setAttribute('src', 'assets/unused.png');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await loaded(root.querySelector('img'));
+  }
+  for (const mode of ['open', 'closed']) {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const shadow = host.attachShadow({mode});
+    shadow.innerHTML = `<img src="${jelly.state.picture}">`;
+    await loaded(shadow.querySelector('img'));
+  }
   for (const id of ['linked', 'imported']) {
     const target = document.createElement('div'); target.id = id; document.body.append(target);
   }
@@ -151,6 +195,21 @@ async function loaded(image) {
   for (const input of ['assets/theme.css', jelly.asset('theme.css')]) {
     assert(await (await fetch(input)).text() === "@import 'nested.css'; #linked { background-image: url(dot.png); }", 'original stylesheet fetch bytes');
   }
+  for (const file of ['legacy', 'utf16', 'utf8-bom', 'inherited']) {
+    const target = document.createElement('div');
+    target.id = `encoding-${file}`;
+    target.className = 'café';
+    document.body.append(target);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = `assets/${file}.css`;
+    const ready = new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; });
+    document.head.append(link);
+    await ready;
+    assert(getComputedStyle(target, '::after').content === '"café"', `stylesheet encoding ${file}`);
+    await backgroundPixels(target, `stylesheet encoding ${file}`);
+  }
+  assert(new Uint8Array(await (await fetch('assets/legacy.css')).arrayBuffer()).includes(0xe9), 'original legacy CSS bytes');
+  assert(new Uint8Array(await (await fetch(jelly.asset('utf16.css'))).arrayBuffer())[0] === 0xff, 'original UTF-16 CSS bytes');
   const literalObject = document.getElementById('literal-object');
   if (!literalObject.dataset.loaded) await new Promise((resolve, reject) => { literalObject.onload = resolve; literalObject.onerror = reject; });
   assert(literalObject.data === jelly.asset('green.svg'), 'parsed object image');

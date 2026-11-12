@@ -5,7 +5,7 @@
   const assets = new Map(boot.assets);
   const stylesheets = new Map();
   const assetBase = new URL("assets/", document.baseURI);
-  function resource(value, base = document.baseURI, imports = []) {
+  function resource(value, base = document.baseURI, imports = [], encoding = stylesheets.get(base)?.encoding ?? document.characterSet) {
     let url;
     try { url = new URL(value, stylesheets.get(base)?.url ?? base); } catch { return value; }
     if (url.protocol !== assetBase.protocol || url.host !== assetBase.host || !url.pathname.startsWith(assetBase.pathname)) return value;
@@ -18,11 +18,30 @@
       if (imports.includes(file)) return "data:text/css,";
       const source = uri;
       const bytes = Uint8Array.from(atob(uri.split(",")[1]), c => c.charCodeAt(0));
-      const text = css(new TextDecoder().decode(bytes), url, [...imports, file]);
+      const decoded = decodeStylesheet(bytes, encoding);
+      const text = css(decoded.text, url, [...imports, file], decoded.encoding);
       uri = "data:text/css;charset=utf-8," + encodeURIComponent(text);
-      stylesheets.set(uri + url.hash, {url: url.href, source});
+      stylesheets.set(uri + url.hash, {url: url.href, source, encoding: decoded.encoding});
     }
     return uri ? uri + url.hash : value;
+  }
+  // CSS encoding precedence is BOM, @charset, then the importing sheet/document.
+  function decodeStylesheet(bytes, fallback) {
+    let encoding = fallback;
+    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) encoding = "utf-8";
+    else if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = "utf-16le";
+    else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = "utf-16be";
+    else {
+      const charset = /^@charset "([^"\n\r]+)";/.exec(String.fromCharCode(...bytes.subarray(0, 1024)));
+      if (charset) {
+        try {
+          const declared = new TextDecoder(charset[1]).encoding;
+          encoding = declared === "utf-16le" || declared === "utf-16be" ? "utf-8" : declared;
+        } catch { /* Unknown labels leave the inherited encoding in force. */ }
+      }
+    }
+    const decoder = new TextDecoder(encoding);
+    return {text: decoder.decode(bytes), encoding: decoder.encoding};
   }
   function unescapeCss(value) {
     return value.replace(/\\(?:([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\s\S]))/gi, (_, hex, char) => {
@@ -31,7 +50,7 @@
       return String.fromCodePoint(!point || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? 0xfffd : point);
     });
   }
-  function css(value, base = document.baseURI, imports = []) {
+  function css(value, base = document.baseURI, imports = [], encoding) {
     const tokens = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|@?(?:[-\w\u0080-\uffff]|\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f]))+\(?|\s+|[\s\S]/gi;
     const functions = [];
     let importing = false, result = "", match;
@@ -44,13 +63,13 @@
         const argument = /^\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|((?:\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f])|[^\s)'"\\])*))\s*\)/i.exec(value.slice(tokens.lastIndex));
         if (argument) {
           const url = unescapeCss(argument[1] ?? argument[2] ?? argument[3]);
-          const resolved = resource(url, base, imports);
+          const resolved = resource(url, base, imports, encoding);
           token = resolved === url ? token + argument[0] : `url("${resolved}")`;
           tokens.lastIndex += argument[0].length;
         }
       } else if (/^["']/.test(token) && (importing || context?.candidate)) {
         const url = unescapeCss(token.slice(1, -1));
-        const resolved = resource(url, base, imports);
+        const resolved = resource(url, base, imports, encoding);
         if (resolved !== url) token = `"${resolved}"`;
       }
       if (context) context.candidate = decoded === "," && context.imageSet;
@@ -82,23 +101,40 @@
   CSSStyleDeclaration.prototype.setProperty = function(name, value, priority) {
     return setProperty.call(this, name, declaration(value, this), priority);
   };
-  const ruleStyle = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "style");
-  const styles = new WeakMap();
-  Object.defineProperty(CSSStyleRule.prototype, "style", {
-    ...ruleStyle,
-    set(value) { ruleStyle.set.call(this, declaration(value, ruleStyle.get.call(this))); },
-    get() {
-      const style = ruleStyle.get.call(this);
-      if (!styles.has(style)) styles.set(style, new Proxy(style, {
-        get(target, key) {
-          const value = Reflect.get(target, key, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-        set(target, key, value) { return Reflect.set(target, key, declaration(value, target), target); },
-      }));
-      return styles.get(style);
-    },
+  const cssText = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText");
+  Object.defineProperty(CSSStyleDeclaration.prototype, "cssText", {
+    ...cssText,
+    set(value) { cssText.set.call(this, declaration(value, this)); },
   });
+  // Web IDL calls need the native declaration as their receiver, not a Proxy.
+  const declarations = new WeakSet();
+  for (const prototype of [CSSStyleRule.prototype, CSSKeyframeRule.prototype]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "style");
+    Object.defineProperty(prototype, "style", {
+      ...descriptor,
+      set(value) { descriptor.set.call(this, declaration(value, descriptor.get.call(this))); },
+      get() {
+        const style = descriptor.get.call(this);
+        if (!declarations.has(style)) {
+          declarations.add(style);
+          for (const name of Object.getOwnPropertyNames(style)) {
+            if (!/^[a-zA-Z-]+$/.test(name)) continue;
+            const property = name === "cssFloat" ? "float" : name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`).replace(/^webkit-/, "-webkit-");
+            Object.defineProperty(style, name, {
+              configurable: true, enumerable: true,
+              get() { return this.getPropertyValue(property); },
+              set(value) { this.setProperty(property, value); },
+            });
+          }
+        }
+        return style;
+      },
+    });
+  }
+  const appendRule = CSSKeyframesRule.prototype.appendRule;
+  CSSKeyframesRule.prototype.appendRule = function(rule) {
+    return appendRule.call(this, css(String(rule), this.parentStyleSheet?.href || document.baseURI));
+  };
   function srcset(value) {
     // A URL can contain commas (data URIs); descriptors end at the next comma.
     return value.replace(/([^\s,]\S*)(\s+[^,]*)?/g, (candidate, url, descriptor = "") => {
@@ -163,6 +199,17 @@
   function observe(root) {
     observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
   }
+  // Parser-created closed roots cannot be found from the document. The export's
+  // HTML rewriter places this transient element inside declarative templates.
+  customElements.define("jelly-snapshot-root", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.getRootNode();
+      if (!(root instanceof ShadowRoot)) return;
+      observe(root);
+      root.querySelectorAll("*").forEach(reconcile);
+      this.remove();
+    }
+  });
   const attachShadow = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function(options) {
     const root = attachShadow.call(this, options);
