@@ -968,6 +968,10 @@ impl Store {
         append().map_err(|e| Error::Invalid(format!("could not record event for {}: {e}", ev.jelly)))
     }
 
+    pub fn sequence(&self) -> u64 {
+        self.seq
+    }
+
     pub fn events_path(&self) -> PathBuf {
         self.dir.join("events.jsonl")
     }

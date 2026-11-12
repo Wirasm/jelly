@@ -469,7 +469,7 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
 fn open_history(store: &Store) -> Result<Option<BufReader<File>>, Error> {
     match File::open(store.events_path()) {
         Ok(file) => Ok(Some(BufReader::new(file))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && store.sequence() == 0 => Ok(None),
         Err(e) => Err(history_error(e)),
     }
 }
@@ -1314,13 +1314,13 @@ mod wait_tests {
 
     #[tokio::test]
     async fn fresh_history_waits_for_its_first_event_or_times_out() {
-        for first_event in [false, true] {
+        for (first_event, since) in [(false, 0), (true, 0), (false, u64::MAX)] {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
             let app = App { store: Mutex::new(store), events, screens: Mutex::default() };
-            let q = WaitQ { timeout: Some(1), ..query(None, 0) };
+            let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
             std::future::poll_fn(|cx| {
@@ -1593,6 +1593,45 @@ mod wait_tests {
         app.store.lock().unwrap().log_failure = None;
         let answer = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap().0;
         assert_eq!(wait_since(&app, &query(Some("j"), ask.seq)).await.unwrap().unwrap().seq, answer.seq);
+    }
+
+    #[tokio::test]
+    async fn missing_committed_history_is_an_error() {
+        for restart in [false, true] {
+            let (dir, mut app) = fixture(4);
+            let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+            let _ = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap();
+            if restart {
+                app.store = Mutex::new(Store::open(dir.path()).unwrap());
+            }
+            let path = app.store.lock().unwrap().events_path();
+            std::fs::remove_file(&path).unwrap();
+            for since in [0, ask.seq, u64::MAX] {
+                let error = wait_since(&app, &query(Some("j"), since)).await.unwrap_err();
+                assert!(error.to_string().contains("event history"));
+            }
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_history_after_the_first_notification_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let path = store.events_path();
+        let (events, _) = broadcast::channel(1);
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default() };
+        let q = WaitQ { timeout: Some(1), ..query(None, 0) };
+        let waiting = wait_since(&app, &q);
+        tokio::pin!(waiting);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        }).await;
+        let _ = app.change(|s| s.create("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(waiting.await.unwrap_err().to_string().contains("event history"));
+        assert!(!path.exists());
     }
 
     #[tokio::test]
