@@ -956,9 +956,7 @@ where
     let assets = app.store.lock().expect("store lock").assets(&name);
     if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
     for a in j.attention.iter().filter(|a| a.is_open()) {
-        let opts = a.options.iter().map(|o| format!("{}{}", o.id, if a.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
-        let kind = if a.kind == AttentionKind::Look { "look" } else { "ask" };
-        line(&mut out, format!("waits    {} {kind} {:?}{}{}", a.id, a.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, a.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default()));
+        line(&mut out, format!("waits    {}", a.summary()));
     }
     for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
         let ans = a.answer.as_ref().expect("filtered");
