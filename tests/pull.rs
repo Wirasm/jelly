@@ -86,6 +86,16 @@ fn pull_gets_assets_from_selected_daemon_with_separate_client_homes() {
         std::fs::write(&path, bytes).unwrap();
         stdout(daemon.command(&client).args(["asset", "sample"]).arg(path).output().unwrap());
     }
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let closed_dest = temp.path().join("closed-pull");
+    let out = daemon.command(&client).args(["pull", "p:sample"]).arg(&closed_dest)
+        .stdout(Stdio::from(writer)).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{out:?}");
+    assert_core(&closed_dest);
+    for (file, bytes) in assets {
+        assert_eq!(std::fs::read(closed_dest.join("assets").join(file)).unwrap(), bytes);
+    }
     let empty_client = temp.path().join("empty-client");
     for (home, name, folder) in [(&client, "sample", "pulled"), (&empty_client, "p:sample", "pulled-again")] {
         let dest = temp.path().join(folder);
