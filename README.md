@@ -103,6 +103,13 @@ malformed events or is nonempty and missing its final newline. This prevents
 reusing positions already passed by inbox readers or corrupting the final record
 on the next append.
 
+`jelly pull` gets asset names and bytes from the selected daemon, regardless of
+its home or the client's home. GET `/api/jellies/{name}/assets` returns a sorted
+JSON array of filenames, `[]` for an existing jelly without assets, or a JSON 404
+error for an unknown jelly. Bytes come from `/j/{name}/assets/{file}`. Pull reports
+success only after every listed file is written; inventory or download failures
+return an error and may leave a partial destination folder.
+
 ## How it works
 
 A local daemon holds every jelly and serves them on 127.0.0.1 only, without

@@ -153,6 +153,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/move", post(move_project))
         .route("/api/jellies/{name}/restore", post(restore))
         .route("/api/jellies/{name}/archive", post(archive))
+        .route("/api/jellies/{name}/assets", get(list_assets))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
         .route("/api/inbox", get(inbox).post(read_inbox))
@@ -474,6 +475,12 @@ async fn restore(State(app): State<Shared>, Path(name): Path<String>, Json(r): J
 #[derive(Deserialize)]
 struct AssetQ {
     by: Option<String>,
+}
+
+async fn list_assets(State(app): State<Shared>, Path(name): Path<String>) -> Result<Json<Vec<String>>, ApiError> {
+    let store = app.store.lock().expect("store lock");
+    store.get(&name)?;
+    Ok(Json(store.assets(&name)))
 }
 
 async fn put_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>, body: Bytes) -> Result<Json<Event>, ApiError> {
@@ -1216,6 +1223,24 @@ mod tests {
         let (events, _) = broadcast::channel(32);
         let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default() });
         (dir, app)
+    }
+
+    #[tokio::test]
+    async fn asset_inventory_is_sorted_read_only_and_requires_a_jelly() {
+        let (dir, app) = app();
+        let missing = list_assets(State(app.clone()), Path("test:missing".into())).await.unwrap_err();
+        assert_eq!(missing.into_response().status(), StatusCode::NOT_FOUND);
+        create_page(&app, "PAGE", false).await;
+        assert!(list_assets(State(app.clone()), Path("test:x".into())).await.unwrap().0.is_empty());
+        for file in ["z.txt", "a.bin"] {
+            let _ = put_asset(State(app.clone()), Path(("test:x".into(), file.into())),
+                Query(AssetQ { by: Some("test".into()) }), Bytes::from_static(b"asset")).await.unwrap();
+        }
+        let before = serde_json::to_value(app.store.lock().unwrap().get("test:x").unwrap()).unwrap();
+        let log = std::fs::read(dir.path().join("events.jsonl")).unwrap();
+        assert_eq!(list_assets(State(app.clone()), Path("test:x".into())).await.unwrap().0, ["a.bin", "z.txt"]);
+        assert_eq!(serde_json::to_value(app.store.lock().unwrap().get("test:x").unwrap()).unwrap(), before);
+        assert_eq!(std::fs::read(dir.path().join("events.jsonl")).unwrap(), log);
     }
 
     #[tokio::test]
