@@ -909,10 +909,18 @@ fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Res
         Ok((!found.is_open()).then_some(found))
     };
     let resp = req.call().map_err(describe)?;
+    read_answer(BufReader::new(resp.into_reader()), item, settled)
+}
+
+fn read_answer(
+    events: impl BufRead,
+    item: &str,
+    mut settled: impl FnMut() -> Result<Option<store::Attention>, String>,
+) -> Result<store::Attention, String> {
     if let Some(done) = settled()? {
         return Ok(done);
     }
-    for line in BufReader::new(resp.into_reader()).lines() {
+    for line in events.lines() {
         match line {
             Ok(l) if l.starts_with("data:") || l == ": resync" => {
                 if let Some(done) = settled()? {
@@ -1251,50 +1259,23 @@ mod tests {
 
     #[test]
     fn an_answer_is_reread_after_an_sse_resync() {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let read_request = || {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-                let socket = loop {
-                    match listener.accept() {
-                        Ok((socket, _)) => break socket,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        Err(e) => panic!("expected a request: {e}"),
-                    }
-                };
-                socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
-                let mut reader = BufReader::new(socket);
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" { break; }
+        for notification in [": resync", "data: {}"] {
+            let events = format!("{notification}\n\n");
+            let mut reads = 0;
+            let answer = super::read_answer(events.as_bytes(), "a1", || {
+                reads += 1;
+                match reads {
+                    1 => Ok(None),
+                    2 => Ok(Some(serde_json::from_value(json!({
+                        "id":"a1", "kind":"ask", "title":"Q", "by":"agent", "at_ms":1,
+                        "answer":{"option":"b", "text":"", "by":"person", "at_ms":2}
+                    })).unwrap())),
+                    _ => panic!("unexpected attention read"),
                 }
-                reader.into_inner()
-            };
-            let mut events = read_request();
-            write!(events, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
-            for answered in [false, true] {
-                let mut request = read_request();
-                let mut item = json!({"id":"a1", "kind":"ask", "title":"Q", "by":"agent", "at_ms":1});
-                if answered {
-                    item["answer"] = json!({"option":"b", "text":"", "by":"person", "at_ms":2});
-                }
-                let body = json!({"attention":[item]}).to_string();
-                write!(request, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-                if !answered {
-                    write!(events, ": resync\n\n").unwrap();
-                    events.shutdown(std::net::Shutdown::Write).unwrap();
-                }
-            }
-        });
-        let answer = super::await_answer(&url, "t:q", "a1", Some(3)).unwrap();
-        server.join().unwrap();
-        assert_eq!(answer.answer.unwrap().option.as_deref(), Some("b"));
+            }).unwrap();
+            assert_eq!(reads, 2);
+            assert_eq!(answer.answer.unwrap().option.as_deref(), Some("b"));
+        }
     }
 
     #[test]
