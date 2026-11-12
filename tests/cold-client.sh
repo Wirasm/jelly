@@ -44,7 +44,8 @@ grep -q '^jelly: daemon started at ' err
 stop
 for project in '' test; do
     client --project "$project" inbox --hook
-    [ ! -s out ] && [ ! -s err ]
+    [ ! -s out ]
+    [ ! -s err ]
     curl -sf http://127.0.0.1:7878/api/jellies >/dev/null
     stop
 done
@@ -53,9 +54,10 @@ printf '{' > "$root/data/jellies/broken.json"
 if client ls --json; then echo 'partial store served' >&2; exit 1; fi
 [ ! -s out ]
 grep -q 'run `jelly serve` for details' err
-! grep -q 'daemon started' err
+if grep -q 'daemon started' err; then echo 'failed startup reported success' >&2; exit 1; fi
 client --project test inbox --hook
-[ ! -s out ] && [ ! -s err ]
+[ ! -s out ]
+[ ! -s err ]
 if client serve; then echo 'manual serve accepted broken data' >&2; exit 1; fi
 grep -q 'broken.json' err
 [ "$(cat "$root/data/jellies/broken.json")" = '{' ]
