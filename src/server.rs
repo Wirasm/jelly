@@ -400,7 +400,11 @@ struct ByQ {
 
 async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let stream = BroadcastStream::new(app.events.subscribe()).filter_map(move |ev| {
-        let ev = ev.ok()?;
+        let ev = match ev {
+            Ok(ev) => ev,
+            // Comments wake state readers without becoming events for CLI consumers.
+            Err(_) => return Some(Ok(SseEvent::default().comment("resync"))),
+        };
         if q.jelly.as_ref().is_some_and(|j| *j != ev.jelly) {
             return None;
         }
@@ -1179,6 +1183,22 @@ mod tests {
         let (events, _) = broadcast::channel(32);
         let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default() });
         (dir, app)
+    }
+
+    #[tokio::test]
+    async fn lagging_sse_subscribers_are_told_to_resync_even_when_filtered() {
+        for jelly in [None, Some("other:q".into())] {
+            let (_dir, app) = app();
+            let response = events(State(app.clone()), Query(ByQ { by: None, jelly })).await;
+            let mut body = response.into_response().into_body().into_data_stream();
+            create_page(&app, "PAGE", false).await;
+            for _ in 0..32 {
+                let _ = app.change(|s| s.set_state("test:x", "", Some(json!({})), "test")).unwrap();
+            }
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+                .await.expect("lag must wake the subscriber").unwrap().unwrap();
+            assert_eq!(&frame[..], b": resync\n\n");
+        }
     }
 
     async fn create_page(app: &Shared, text: &str, replace: bool) {

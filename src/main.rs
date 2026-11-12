@@ -711,7 +711,7 @@ fn detect_project(given: Option<String>) -> String {
 
 /// Blocks until attention item `item` on `jelly` is answered or withdrawn, and
 /// returns it. It subscribes before reading the item, and reads it again on
-/// every event of that jelly, so no answer is missed.
+/// every event of that jelly or lag notification, so no answer is missed.
 fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Result<store::Attention, String> {
     let mut req = ureq::get(&format!("{url}/api/events?jelly={}", encode(jelly)));
     if let Some(t) = timeout {
@@ -729,7 +729,7 @@ fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Res
     }
     for line in BufReader::new(resp.into_reader()).lines() {
         match line {
-            Ok(l) if l.starts_with("data:") => {
+            Ok(l) if l.starts_with("data:") || l == ": resync" => {
                 if let Some(done) = settled()? {
                     return Ok(done);
                 }
@@ -871,6 +871,54 @@ fn encode(s: &str) -> String {
 mod tests {
     use super::{answer_line, placement};
     use serde_json::json;
+
+    #[test]
+    fn an_answer_is_reread_after_an_sse_resync() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let read_request = || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("expected a request: {e}"),
+                    }
+                };
+                socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(socket);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" { break; }
+                }
+                reader.into_inner()
+            };
+            let mut events = read_request();
+            write!(events, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+            for answered in [false, true] {
+                let mut request = read_request();
+                let mut item = json!({"id":"a1", "kind":"ask", "title":"Q", "by":"agent", "at_ms":1});
+                if answered {
+                    item["answer"] = json!({"option":"b", "text":"", "by":"person", "at_ms":2});
+                }
+                let body = json!({"attention":[item]}).to_string();
+                write!(request, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                if !answered {
+                    write!(events, ": resync\n\n").unwrap();
+                    events.shutdown(std::net::Shutdown::Write).unwrap();
+                }
+            }
+        });
+        let answer = super::await_answer(&url, "t:q", "a1", Some(3)).unwrap();
+        server.join().unwrap();
+        assert_eq!(answer.answer.unwrap().option.as_deref(), Some("b"));
+    }
 
     #[test]
     fn an_answer_is_one_line() {
