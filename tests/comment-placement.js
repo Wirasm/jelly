@@ -10,6 +10,15 @@ async (page) => {
   const save = page.locator('#save');
   const comment = page.getByRole('button', { name: 'Comment', exact: true });
   await comment.waitFor({ state: 'visible' });
+  const fallback = await comment.boundingBox();
+  assert(Math.abs(900 - fallback.x - fallback.width - 10) < 1, 'default Comment is 10px from the right');
+  assert(Math.abs(600 - fallback.y - fallback.height - 10) < 1, 'default Comment is 10px from the bottom');
+  await comment.click();
+  const active = page.getByRole('button', { name: 'Click a part to comment · Esc', exact: true });
+  assert(await active.isVisible(), 'default Comment activates in one click');
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(() => document.documentElement.classList.add('raised-comment'));
   const raised = await comment.boundingBox();
   const control = await save.boundingBox();
   assert(raised.y + raised.height <= control.y, 'Comment clears Save');
@@ -17,7 +26,6 @@ async (page) => {
   await save.click();
   assert(await save.getAttribute('data-clicks') === '1', 'Save receives its click');
   await comment.click();
-  const active = page.getByRole('button', { name: 'Click a part to comment · Esc', exact: true });
   assert(await active.isVisible(), 'Comment activates in one click');
   const expanded = await active.boundingBox();
   assert(expanded.y + expanded.height <= control.y, 'active Comment still clears Save');
@@ -37,5 +45,5 @@ async (page) => {
   const restored = await comment.boundingBox();
   assert(Math.abs(restored.y - raised.y) < 1, 'removing the class restores inherited placement');
   assert(await save.getAttribute('data-clicks') === '2', 'fixture was not reloaded');
-  return { passed: true, raised, top, restored };
+  return { passed: true, fallback, raised, top, restored };
 }
