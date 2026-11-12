@@ -1,5 +1,10 @@
-<!doctype html><html><head><meta charset="utf-8"></head><body>
+<!doctype html><html><head><meta charset="utf-8">
+<script>const errors = []; addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true); addEventListener('unhandledrejection', e => errors.push(String(e.reason)));</script>
+<template id="head-open" shadowrootmode="open"><p>head open</p></template>
+<template id="head-closed" shadowrootmode="closed"><p>head closed</p></template>
+</head><body>
 <script>
+customElements.define('jelly-snapshot-root', class extends HTMLElement {});
 window.declarativeRoots = [];
 customElements.define('share-root-probe', class extends HTMLElement {
   connectedCallback() { declarativeRoots.push(this.getRootNode()); }
@@ -8,13 +13,19 @@ customElements.define('share-root-probe', class extends HTMLElement {
 <div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
 <div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
 <template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"></template>
+<template id="outer"><template id="nested-open" shadowrootmode="open"><p>nested open</p></template><template id="nested-closed" shadowrootmode="closed"><p>nested closed</p></template></template>
+<div><template shadowrootmode="open"><p>root</p></template><template id="second-open" shadowrootmode="open"><p>second open</p></template><template id="second-closed" shadowrootmode="closed"><p>second closed</p></template></div>
+<script>
+for (const id of ['head-open', 'head-closed', 'nested-open', 'nested-closed', 'second-open', 'second-closed']) {
+  const template = document.getElementById(id) || document.getElementById('outer').content.getElementById(id);
+  const first = template.content.firstElementChild.cloneNode(true);
+  if (first.localName !== 'p' || template.content.children.length !== 1) throw Error(`inert content changed: ${template.id}`);
+}
+</script>
 <img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
 <object id="literal-object" data="assets/green.svg" onload="this.dataset.loaded = 'yes'"></object>
 <script src="assets/helper.js"></script>
 <script>
-const errors = [];
-addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true);
-addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
 const assert = (ok, message) => { if (!ok) throw Error(message); };
 function finish(outcome) {
   fetch('__TEST_RESULT__', {method: 'POST', mode: 'no-cors', body: JSON.stringify(outcome)});
@@ -146,6 +157,17 @@ async function loaded(image) {
     assert(CSSStyleDeclaration.prototype.getPropertyValue.call(keyframes.cssRules[0].style, 'background-image').includes('data:image/'), 'native keyframe declaration receiver');
     await backgroundPixels(animation, 'animated CSSOM');
   }
+  for (const style of [rule.style, keyframes.cssRules[0].style]) {
+    for (const alias of ['WebkitBorderImage', 'WebkitBoxReflect', 'WebkitClipPath', 'WebkitFilter', 'WebkitMask', 'WebkitMaskBoxImage', 'WebkitMaskBoxImageSource', 'WebkitMaskImage', 'WebkitShapeOutside']) {
+      const value = alias === 'WebkitBoxReflect' ? 'below 0px url(assets/dot.png)' : 'url(assets/dot.png)';
+      style.cssText = "";
+      style[alias] = value;
+      assert(style.cssText.includes('data:image/'), `native alias ${alias}`);
+      const image = new Image();
+      image.src = style.cssText.match(/url\("([^"\n]+)"\)/)[1];
+      await loaded(image);
+    }
+  }
   cssom.sheet.insertRule(`@keyframes inserted { from { background-image: url("${jelly.state.picture}"); } }`, cssom.sheet.cssRules.length);
   animation.style.animationName = 'inserted';
   await backgroundPixels(animation, 'inserted keyframes');
@@ -160,7 +182,7 @@ async function loaded(image) {
   }
   assert(declarativeRoots.length === 2, 'both declarative roots parsed');
   for (const root of declarativeRoots) {
-    assert(!root.querySelector('jelly-snapshot-root'), 'observer marker removed');
+    assert(!root.querySelector(window.__JELLY__.rootMarker), 'observer marker removed');
     await loaded(root.querySelector('img'));
     await backgroundPixels(root.host, `declarative ${root.mode}`);
     root.querySelector('img').setAttribute('src', 'assets/unused.png');
@@ -198,13 +220,15 @@ async function loaded(image) {
   for (const input of ['assets/theme.css', jelly.asset('theme.css')]) {
     assert(await (await fetch(input)).text() === "@import 'nested.css'; #linked { background-image: url(dot.png); }", 'original stylesheet fetch bytes');
   }
-  for (const file of ['legacy', 'utf16', 'utf8-bom', 'inherited']) {
+  for (const file of ['legacy', 'utf16', 'utf8-bom', 'inherited', 'link-selected', 'link-imported', 'link-unknown', 'document-default']) {
     const target = document.createElement('div');
     target.id = `encoding-${file}`;
     target.className = 'café';
     document.body.append(target);
     const link = document.createElement('link');
-    link.rel = 'stylesheet'; link.href = `assets/${file}.css`;
+    link.rel = 'stylesheet';
+    if (file !== 'document-default') link.charset = file === 'link-unknown' ? 'unknown-encoding' : 'windows-1252';
+    link.href = `assets/${file}.css`;
     const ready = new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; });
     document.head.append(link);
     await ready;

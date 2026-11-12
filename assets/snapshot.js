@@ -120,7 +120,7 @@
           for (const name of Object.getOwnPropertyNames(style)) {
             if (!/^[a-zA-Z-]+$/.test(name)) continue;
             const property = name === "cssFloat" ? "float" : name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`).replace(/^webkit-/, "-webkit-");
-            for (const alias of new Set([name, property])) {
+            for (const alias of new Set([name, property, ...(name.startsWith("webkit") ? ["W" + name.slice(1)] : [])])) {
               Object.defineProperty(style, alias, {
                 configurable: true, enumerable: alias === name,
                 get() { return this.getPropertyValue(property); },
@@ -171,7 +171,11 @@
       if (!["src", "srcset", "href", "xlink:href", "poster", "style", "data"].includes(attr.name)) continue;
       if (attr.name === "data" && element.localName !== "object") continue;
       const value = attr.value;
-      const resolved = attr.name === "style" ? css(value) : attr.name === "srcset" ? srcset(value) : resource(value);
+      let encoding = document.characterSet;
+      if (element instanceof HTMLLinkElement && element.relList.contains("stylesheet") && element.charset) {
+        try { encoding = new TextDecoder(element.charset).encoding; } catch { /* Unknown labels use the document encoding. */ }
+      }
+      const resolved = attr.name === "style" ? css(value) : attr.name === "srcset" ? srcset(value) : resource(value, document.baseURI, [], encoding);
       if (resolved !== value) {
         if (attr.namespaceURI) element.setAttributeNS(attr.namespaceURI, attr.name, resolved);
         else element.setAttribute(attr.name, resolved);
@@ -203,7 +207,7 @@
   }
   // Parser-created closed roots cannot be found from the document. The export's
   // HTML rewriter places this transient element inside declarative templates.
-  customElements.define("jelly-snapshot-root", class extends HTMLElement {
+  if (boot.rootMarker) customElements.define(boot.rootMarker, class extends HTMLElement {
     connectedCallback() {
       const root = this.getRootNode();
       if (!(root instanceof ShadowRoot)) return;
@@ -212,6 +216,16 @@
       this.remove();
     }
   });
+  // A declarative template can remain inert (including inside another template).
+  // Its following parser script removes all instrumentation before view scripts run.
+  boot.finishTemplate = (script) => {
+    function clean(template) {
+      template.content.querySelectorAll("template").forEach(clean);
+      template.content.querySelectorAll(`${boot.rootMarker}, script[data-${boot.rootMarker}]`).forEach(node => node.remove());
+    }
+    if (script.previousElementSibling instanceof HTMLTemplateElement) clean(script.previousElementSibling);
+    script.remove();
+  };
   const attachShadow = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function(options) {
     const root = attachShadow.call(this, options);

@@ -87,8 +87,9 @@ cargo test --locked --bin jelly server::share_tests -- --nocapture
 
 The test exports a jelly to a temporary HTML file, opens it through `file://`
 and checks image pixels, CSS resources and keyframe edits, native CSSOM calls,
-open/closed imperative and declarative shadow roots, embedded objects, uploaded
-stylesheets (including legacy encodings and imports) and scripts, captured
+open/closed imperative and declarative shadow roots, unchanged inert templates
+and custom-element registrations, embedded objects, uploaded stylesheets
+(including link-selected encodings and imports) and scripts, captured
 attention readers and read-only mutations.
 It uses a temporary browser profile and a loopback test-result receiver, and
 requires no daemon or real jelly home.

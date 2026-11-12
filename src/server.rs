@@ -536,14 +536,18 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
         let uri = format!("data:{};base64,{}", content_type(&file), base64::engine::general_purpose::STANDARD.encode(bytes));
         assets.push((file, uri));
     }
-    let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets})
+    let mut marker_bytes = [0; 16];
+    getrandom::fill(&mut marker_bytes).map_err(|e| ApiError::Internal(format!("could not prepare shared roots: {e}")))?;
+    let marker = format!("jelly-snapshot-{}", marker_bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+    let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets, "rootMarker": marker})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
     let html = lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
-        element_content_handlers: vec![lol_html::element!("template[shadowrootmode]", |element| {
+        element_content_handlers: vec![lol_html::element!("template", |element| {
             if element.get_attribute("shadowrootmode").is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed")) {
-                element.prepend("<jelly-snapshot-root hidden></jelly-snapshot-root>", lol_html::html_content::ContentType::Html);
+                element.prepend(&format!("<{marker} hidden></{marker}>"), lol_html::html_content::ContentType::Html);
             }
+            element.after(&format!("<script data-{marker}>window.__JELLY__.finishTemplate(document.currentScript)</script>"), lol_html::html_content::ContentType::Html);
             Ok(())
         })],
         ..Default::default()
@@ -1287,6 +1291,13 @@ mod share_tests {
                 };
                 store.put_asset("test:share", &format!("{file}.css"), &bytes, "agent").unwrap();
             }
+            for file in ["link-unknown", "document-default"] {
+                let css = format!("#encoding-{file}.café {{ background-image: url(dot.png); }} #encoding-{file}.café::after {{ content: 'café'; }}");
+                store.put_asset("test:share", &format!("{file}.css"), css.as_bytes(), "agent").unwrap();
+            }
+            store.put_asset("test:share", "link-selected.css", b"#encoding-link-selected.caf\xe9 { background-image: url(dot.png); } #encoding-link-selected.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
+            store.put_asset("test:share", "link-imported.css", b"@import 'link-child.css';", "agent").unwrap();
+            store.put_asset("test:share", "link-child.css", b"#encoding-link-imported.caf\xe9 { background-image: url(dot.png); } #encoding-link-imported.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
             store.put_asset("test:share", "inherited.css", b"@charset \"windows-1252\"; @import 'child.css';", "agent").unwrap();
             store.put_asset("test:share", "child.css", b"#encoding-inherited.caf\xe9 { background-image: url(dot.png); } #encoding-inherited.caf\xe9::after { content: 'caf\xe9'; }", "agent").unwrap();
         }
