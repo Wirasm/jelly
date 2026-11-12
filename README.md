@@ -96,6 +96,13 @@ to 1 MiB of your older events, so the inbox and `jelly see` still have them. A t
 keeps every event's position, and inbox reads go back only as far as the reader's
 position.
 
+Upgrading changes how a jelly's file stores undo: it now keeps each change's
+difference instead of a full copy of view, verbs and state. The new daemon reads
+old files and keeps their undo, and rewrites each file in the new form at that
+jelly's next change. An older binary cannot read a rewritten file: it skips
+that jelly with a `missing field` error. To go back to an
+older binary, keep a copy of `~/.jelly/jellies/` from before the upgrade.
+
 ## How it works
 
 A local daemon holds every jelly and serves them on 127.0.0.1 only, without
