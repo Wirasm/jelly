@@ -303,10 +303,43 @@ enum Cmd {
 }
 
 
+#[derive(Debug)]
+enum CommandError {
+    Message(String),
+    Output(std::io::Error),
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self { Self::Message(message) }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self { Self::Message(message.into()) }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Message(message) => message.fmt(f),
+            Self::Output(error) => error.fmt(f),
+        }
+    }
+}
+
+fn write_output(writer: &mut impl Write, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+    writer.write_fmt(args)?;
+    writer.flush()
+}
+
+fn output(args: std::fmt::Arguments<'_>) -> Result<(), CommandError> {
+    write_output(&mut std::io::stdout().lock(), args).map_err(CommandError::Output)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(CommandError::Output(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("jelly: {e}");
             ExitCode::FAILURE
@@ -314,7 +347,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+fn run(cli: Cli) -> Result<(), CommandError> {
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     // Only commands that make or open jellies need it, so git runs only for those.
@@ -352,7 +385,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 .ok_or("set --home, JELLY_HOME or HOME")?;
             let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-            rt.block_on(server::serve(store, port)).map_err(|e| e.to_string())
+            rt.block_on(server::serve(store, port)).map_err(|e| e.to_string().into())
         }
         Cmd::Ls { all, json } => {
             let p = if all { String::new() } else { project() };
@@ -364,7 +397,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 return print(json!(list));
             }
             if list.is_empty() {
-                println!("No jellies{}. The daemon is up.", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") });
+                output(format_args!("No jellies{}. The daemon is up.\n", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") }))?;
             }
             for j in &list {
                 let mut tags = vec![format!("v{}", j["version"])];
@@ -373,7 +406,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 if n("open_comments") > 0 { tags.push(format!("{} open comments", n("open_comments"))); }
                 if j["pinned"].as_bool() == Some(true) { tags.push("pinned".into()); }
                 if j["archived"].as_bool() == Some(true) { tags.push("archived".into()); }
-                println!("{}  {}  ({})", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), tags.join(", "));
+                output(format_args!("{}  {}  ({})\n", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), tags.join(", ")))?;
             }
             Ok(())
         }
@@ -393,8 +426,12 @@ fn run(cli: Cli) -> Result<(), String> {
             let mut assets: Vec<PathBuf> = in_from("assets").and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten()
                 .map(|f| f.path()).filter(|p| p.is_file()).collect();
             assets.sort();
+            let added = add_assets(&api(&format!("/{made}")), &assets, &by)?;
             report(ev)?;
-            add_assets(&api(&format!("/{made}")), &assets, &by)
+            for line in added {
+                output(format_args!("{line}\n"))?;
+            }
+            Ok(())
         }
         Cmd::Call { name, verb, args } => {
             let args = json_arg(&args, "args")?;
@@ -432,7 +469,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     if !state {
                         ev.as_object_mut().map(|o| o.remove("state"));
                     }
-                    println!("{ev}");
+                    output(format_args!("{ev}\n"))?;
                 }
             }
             Ok(())
@@ -456,7 +493,7 @@ fn run(cli: Cli) -> Result<(), String> {
             };
             let item = await_answer(&cli.url, jelly, item, timeout)?;
             if !json {
-                println!("{}", answer_line(&item));
+                output(format_args!("{}\n", answer_line(&item)))?;
                 return Ok(());
             }
             let mut out = json!(item);
@@ -476,11 +513,11 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             let items = list.as_array().cloned().unwrap_or_default();
             if items.is_empty() {
-                println!("Nothing waits on the person{}.", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") });
+                output(format_args!("Nothing waits on the person{}.\n", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") }))?;
             }
             for item in items {
                 let a = store::Attention::deserialize(&item).map_err(|e| e.to_string())?;
-                println!("{}  {}", item["jelly"].as_str().unwrap_or("?"), a.summary());
+                output(format_args!("{}  {}\n", item["jelly"].as_str().unwrap_or("?"), a.summary()))?;
             }
             Ok(())
         }
@@ -499,7 +536,7 @@ fn run(cli: Cli) -> Result<(), String> {
             if json {
                 return print(json!({"jelly": jelly, "round": round, "questions": questions, "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}));
             }
-            println!("{}", ask_line(&jelly, round, questions));
+            output(format_args!("{}\n", ask_line(&jelly, round, questions)))?;
             Ok(())
         }
         Cmd::Wait { name, timeout, json } => {
@@ -521,7 +558,7 @@ fn run(cli: Cli) -> Result<(), String> {
                         eprintln!("jelly: nobody changed {what} in time");
                         std::process::exit(2);
                     }
-                    Err(e) => return Err(e.to_string()),
+                    Err(e) => return Err(e.to_string().into()),
                 };
                 let Some(data) = line.strip_prefix("data:") else { continue };
                 let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
@@ -529,7 +566,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     if json {
                         return print(ev);
                     }
-                    println!("{}", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?));
+                    output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
                     return Ok(());
                 }
             }
@@ -565,10 +602,10 @@ fn run(cli: Cli) -> Result<(), String> {
             if lines.is_empty() {
                 let p = project();
                 let place = if one { format!(" on {}", names[0]) } else if p.is_empty() { String::new() } else { format!(" in project {p}") };
-                println!("No {}comments{place}.", if all { "" } else { "open " });
+                output(format_args!("No {}comments{place}.\n", if all { "" } else { "open " }))?;
             }
             for l in lines {
-                println!("{l}");
+                output(format_args!("{l}\n"))?;
             }
             Ok(())
         }
@@ -581,7 +618,7 @@ fn run(cli: Cli) -> Result<(), String> {
             if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name), q.join("&")));
             let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
-            print!("{}", resp.into_string().map_err(|e| e.to_string())?);
+            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
             Ok(())
         }
         Cmd::Note { name, text } => report(send("POST", &api(&format!("/{}/note", id(&name))), json!({"text": text, "by": by}))?),
@@ -609,7 +646,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     .map_err(|e| format!("could not write asset {file}: {e}"))?;
             }
             let n = files.len();
-            println!("{}/  view.html  verbs.js  state.json  assets/ ({n})\nEdit, then: jelly dev {name} {}", dir.display(), dir.display());
+            output(format_args!("{}/  view.html  verbs.js  state.json  assets/ ({n})\nEdit, then: jelly dev {name} {}\n", dir.display(), dir.display()))?;
             Ok(())
         }
         Cmd::Dev { name, dir } => {
@@ -619,9 +656,9 @@ fn run(cli: Cli) -> Result<(), String> {
             let stamp = |f: &str| std::fs::metadata(dir.join(f)).and_then(|m| m.modified()).ok();
             let (mut v, mut b) = (stamp("view.html"), stamp("verbs.js"));
             if v.is_none() && b.is_none() {
-                return Err(format!("nothing to watch in {}: run jelly pull {name} first", dir.display()));
+                return Err(format!("nothing to watch in {}: run jelly pull {name} first", dir.display()).into());
             }
-            println!("watching {} for {name} (Ctrl-C to stop)", dir.display());
+            output(format_args!("watching {} for {name} (Ctrl-C to stop)\n", dir.display()))?;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(400));
                 let (nv, nb) = (stamp("view.html"), stamp("verbs.js"));
@@ -630,8 +667,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 let verbs = (nb != b).then(|| std::fs::read_to_string(dir.join("verbs.js"))).transpose().map_err(|e| e.to_string())?;
                 (v, b) = (nv, nb);
                 match send("POST", &api(&format!("/{name}/reshape")), json!({"view": view, "verbs": verbs, "by": by})) {
-                    Ok(ev) => println!("reshaped v{} ({})", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")),
-                    Err(e) => eprintln!("not reshaped: {e}"),
+                    Ok(ev) => output(format_args!("reshaped v{} ({})\n", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")))?,
+                    Err(e) => { eprintln!("not reshaped: {e}"); },
                 }
             }
         }
@@ -642,16 +679,20 @@ fn run(cli: Cli) -> Result<(), String> {
             match set {
                 Some(f) => {
                     ureq::put(&url).send_string(&read(&f)?).map_err(describe)?;
-                    println!("{p}: DESIGN.md set. Views use it with <link rel=\"stylesheet\" href=\"/p/{p}/design.css\">");
+                    output(format_args!("{p}: DESIGN.md set. Views use it with <link rel=\"stylesheet\" href=\"/p/{p}/design.css\">\n"))?;
                     Ok(())
                 }
-                None => { print!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?); Ok(()) }
+                None => { output(format_args!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?))?; Ok(()) }
             }
         }
         Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name))), json!({"by": by}))?),
         Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name))), json!({"by": by}))?),
         Cmd::Asset { name, files } => {
-            add_assets(&api(&format!("/{}", id(&name))), &files, &by)
+            let added = add_assets(&api(&format!("/{}", id(&name))), &files, &by)?;
+            for line in added {
+                output(format_args!("{line}\n"))?;
+            }
+            Ok(())
         }
         Cmd::Share { name, out } => {
             let name = id(&name);
@@ -661,7 +702,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);
             let out = out.unwrap_or_else(|| PathBuf::from(format!("{short}.html")));
             std::fs::write(&out, &html).map_err(|e| format!("{}: {e}", out.display()))?;
-            println!("{}  ({} KB, read-only, opens anywhere)", out.display(), html.len().div_ceil(1024));
+            output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
         }
         Cmd::Inbox { hook, session_id } => inbox(&cli.url, &project(), hook, cli.by, session_id),
@@ -672,11 +713,12 @@ fn run(cli: Cli) -> Result<(), String> {
                 (None, "") => format!("{}/", cli.url),
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
-            println!("{url}");
-            if let Err(e) = open_browser(&url) {
-                eprintln!("jelly: could not open a browser ({e}); open the address above manually.");
+            let browser = open_browser(&url);
+            let printed = output(format_args!("{url}\n"));
+            if let Err(e) = browser {
+                eprintln!("jelly: could not open a browser ({e}); open {url} manually.");
             }
-            Ok(())
+            printed
         }
     }
 }
@@ -752,7 +794,7 @@ fn parent_reader() -> Result<store::InboxReader, String> {
 }
 
 /// Prints what the person did since the last call, then moves the cursor.
-fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id: Option<String>) -> Result<(), String> {
+fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id: Option<String>) -> Result<(), CommandError> {
     if hook && project.is_empty() {
         return Ok(()); // not in a repo: this session has no jellies of its own
     }
@@ -775,7 +817,7 @@ fn deliver_inbox(
     hook: bool,
     reader: Result<store::InboxReader, String>,
     output: &mut impl Write,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let result = (|| {
         let request = store::InboxRequest { project: project.into(), reader: reader? };
         let response = ureq::post(&format!("{url}/api/inbox"))
@@ -786,7 +828,7 @@ fn deliver_inbox(
             result => result.map_err(describe)?,
         };
         let batch: store::InboxBatch = response.into_json().map_err(|e| e.to_string())?;
-        write_inbox(output, project, hook, &batch).map_err(|e| e.to_string())?;
+        write_inbox(output, project, hook, &batch).map_err(CommandError::Output)?;
         ureq::post(&format!("{url}/api/inbox/commit"))
             .timeout(std::time::Duration::from_secs(1))
             .send_json(store::InboxCommit { inbox: request, through: batch.through })
@@ -794,7 +836,7 @@ fn deliver_inbox(
         Ok(())
     })();
     match result {
-        Err(e) if hook => writeln!(output, "jelly inbox failed: {e}").map_err(|e| e.to_string()),
+        Err(CommandError::Message(e)) if hook => writeln!(output, "jelly inbox failed: {e}").map_err(CommandError::Output),
         result => result,
     }
 }
@@ -877,8 +919,8 @@ fn answer_line(item: &store::Attention) -> String {
 }
 
 /// One line on what a write did. The full event is in `jelly events`.
-fn report(ev: Value) -> Result<(), String> {
-    println!("{}", report_line(&ev));
+fn report(ev: Value) -> Result<(), CommandError> {
+    output(format_args!("{}\n", report_line(&ev)))?;
     Ok(())
 }
 
@@ -959,9 +1001,7 @@ fn read(p: &PathBuf) -> Result<String, String> {
 }
 
 /// Adds files beside a jelly; `jelly` is its API address.
-fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<(), String> {
-    // Add every file before printing anything: a reader that closes the pipe
-    // early (`| head -1`) must not leave the jelly with half its assets.
+fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<Vec<String>, String> {
     let mut added = Vec::new();
     for f in files {
         let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
@@ -972,10 +1012,7 @@ fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<(), String> {
             .map_err(describe)?;
         added.push(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)));
     }
-    for line in added {
-        println!("{line}");
-    }
-    Ok(())
+    Ok(added)
 }
 
 fn get(url: &str) -> Result<Value, String> {
@@ -999,8 +1036,8 @@ fn describe(e: ureq::Error) -> String {
     }
 }
 
-fn print(v: Value) -> Result<(), String> {
-    println!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
+fn print(v: Value) -> Result<(), CommandError> {
+    output(format_args!("{}\n", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?))?;
     Ok(())
 }
 
@@ -1016,8 +1053,26 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_line, placement, wait_line};
+    use super::{answer_line, placement, wait_line, write_output};
+    use std::io::{self, Write};
     use serde_json::json;
+
+    #[test]
+    fn output_preserves_write_and_flush_errors() {
+        struct Fault { kind: io::ErrorKind, on_flush: bool }
+        impl Write for Fault {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.on_flush { Ok(bytes.len()) } else { Err(self.kind.into()) }
+            }
+            fn flush(&mut self) -> io::Result<()> { Err(self.kind.into()) }
+        }
+        for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::PermissionDenied] {
+            for on_flush in [false, true] {
+                let error = write_output(&mut Fault { kind, on_flush }, format_args!("no newline")).unwrap_err();
+                assert_eq!(error.kind(), kind);
+            }
+        }
+    }
 
     #[test]
     fn wait_prints_the_change_in_one_line() {
@@ -1066,7 +1121,7 @@ mod tests {
             let mut output = Vec::new();
             super::deliver_inbox("unused", "p", true, Err(error.into()), &mut output).unwrap();
             assert_eq!(String::from_utf8(output).unwrap(), format!("jelly inbox failed: {error}\n"));
-            assert_eq!(super::deliver_inbox("unused", "p", false, Err(error.into()), &mut Vec::new()), Err(error.into()));
+            assert_eq!(super::deliver_inbox("unused", "p", false, Err(error.into()), &mut Vec::new()).unwrap_err().to_string(), error);
         }
     }
 
@@ -1096,7 +1151,7 @@ mod tests {
             let (url, server) = inbox_response(&body);
             let reader = crate::store::InboxReader::Named { name: "a".into() };
             let error = super::deliver_inbox(&url, "p", false, Ok(reader), &mut FailingOutput { fail_write }).unwrap_err();
-            assert_eq!(error, if fail_write { "output failed" } else { "flush failed" });
+            assert_eq!(error.to_string(), if fail_write { "output failed" } else { "flush failed" });
             assert_no_inbox_commit(server);
         }
     }

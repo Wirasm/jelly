@@ -37,6 +37,12 @@ jelly inbox                                      # what they did since you last 
 jelly see plan                                   # what is on screen, as text
 ```
 
+When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
+Finite commands finish their changes before printing. `events`/`watch` and `dev`
+stop when an output write detects closure; while idle, they keep waiting. `wait`
+keeps its event selection and timeout behavior, detecting closure only when it
+prints a qualifying event. `serve` continues serving when stdout closes.
+
 The full guide is [`skill/SKILL.md`](skill/SKILL.md). Install it as a skill so every
 session knows it: `ln -s "$PWD/skill" ~/.claude/skills/jelly`.
 

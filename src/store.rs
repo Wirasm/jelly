@@ -430,7 +430,7 @@ impl Store {
                     Ok(entry) => {
                         jellies.insert(entry.jelly.name.clone(), entry);
                     }
-                    Err(e) => eprintln!("skipping {}: {e}", path.display()),
+                    Err(e) => { eprintln!("skipping {}: {e}", path.display()); },
                 }
             }
         }
