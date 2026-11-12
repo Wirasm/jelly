@@ -632,11 +632,11 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
             let browser = open_browser(&url);
-            output(format_args!("{url}\n"))?;
+            let printed = output(format_args!("{url}\n"));
             if let Err(e) = browser {
-                let _ = writeln!(std::io::stderr(), "jelly: could not open a browser ({e}); open the address above manually.");
+                let _ = writeln!(std::io::stderr(), "jelly: could not open a browser ({e}); open {url} manually.");
             }
-            Ok(())
+            printed
         }
     }
 }

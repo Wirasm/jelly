@@ -381,3 +381,26 @@ fn wait_retains_its_timeout_exit_with_closed_diagnostics() {
     let out = child.finish();
     assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
+
+#[cfg(unix)]
+#[test]
+fn non_broken_pipe_stdout_failure_exits_with_a_diagnostic() {
+    let fixture = Fixture::new();
+    let socket = std::os::unix::net::UnixDatagram::unbound().unwrap();
+    let fd: std::os::fd::OwnedFd = socket.into();
+    let mut stdout = std::fs::File::from(fd);
+    let error = stdout.write_all(b"probe").unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    let mut child = Process(
+        command(&fixture.url, &["ls", "--all"])
+            .stdout(stdout)
+            .spawn()
+            .unwrap(),
+    );
+    let mut req = fixture.request();
+    assert_eq!(req.path, "/api/jellies");
+    req.reply(r#"[{"name":"probe:first","version":1}]"#);
+    let out = child.finish();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(out.stderr, format!("jelly: {error}\n").as_bytes());
+}
