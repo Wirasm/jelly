@@ -252,7 +252,8 @@ async page => {
   // Tall inline questions must not focus an unseen choice that Enter submits.
   for (const content of ['preview', 'context']) {
     const tallName = `visibility:tall-${content}-${Date.now()}`;
-    await post(`/api/jellies/${tallName}/ask`, {spec:{title:'Detailed choice',questions:[{
+    await post(`/api/jellies/${tallName}/ask`, {spec:{title:'Detailed choice',questions:[
+      {id:'first',question:'Include the team?',options:[{id:'y',label:'Yes'}]}, {
       id:'detail',question:'Which format should we book?',
       context:content === 'context' ? 'Consider the venue, travel and guest experience. '.repeat(60) : 'Compare the preview and tradeoffs before choosing.',
       recommend:'y',why:'Lets guests meet the team.',
@@ -262,16 +263,23 @@ async page => {
         {id:'n',label:'Online',does:'Stream from the studio.'}]
     }]}});
     await page.locator(`#dock-list [data-goto="${tallName}"]`).waitFor({state:'attached'});
+    const firstId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
+    frame = await dock(tallName, firstId);
+    await frame.locator(`[data-pick="${firstId}|y"]`).click();
+    await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'y', firstId);
+    await page.locator(`#dock-list [data-goto="${tallName}"]:not([data-item="${firstId}"])`).waitFor({state:'attached'});
     const tallId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
     frame = await dock(tallName, tallId);
-    const opening = await frame.evaluate(() => {
-      const heading = document.querySelector('.q h2').getBoundingClientRect();
+    const opening = await frame.evaluate(id => {
+      const item = jelly.items.find(a => a.id === id);
+      const question = document.getElementById(item.anchor.selector.slice(1));
+      const heading = question.querySelector('h2').getBoundingClientRect();
       const focus = document.activeElement.getBoundingClientRect();
       const bar = document.getElementById('bar').getBoundingClientRect();
       return {heading:heading.top >= bar.bottom && heading.bottom <= innerHeight,
-        focus:focus.top >= bar.bottom && focus.bottom <= innerHeight};
-    });
-    assert(opening.heading && opening.focus, `tall ${content} opening shows heading and focus: ${JSON.stringify(opening)}`);
+        focus:question.contains(document.activeElement) && focus.top >= bar.bottom && focus.bottom <= innerHeight};
+    }, tallId);
+    assert(opening.heading && opening.focus, `later tall ${content} opening shows heading and focus in the requested question: ${JSON.stringify(opening)}`);
     if (await frame.evaluate(() => !document.activeElement.matches('[data-pick]'))) {
       await page.keyboard.press('Enter');
       const unanswered = await (await page.request.get(`${base}/api/jellies/${tallName}`)).json();

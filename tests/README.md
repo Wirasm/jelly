@@ -33,7 +33,8 @@ context, measured diagnostics, host/draft/selection preservation, synchronous an
 delayed reveals, subscription behavior, stable shared destinations, persisted
 answers, grouped inline questions with empty and punctuation IDs, readable grouped
 question headings alongside visible focus below the sticky bar, tall preview and
-long-context openings without unseen Enter submissions, hash/query/path
+long-context openings of later grouped questions with focus inside the requested
+question and without unseen Enter submissions, hash/query/path
 history navigation, attribute-driven opacity, visible refresh and focus-write
 failures with retry, delayed focus writes and agent
 focus during local open/close writes, and snapshot registration.
