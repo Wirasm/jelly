@@ -385,7 +385,10 @@ async function loaded(image) {
   }
   const fetchedCollision = new Uint8Array(await (await fetch(collisionUrl)).arrayBuffer());
   assert(fetchedCollision.toString() === collisionBytes.toString(), 'identical decoded CSS keeps separate source bytes');
+  if (document.readyState === 'loading') await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
   document.querySelectorAll('.discard-root').forEach(host => host.remove());
+  // Detached render trees must be released before testing JavaScript ownership.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   function discardImperativeRoots() {
     for (const mode of ['open', 'closed']) for (const connected of [true, false]) for (let i = 0; i < 25; i++) {
       const host = document.createElement('div');
