@@ -8,7 +8,7 @@ mod verbs;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,9 +18,9 @@ struct Cli {
     /// Daemon address for client commands.
     #[arg(long, env = "JELLY_URL", default_value = "http://127.0.0.1:7878", global = true)]
     url: String,
-    /// Who this change is from, recorded on every event.
-    #[arg(long = "as", env = "JELLY_AS", default_value = "agent", global = true)]
-    by: String,
+    /// Who this change is from, recorded on every event (default: agent).
+    #[arg(long = "as", env = "JELLY_AS", global = true)]
+    by: Option<String>,
     /// The project new jellies belong to. Defaults to the name of the git repo
     /// you run from; the jelly page shows each project on its own page.
     #[arg(long, env = "JELLY_PROJECT", global = true)]
@@ -259,12 +259,18 @@ enum Cmd {
         out: Option<PathBuf>,
     },
     /// What the person did in this project's jellies since you last asked.
+    /// Reader identity: explicit --as / JELLY_AS, then --session-id /
+    /// JELLY_SESSION_ID, Claude session environment or hook input, then the
+    /// invoking parent's PID and start time. Conversation IDs survive resume.
     /// With --hook, prints nothing when there is nothing new or no daemon, so
     /// it can run at the start of every agent turn, and one line when the
     /// daemon does not answer.
     Inbox {
         #[arg(long)]
         hook: bool,
+        /// Stable conversation ID, shared by commands, hooks and resumed sessions.
+        #[arg(long, env = "JELLY_SESSION_ID")]
+        session_id: Option<String>,
     },
     /// Answer on a comment's thread. The person sees it on the pin.
     Reply {
@@ -291,7 +297,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), String> {
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
-    let by = cli.by.clone();
+    let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     // Only commands that make or open jellies need it, so git runs only for those.
     let project = || detect_project(cli.project.clone());
     // Names are unique per project: a short name means this project's jelly
@@ -583,7 +589,7 @@ fn run(cli: Cli) -> Result<(), String> {
             println!("{}  ({} KB, read-only, opens anywhere)", out.display(), html.len().div_ceil(1024));
             Ok(())
         }
-        Cmd::Inbox { hook } => inbox(&cli.url, &project(), hook),
+        Cmd::Inbox { hook, session_id } => inbox(&cli.url, &project(), hook, cli.by, session_id),
         Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name))), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
@@ -634,50 +640,105 @@ fn sync_design(url: &str, project: &str) {
     }
 }
 
+fn select_inbox_reader(
+    named: Option<String>,
+    session: Option<String>,
+    claude: Option<String>,
+    hook: impl FnOnce() -> Option<String>,
+    parent: impl FnOnce() -> Result<store::InboxReader, String>,
+) -> Result<store::InboxReader, String> {
+    if let Some(name) = named {
+        return Ok(store::InboxReader::Named { name });
+    }
+    if let Some(id) = session.filter(|s| !s.is_empty())
+        .or_else(|| claude.filter(|s| !s.is_empty()))
+        .or_else(|| hook().filter(|s| !s.is_empty()))
+    {
+        return Ok(store::InboxReader::Conversation { id });
+    }
+    parent()
+}
+
+fn hook_session(input: impl Read) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct HookInput { session_id: Option<String> }
+    serde_json::from_reader::<_, HookInput>(input).ok()?.session_id
+}
+
+fn parent_reader() -> Result<store::InboxReader, String> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let current = Pid::from_u32(std::process::id());
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[current]), true);
+    let parent = system.process(current).and_then(|p| p.parent()).ok_or("could not find invoking parent process")?;
+    system.refresh_processes(ProcessesToUpdate::Some(&[parent]), true);
+    let process = system.process(parent).ok_or("could not find parent process start time")?;
+    Ok(store::InboxReader::Parent { pid: parent.as_u32(), start_time: process.start_time() })
+}
+
 /// Prints what the person did since the last call, then moves the cursor.
-fn inbox(url: &str, project: &str, hook: bool) -> Result<(), String> {
+fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id: Option<String>) -> Result<(), String> {
     if hook && project.is_empty() {
         return Ok(()); // not in a repo: this session has no jellies of its own
     }
-    let home = std::env::var_os("JELLY_HOME").map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".jelly")))
-        .ok_or("set JELLY_HOME or HOME")?;
-    let cursor = home.join("inbox").join(if project.is_empty() { "_all" } else { project });
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    // First run: the last hour, not all history.
-    let since = std::fs::read_to_string(&cursor).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(now.saturating_sub(3_600_000));
-    let resp = ureq::get(&format!("{url}/api/inbox?project={}&since={since}", encode(project)))
-        .timeout(std::time::Duration::from_secs(1))
-        .call();
-    let got = match resp {
-        Err(ureq::Error::Transport(t)) if hook && t.kind() == ureq::ErrorKind::ConnectionFailed => return Ok(()), // no daemon
-        Err(ureq::Error::Transport(t)) if hook => Err(t.to_string()),
-        resp => resp.map_err(describe).and_then(|r| r.into_json::<Vec<Value>>().map_err(|e| e.to_string())),
-    };
-    let items = match got {
-        Ok(v) => v,
-        // The hook's output goes to the agent: silence would read as "nothing new".
-        Err(e) if hook => {
-            println!("jelly inbox: the daemon at {url} did not answer ({e}). The person's latest actions may be waiting; run `jelly inbox` to check.");
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
-    let _ = std::fs::create_dir_all(cursor.parent().expect("has a parent"));
-    let _ = std::fs::write(&cursor, now.to_string());
-    if items.is_empty() {
+    let reader = select_inbox_reader(
+        named,
+        session_id,
+        std::env::var("CLAUDE_CODE_SESSION_ID").ok(),
+        || {
+            if !hook || std::io::stdin().is_terminal() { return None; }
+            hook_session(std::io::stdin().lock())
+        },
+        parent_reader,
+    );
+    deliver_inbox(url, project, hook, reader, &mut std::io::stdout().lock())
+}
+
+fn deliver_inbox(
+    url: &str,
+    project: &str,
+    hook: bool,
+    reader: Result<store::InboxReader, String>,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    let result = (|| {
+        let request = store::InboxRequest { project: project.into(), reader: reader? };
+        let response = ureq::post(&format!("{url}/api/inbox"))
+            .timeout(std::time::Duration::from_secs(1))
+            .send_json(&request);
+        let response = match response {
+            // No daemon is silence; a daemon that does not answer is worth a line.
+            Err(ureq::Error::Transport(t)) if hook && t.kind() == ureq::ErrorKind::ConnectionFailed => return Ok(()),
+            result => result.map_err(describe)?,
+        };
+        let batch: store::InboxBatch = response.into_json().map_err(|e| e.to_string())?;
+        write_inbox(output, project, hook, &batch).map_err(|e| e.to_string())?;
+        ureq::post(&format!("{url}/api/inbox/commit"))
+            .timeout(std::time::Duration::from_secs(1))
+            .send_json(store::InboxCommit { inbox: request, through: batch.through })
+            .map_err(describe)?;
+        Ok(())
+    })();
+    match result {
+        Err(e) if hook => writeln!(output, "jelly inbox failed: {e}").map_err(|e| e.to_string()),
+        result => result,
+    }
+}
+
+fn write_inbox(output: &mut impl Write, project: &str, hook: bool, batch: &store::InboxBatch) -> std::io::Result<()> {
+    if batch.events.is_empty() {
         if !hook {
-            println!("Nothing new from the person.");
+            writeln!(output, "Nothing new from the person.")?;
         }
-        return Ok(());
+    } else {
+        let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
+        writeln!(output, "The person acted on your jellies{scope} since you last checked:")?;
+        for item in &batch.events {
+            writeln!(output, "- {}: {}", item.event.jelly, item.text)?;
+        }
+        writeln!(output, "Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.")?;
     }
-    let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
-    println!("The person acted on your jellies{scope} since you last checked:");
-    for e in &items {
-        println!("- {}: {}", e["jelly"].as_str().unwrap_or("?"), e["text"].as_str().unwrap_or(""));
-    }
-    println!("Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.");
-    Ok(())
+    output.flush()
 }
 
 /// The project from `--project`, else the git repo's folder name, made into a
@@ -803,6 +864,107 @@ fn encode(s: &str) -> String {
 mod tests {
     use super::placement;
     use serde_json::json;
+
+    fn inbox_response(body: &str) -> (String, std::thread::JoinHandle<std::net::TcpListener>) {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let body = body.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut input = std::io::BufReader::new(&stream);
+            let mut line = String::new();
+            input.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "POST /api/inbox HTTP/1.1");
+            let mut length = 0;
+            loop {
+                line.clear();
+                input.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse().unwrap(); }
+                }
+            }
+            input.read_exact(&mut vec![0; length]).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            listener
+        });
+        (url, server)
+    }
+
+    fn assert_no_inbox_commit(server: std::thread::JoinHandle<std::net::TcpListener>) {
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn inbox_reader_failures_are_visible_in_hooks() {
+        for error in ["could not find invoking parent process", "could not find parent process start time"] {
+            let mut output = Vec::new();
+            super::deliver_inbox("unused", "p", true, Err(error.into()), &mut output).unwrap();
+            assert_eq!(String::from_utf8(output).unwrap(), format!("jelly inbox failed: {error}\n"));
+            assert_eq!(super::deliver_inbox("unused", "p", false, Err(error.into()), &mut Vec::new()), Err(error.into()));
+        }
+    }
+
+    #[test]
+    fn inbox_undecodable_responses_do_not_commit() {
+        for body in ["broken", "", "[]", r#"{"events":[{"jelly":"p:sample"}],"through":4}"#] {
+            let (url, server) = inbox_response(body);
+            let reader = crate::store::InboxReader::Named { name: "a".into() };
+            assert!(super::deliver_inbox(&url, "p", false, Ok(reader), &mut Vec::new()).is_err());
+            assert_no_inbox_commit(server);
+        }
+    }
+
+    #[test]
+    fn inbox_output_failures_do_not_commit() {
+        use std::io::{self, Write};
+        struct FailingOutput { fail_write: bool }
+        impl Write for FailingOutput {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.fail_write { Err(io::Error::other("output failed")) } else { Ok(bytes.len()) }
+            }
+            fn flush(&mut self) -> io::Result<()> { Err(io::Error::other("flush failed")) }
+        }
+        for fail_write in [true, false] {
+            let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "call",
+                "by": "person", "version": 1, "view_rev": 1, "text": "click {}"}], "through": 4}).to_string();
+            let (url, server) = inbox_response(&body);
+            let reader = crate::store::InboxReader::Named { name: "a".into() };
+            let error = super::deliver_inbox(&url, "p", false, Ok(reader), &mut FailingOutput { fail_write }).unwrap_err();
+            assert_eq!(error, if fail_write { "output failed" } else { "flush failed" });
+            assert_no_inbox_commit(server);
+        }
+    }
+
+    #[test]
+    fn inbox_identity_precedence_and_namespaces() {
+        use super::{hook_session, select_inbox_reader};
+        use crate::store::InboxReader;
+        let named = |name: &str| InboxReader::Named { name: name.into() };
+        let conversation = |id: &str| InboxReader::Conversation { id: id.into() };
+        let parent = || Ok(InboxReader::Parent { pid: 42, start_time: 100 });
+        let resolve = |name: Option<&str>, session: Option<&str>, claude: Option<&str>, hook: Option<&str>| {
+            select_inbox_reader(name.map(str::to_string), session.map(str::to_string), claude.map(str::to_string), || hook.map(str::to_string), parent).unwrap()
+        };
+        assert_eq!(resolve(Some("agent"), Some("session"), Some("claude"), Some("hook")), named("agent"));
+        assert_eq!(resolve(None, Some("session"), Some("claude"), Some("hook")), conversation("session"));
+        assert_eq!(resolve(None, Some(""), Some("claude"), Some("hook")), conversation("claude"));
+        assert_eq!(resolve(None, None, Some(""), Some("hook")), conversation("hook"));
+        assert_eq!(resolve(None, None, None, None), parent().unwrap());
+        assert_ne!(named("agent"), conversation("agent"));
+        assert_ne!(parent().unwrap(), InboxReader::Parent { pid: 42, start_time: 101 });
+        assert_eq!(select_inbox_reader(Some("a".into()), None, None, || panic!("must not read stdin"), || panic!("must not inspect processes")).unwrap(), named("a"));
+        assert_eq!(select_inbox_reader(None, Some("a".into()), None, || panic!("must not read stdin"), || panic!("must not inspect processes")).unwrap(), conversation("a"));
+        assert!(select_inbox_reader(None, None, None, || None, || Err("no parent".into())).is_err());
+        assert_eq!(hook_session(&b"{\"session_id\":\"resumed\",\"prompt\":\"ignored\"}"[..]), Some("resumed".into()));
+        for input in ["", "broken", "{}"] {
+            assert_eq!(hook_session(input.as_bytes()), None);
+        }
+    }
 
     #[test]
     fn an_ask_says_where_its_card_really_shows() {

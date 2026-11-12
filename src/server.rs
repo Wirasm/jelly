@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, EventKind, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -155,7 +155,8 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
-        .route("/api/inbox", get(inbox))
+        .route("/api/inbox", get(inbox).post(read_inbox))
+        .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
@@ -539,25 +540,36 @@ struct InboxQ {
 /// Reads the log back only to `since`, so it costs what is new, not the log's size.
 async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
-    let prefix = q.project.filter(|p| !p.is_empty()).map(|p| format!("{p}:"));
+    let project = q.project.unwrap_or_default();
     let mut items = Vec::new();
     let read = app.store.lock().expect("store lock").events_back(|l| {
-        let Ok(e) = serde_json::from_str::<Event>(l) else { return true };
+        let Ok(e) = serde_json::from_str::<Event>(l) else { return Ok(true) };
         if e.at_ms <= since {
-            return false;
+            return Ok(false);
         }
-        if e.by == PERSON && e.jelly != PAGE && e.kind.is_for_agent() && prefix.as_deref().is_none_or(|p| e.jelly.starts_with(p)) {
-            let text = e.describe();
-            let mut v = json!(e);
-            v["text"] = json!(text);
-            items.push(v);
+        if e.is_inbox_item(&project) {
+            items.push(inbox_item(e));
         }
-        true
+        Ok(true)
     });
     // A partial answer would move the reader's cursor past what it missed.
     read.map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
     items.reverse();
     Ok(Json(json!(items)))
+}
+
+
+fn inbox_item(event: Event) -> Value {
+    json!(InboxItem::from(event))
+}
+
+async fn read_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<InboxBatch>, ApiError> {
+    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req.project, &req.reader)?))
+}
+
+async fn commit_inbox(State(app): State<Shared>, Json(req): Json<InboxCommit>) -> Result<Json<Value>, ApiError> {
+    app.store.lock().expect("store lock").commit_inbox(req)?;
+    Ok(Json(json!({"ok": true})))
 }
 
 
@@ -897,12 +909,12 @@ fn recent_events(app: &App, name: &str) -> (Option<Event>, Vec<Event>) {
     let needle = format!("\"jelly\":\"{name}\"");
     let (mut last, mut mine) = (None, Vec::new());
     let _ = app.store.lock().expect("store lock").events_back(|l| {
-        let Some(e) = l.contains(&needle).then(|| serde_json::from_str::<Event>(l).ok()).flatten() else { return true };
+        let Some(e) = l.contains(&needle).then(|| serde_json::from_str::<Event>(l).ok()).flatten() else { return Ok(true) };
         if e.by == PERSON {
             mine.push(e.clone());
         }
         last.get_or_insert(e);
-        mine.len() < 8
+        Ok(mine.len() < 8)
     });
     mine.reverse();
     (last, mine)
