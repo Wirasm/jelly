@@ -4,7 +4,13 @@ set -eu
 [ -f /.dockerenv ] || { echo 'requires a disposable Docker container' >&2; exit 1; }
 bin=$(realpath "$1")
 root=$(mktemp -d)
-trap 'pkill -x jelly || true; rm -rf "$root"' EXIT
+cleanup() {
+    test_status=$?
+    if [ "$test_status" -ne 0 ]; then cat "$root/out" "$root/err" >&2; fi
+    pkill -x jelly || true
+    rm -rf "$root"
+}
+trap cleanup EXIT
 unset JELLY_URL JELLY_PROJECT JELLY_AS
 cd "$root"
 client() {
