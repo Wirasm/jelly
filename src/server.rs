@@ -1237,10 +1237,19 @@ mod share_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Chrome/Chromium; run explicitly with --ignored"]
     async fn shared_file_renders_assets_and_reading_api() {
         let browser = chrome().expect("Chrome/Chromium required; set JELLY_CHROME to the browser binary");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let callback = format!("http://{}/result", listener.local_addr().unwrap());
+        let (send, mut receive) = tokio::sync::mpsc::channel(1);
+        let results = Router::new().route("/result", post(move |body: String| async move {
+            let result: Value = serde_json::from_str(&body).unwrap();
+            send.send(result).await.unwrap();
+            StatusCode::NO_CONTENT
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, results).await.unwrap(); });
         let view = include_str!("../tests/fixtures/share/view.html")
+            .replace("__TEST_RESULT__", &callback)
             .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS).unwrap().replace("</", "<\\/"))
             .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS).unwrap().replace("</", "<\\/"));
         let (dir, app) = fixture(&view);
@@ -1251,21 +1260,28 @@ mod share_tests {
                 store.put_asset("test:share", file, &png, "agent").unwrap();
             }
             store.put_asset("test:share", "hello.txt", b"hello offline", "agent").unwrap();
+            store.put_asset("test:share", "green.svg", br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><path fill="green" d="M0 0h4v4H0z"/></svg>"##, "agent").unwrap();
+            store.put_asset("test:share", "red.svg", br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><path fill="red" d="M0 0h4v4H0z"/></svg>"##, "agent").unwrap();
+            store.put_asset("test:share", "theme.css", b"@import 'nested.css'; #linked { background-image: url(dot.png); }", "agent").unwrap();
+            store.put_asset("test:share", "nested.css", b"@import 'theme.css'; #imported { background-image: url(dot.png); }", "agent").unwrap();
             store.put_asset("test:share", "helper.js", b"window.localHelper = true;", "agent").unwrap();
         }
         let html = exported(app).await;
         let path = dir.path().join("shared.html");
         std::fs::write(&path, html).unwrap();
-        let output = tokio::time::timeout(std::time::Duration::from_secs(30),
-            tokio::process::Command::new(browser)
-                .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--dump-dom", "--virtual-time-budget=5000"])
-                .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
-                .arg(format!("file://{}", path.display()))
-                .kill_on_drop(true).output()).await.expect("browser timed out").expect("browser could not start");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        let dom = String::from_utf8(output.stdout).unwrap();
-        let result = dom.split_once("<pre id=\"share-test-result\">").expect("browser did not create result element").1.split_once("</pre>").unwrap().0;
-        let result: Value = serde_json::from_str(result).unwrap_or_else(|e| panic!("browser did not finish: {e}: {result}"));
+        let mut browser = tokio::process::Command::new(browser)
+            .args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check"])
+            .arg(format!("--user-data-dir={}", dir.path().join("chrome").display()))
+            .arg(format!("file://{}", path.display()))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true).spawn().expect("browser could not start");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), receive.recv()).await;
+        server.abort();
+        browser.kill().await.expect("browser could not stop");
+        let output = browser.wait_with_output().await.expect("browser output unavailable");
+        let result = result.unwrap_or_else(|_| panic!("browser did not report a result within 30 seconds: {}", String::from_utf8_lossy(&output.stderr)))
+            .expect("browser result channel closed");
         assert_eq!(result["complete"], true, "{result}");
         assert_eq!(result["ok"], true, "{result}");
         println!("{result}");

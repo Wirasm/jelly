@@ -3,31 +3,101 @@
 (() => {
   const boot = window.__JELLY__;
   const assets = new Map(boot.assets);
+  const stylesheetBases = new Map();
   const assetBase = new URL("assets/", document.baseURI);
-  function resource(value) {
+  function resource(value, base = document.baseURI, imports = []) {
     let url;
-    try { url = new URL(value, document.baseURI); } catch { return value; }
+    try { url = new URL(value, stylesheetBases.get(base) ?? base); } catch { return value; }
     if (url.protocol !== assetBase.protocol || url.host !== assetBase.host || !url.pathname.startsWith(assetBase.pathname)) return value;
     let file;
     try { file = decodeURIComponent(url.pathname.slice(assetBase.pathname.length)); } catch { return value; }
-    const uri = assets.get(file);
+    let uri = assets.get(file);
+    if (uri?.startsWith("data:text/css;")) {
+      // CSS data URLs have no directory: resolve nested resources against the uploaded file.
+      // Browsers ignore cyclic imports; the embedded graph must terminate too.
+      if (imports.includes(file)) return "data:text/css,";
+      const bytes = Uint8Array.from(atob(uri.split(",")[1]), c => c.charCodeAt(0));
+      const text = css(new TextDecoder().decode(bytes), url, [...imports, file]);
+      uri = "data:text/css;charset=utf-8," + encodeURIComponent(text);
+      stylesheetBases.set(uri + url.hash, url.href);
+    }
     return uri ? uri + url.hash : value;
   }
-  function css(value) {
-    // CSS escapes are decoded only inside URL tokens, never in strings or comments.
-    return value.replace(/\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|(?<![\w-])url\(\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|((?:\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f])|[^\s)'"\\])*))\s*\)/gi,
-      (token, double, single, bare) => {
-        const raw = double ?? single ?? bare;
-        if (raw === undefined) return token;
-        const url = raw.replace(/\\(?:([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\s\S]))/gi, (_, hex, char) => {
-          if (!hex) return /[\n\r\f]/.test(char) ? "" : char;
-          const point = parseInt(hex, 16);
-          return String.fromCodePoint(!point || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? 0xfffd : point);
-        });
-        const resolved = resource(url);
-        return resolved === url ? token : `url("${resolved}")`;
-      });
+  function unescapeCss(value) {
+    return value.replace(/\\(?:([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\s\S]))/gi, (_, hex, char) => {
+      if (!hex) return /[\n\r\f]/.test(char) ? "" : char;
+      const point = parseInt(hex, 16);
+      return String.fromCodePoint(!point || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? 0xfffd : point);
+    });
   }
+  function css(value, base = document.baseURI, imports = []) {
+    const tokens = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|@?(?:[-\w\u0080-\uffff]|\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f]))+\(?|\s+|[\s\S]/gi;
+    const functions = [];
+    let importing = false, result = "", match;
+    while ((match = tokens.exec(value))) {
+      let token = match[0];
+      const decoded = unescapeCss(token).toLowerCase();
+      const context = functions.at(-1);
+      if (/^\s|^\/\*/.test(token)) { result += token; continue; }
+      if (decoded === "url(") {
+        const argument = /^\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|((?:\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f])|[^\s)'"\\])*))\s*\)/i.exec(value.slice(tokens.lastIndex));
+        if (argument) {
+          const url = unescapeCss(argument[1] ?? argument[2] ?? argument[3]);
+          const resolved = resource(url, base, imports);
+          token = resolved === url ? token + argument[0] : `url("${resolved}")`;
+          tokens.lastIndex += argument[0].length;
+        }
+      } else if (/^["']/.test(token) && (importing || context?.candidate)) {
+        const url = unescapeCss(token.slice(1, -1));
+        const resolved = resource(url, base, imports);
+        if (resolved !== url) token = `"${resolved}"`;
+      }
+      if (context) context.candidate = decoded === "," && context.imageSet;
+      if (decoded.endsWith("(") && decoded !== "url(") {
+        const imageSet = ["image-set(", "-webkit-image-set("].includes(decoded);
+        functions.push({imageSet, candidate: imageSet});
+      } else if (decoded === ")") functions.pop();
+      importing = decoded === "@import";
+      result += token;
+    }
+    return result;
+  }
+  for (const prototype of [CSSStyleSheet.prototype, CSSGroupingRule.prototype]) {
+    const insertRule = prototype.insertRule;
+    prototype.insertRule = function(rule, index) {
+      return insertRule.call(this, css(String(rule), this.href || this.parentStyleSheet?.href || document.baseURI), index);
+    };
+  }
+  for (const name of ["replace", "replaceSync"]) {
+    const replace = CSSStyleSheet.prototype[name];
+    CSSStyleSheet.prototype[name] = function(text) {
+      return replace.call(this, css(String(text)));
+    };
+  }
+  function declaration(value, style) {
+    return typeof value === "string" ? css(value, style.parentRule?.parentStyleSheet?.href || document.baseURI) : value;
+  }
+  const setProperty = CSSStyleDeclaration.prototype.setProperty;
+  CSSStyleDeclaration.prototype.setProperty = function(name, value, priority) {
+    return setProperty.call(this, name, declaration(value, this), priority);
+  };
+  const ruleStyle = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "style");
+  const styles = new WeakMap();
+  Object.defineProperty(CSSStyleRule.prototype, "style", {
+    ...ruleStyle,
+    set(value) { ruleStyle.set.call(this, declaration(value, ruleStyle.get.call(this))); },
+    get() {
+      const style = ruleStyle.get.call(this);
+      if (!styles.has(style)) styles.set(style, new Proxy(style, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+        set(target, key, value) { return Reflect.set(target, key, declaration(value, target), target); },
+      }));
+      return styles.get(style);
+    },
+  });
   function srcset(value) {
     // A URL can contain commas (data URIs); descriptors end at the next comma.
     return value.replace(/([^\s,]\S*)(\s+[^,]*)?/g, (candidate, url, descriptor = "") => {
@@ -59,7 +129,8 @@
   };
   function reconcile(element) {
     for (const attr of [...element.attributes]) {
-      if (!["src", "srcset", "href", "xlink:href", "poster", "style"].includes(attr.name)) continue;
+      if (!["src", "srcset", "href", "xlink:href", "poster", "style", "data"].includes(attr.name)) continue;
+      if (attr.name === "data" && element.localName !== "object") continue;
       const value = attr.value;
       const resolved = attr.name === "style" ? css(value) : attr.name === "srcset" ? srcset(value) : resource(value);
       if (resolved !== value) {
@@ -78,7 +149,7 @@
     reconcile(node);
     node.querySelectorAll("*").forEach(reconcile);
   }
-  new MutationObserver((changes) => {
+  const observer = new MutationObserver((changes) => {
     for (const change of changes) {
       if (change.type === "attributes") reconcile(change.target);
       else {
@@ -87,7 +158,17 @@
         change.addedNodes.forEach(subtree);
       }
     }
-  }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  function observe(root) {
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+  }
+  const attachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function(options) {
+    const root = attachShadow.call(this, options);
+    observe(root);
+    return root;
+  };
+  observe(document.documentElement);
   subtree(document.documentElement);
   const fetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
@@ -116,7 +197,7 @@
     name: boot.name,
     about: boot.about,
     get state() { return boot.state; },
-    asset: (file) => assets.get(file) ?? `assets/${encodeURIComponent(file)}`,
+    asset: (file) => resource(`assets/${encodeURIComponent(file)}`),
     get items() { return boot.attention; },
     get attention() { return boot.attention.filter((a) => !a.answer && !a.withdrawn); },
     itemsAt: (selector) => boot.attention.filter((a) => a.anchor?.selector === selector && !a.withdrawn).reverse(),

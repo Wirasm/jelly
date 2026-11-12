@@ -72,3 +72,21 @@ Enter, Escape and Remove.
 It returns measurements and saves `header-390.png` and `header-1280.png` in the
 scratch directory. Stop the throwaway daemon afterward. Existing homes retain
 their stored surface; use a fresh home for the newly built bundled view.
+
+# Shared-file browser check
+
+`cargo test` includes the shared-file browser regression. Chrome/Chromium is
+required; set `JELLY_CHROME` to its executable if it is not installed in a usual
+location. A missing browser fails the check rather than skipping it.
+
+To run only the sharing checks:
+
+```sh
+cargo test --locked --bin jelly server::share_tests -- --nocapture
+```
+
+The test exports a jelly to a temporary HTML file, opens it through `file://`
+and checks image pixels, CSS resources, shadow roots, embedded objects, uploaded
+stylesheets and scripts, captured attention readers and read-only mutations.
+It uses a temporary browser profile and a loopback test-result receiver, and
+requires no daemon or real jelly home.

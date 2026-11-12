@@ -1,14 +1,15 @@
 <!doctype html><html><head><meta charset="utf-8"></head><body>
 <img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
+<object id="literal-object" data="assets/green.svg" onload="this.dataset.loaded = 'yes'"></object>
 <script src="assets/helper.js"></script>
 <script>
 const errors = [];
 addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true);
 addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
-const result = document.createElement('pre');
-result.id = 'share-test-result';
-document.body.append(result);
 const assert = (ok, message) => { if (!ok) throw Error(message); };
+function finish(outcome) {
+  fetch('__TEST_RESULT__', {method: 'POST', mode: 'no-cors', body: JSON.stringify(outcome)});
+}
 const ids = items => items.map(a => a.id).join(',');
 async function loaded(image) {
   await new Promise((resolve, reject) => {
@@ -75,6 +76,94 @@ async function loaded(image) {
   await loaded(mixed);
   assert(!mixed.getAttribute('srcset').includes(jelly.state.picture), 'data URI srcset boundary');
 
+  async function backgroundPixels(element, step = "") {
+    const value = getComputedStyle(element).backgroundImage;
+    const match = value.match(/"(data:image\/[^"\n]+)"/);
+    assert(match && match[1].startsWith("data:image/"), `embedded background URL ${step}: ${value}`);
+    const image = new Image();
+    image.src = match[1];
+    await loaded(image);
+  }
+  for (const value of [String.raw`\75rl("${jelly.state.picture}")`, `image-set("${jelly.state.picture}" 1x, "assets/unused.png" 2x)`, `-webkit-image-set(url("${jelly.state.picture}") 1x, "assets/unused.png" 2x)`]) {
+    const target = document.createElement('div');
+    document.body.append(target);
+    const sheet = document.createElement('style');
+    sheet.textContent = `#syntax { background-image: ${value}; }`;
+    target.id = 'syntax';
+    document.head.append(sheet);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await backgroundPixels(target);
+    assert(!getComputedStyle(target).backgroundImage.includes('assets/'), 'all CSS candidates embedded');
+    target.style.cssText = `background-image: ${value}`;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(target.style.backgroundImage.includes('data:image/png'), 'inline CSS URL syntax');
+    sheet.remove(); target.remove();
+  }
+  const cssom = document.createElement('style');
+  document.head.append(cssom);
+  cssom.sheet.insertRule(`#background { background-image: url("${jelly.state.picture}"); }`);
+  const cssomTarget = document.getElementById('background');
+  await backgroundPixels(cssomTarget);
+  const rule = cssom.sheet.cssRules[0];
+  rule.style.setProperty('background-image', `url("${jelly.state.picture}")`);
+  await backgroundPixels(cssomTarget, 'setProperty');
+  rule.style.backgroundImage = `url("${jelly.state.picture}")`;
+  await backgroundPixels(cssomTarget, 'backgroundImage');
+  rule.style.cssText = `background-image: url("${jelly.state.picture}")`;
+  await backgroundPixels(cssomTarget, 'cssText');
+  rule.style = `background-image: url("${jelly.state.picture}")`;
+  await backgroundPixels(cssomTarget, 'rule.style');
+  assert(rule.style === rule.style, 'stable CSS declaration identity');
+  cssom.sheet.insertRule('@media all {}');
+  cssom.sheet.cssRules[0].insertRule(`#background { background-image: url("${jelly.state.picture}"); }`);
+  assert(cssom.sheet.cssRules[0].cssRules[0].cssText.includes('data:image/png'), 'group CSSOM');
+  const constructedSheet = new CSSStyleSheet();
+  for (const method of ['replaceSync', 'replace']) {
+    await constructedSheet[method](`#background { background-image: url("${jelly.state.picture}"); }`);
+    assert(constructedSheet.cssRules[0].cssText.includes('data:image/png'), `CSSOM ${method}`);
+  }
+  const host = document.createElement('div');
+  document.body.append(host);
+  const shadow = host.attachShadow({mode: 'closed'});
+  shadow.innerHTML = `<img src="${jelly.state.picture}">`;
+  await loaded(shadow.querySelector('img'));
+  for (const id of ['linked', 'imported']) {
+    const target = document.createElement('div'); target.id = id; document.body.append(target);
+  }
+  const linked = document.createElement('link');
+  linked.rel = 'stylesheet'; linked.href = 'assets/theme.css?cache#sheet';
+  const linkedReady = new Promise((resolve, reject) => { linked.onload = resolve; linked.onerror = reject; });
+  document.head.append(linked);
+  await linkedReady;
+  await backgroundPixels(document.getElementById('linked'));
+  await backgroundPixels(document.getElementById('imported'));
+  const linkedRule = linked.sheet.cssRules[1];
+  linkedRule.style.backgroundImage = 'url(dot.png)';
+  await backgroundPixels(document.getElementById('linked'), 'uploaded CSSOM base');
+  linkedRule.style = 'background-image: url(dot.png)';
+  await backgroundPixels(document.getElementById('linked'), 'uploaded declaration base');
+  const imported = document.createElement('style');
+  imported.textContent = '@import "assets/nested.css";';
+  document.head.append(imported);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert(imported.textContent.includes('data:text/css'), 'string import embedded');
+  assert(jelly.asset('theme.css').startsWith('data:text/css'), 'CSS asset API');
+  const literalObject = document.getElementById('literal-object');
+  if (!literalObject.dataset.loaded) await new Promise((resolve, reject) => { literalObject.onload = resolve; literalObject.onerror = reject; });
+  assert(literalObject.data === jelly.asset('green.svg'), 'parsed object image');
+  for (const initial of [true, false]) {
+    const object = document.createElement('object');
+    const ready = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
+    if (initial) object.data = 'assets/green.svg';
+    document.body.append(object);
+    if (!initial) object.data = 'assets/green.svg';
+    await ready;
+    assert(object.data === jelly.asset('green.svg'), 'object resource embedded');
+    const changed = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
+    object.data = 'assets/red.svg';
+    await changed;
+    assert(object.data === jelly.asset('red.svg'), 'object resource changed');
+  }
   const style = document.createElement('style');
   style.textContent = `#background { background-image: url('${jelly.state.picture}'); --label: "url(${jelly.state.picture})"; }`;
   document.head.append(style);
@@ -126,6 +215,9 @@ async function loaded(image) {
     document.body.append(a);
     return a;
   });
+  const ordinaryData = document.createElement('div');
+  ordinaryData.setAttribute('data', jelly.state.picture);
+  document.body.append(ordinaryData);
   const script = document.createElement('script');
   script.type = 'application/json';
   script.textContent = JSON.stringify({path: jelly.state.picture});
@@ -136,6 +228,7 @@ async function loaded(image) {
   await new Promise(resolve => setTimeout(resolve, 0));
   assert(svgImage.getAttributeNS('http://www.w3.org/1999/xlink', 'href') === jelly.asset('unused.png'), 'later namespaced SVG update');
   assert(links.every((a, i) => a.getAttribute('href') === untouched[i] && a.dataset.path === jelly.state.picture), 'exact local resource matching');
+  assert(ordinaryData.getAttribute('data') === jelly.state.picture, 'ordinary data attribute unchanged');
   assert(JSON.parse(script.textContent).path === jelly.state.picture, 'script data unchanged');
   document.getElementById('late').src = './' + jelly.state.picture + '?changed';
   await loaded(document.getElementById('late'));
@@ -179,6 +272,6 @@ async function loaded(image) {
   assert(calls.length === 0, 'mutations do not request API');
   assert(!performance.getEntriesByType('resource').some(e => /\/api\//.test(e.name)), 'no daemon requests');
   assert(errors.length === 0, errors.join('; '));
-  result.textContent = JSON.stringify({complete: true, ok: true, errors});
-})().catch(e => { result.textContent = JSON.stringify({complete: true, ok: false, error: String(e), errors}); });
+  finish({complete: true, ok: true, errors});
+})().catch(e => finish({complete: true, ok: false, error: String(e), errors}));
 </script></body></html>
