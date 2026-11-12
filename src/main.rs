@@ -516,7 +516,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let mut list = Vec::new();
             for n in names {
                 let j = get(&api(&format!("/{n}")))?;
-                for mut f in j["feedback"].as_array().cloned().unwrap_or_default() {
+                for mut f in j["comments"].as_array().cloned().unwrap_or_default() {
                     if all || f["resolved"] != true {
                         f["jelly"] = json!(n);
                         list.push(f);
