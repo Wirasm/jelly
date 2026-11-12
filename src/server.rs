@@ -733,6 +733,7 @@ struct AnchorFallback {
 #[derive(Debug, PartialEq)]
 enum AnchorPlace {
     Below,
+    Invalid,
     Missing,
     Floating,
     Hidden,
@@ -743,6 +744,7 @@ impl AnchorPlace {
     fn status(&self) -> &'static str {
         match self {
             Self::Below => "below",
+            Self::Invalid => "invalid",
             Self::Missing => "missing",
             Self::Floating => "floating",
             Self::Hidden => "hidden",
@@ -764,6 +766,8 @@ struct Screen {
     /// Errors the page threw or logged.
     #[serde(default)]
     errors: Vec<String>,
+    #[serde(default)]
+    invalid: Vec<String>,
     /// Open questions whose anchor matches nothing: "a2 #f2".
     #[serde(default)]
     missing: Vec<String>,
@@ -788,7 +792,8 @@ struct Screen {
 impl Screen {
     fn placement(&self, item: &str) -> Option<AnchorPlace> {
         let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-        Some(if lists(&self.missing) { AnchorPlace::Missing }
+        Some(if lists(&self.invalid) { AnchorPlace::Invalid }
+        else if lists(&self.missing) { AnchorPlace::Missing }
         else if lists(&self.floating) { AnchorPlace::Floating }
         else if lists(&self.hidden) { AnchorPlace::Hidden }
         else if let Some(f) = self.fallback.iter().find(|f| f.id == item) { AnchorPlace::Fallback(f.clone()) }
@@ -987,6 +992,10 @@ where
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
     if let Some(sc) = &snap {
         for e in &sc.errors { line(&mut out, format!("error    {e}")); }
+        for m in &sc.invalid {
+            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
+            line(&mut out, format!("!        {id} asks about {sel}, which has invalid CSS selector syntax; it shows at the top instead"));
+        }
         for m in &sc.missing {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
             line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; it shows at the top instead"));
@@ -1150,6 +1159,9 @@ mod placement_tests {
         assert_eq!(screen.placement("a1"), Some(AnchorPlace::Floating));
         screen.missing.push("a1 #tile".into());
         assert_eq!(screen.placement("a1"), Some(AnchorPlace::Missing));
+        screen.invalid.push("a3 [".into());
+        assert_eq!(screen.placement("a3"), Some(AnchorPlace::Invalid));
+        assert_eq!(screen.placement("a3").unwrap().status(), "invalid");
     }
 
     #[tokio::test]
@@ -1197,6 +1209,7 @@ mod placement_tests {
     #[test]
     fn unmeasured_snapshots_do_not_confirm_placement() {
         let mut screen: Screen = serde_json::from_value(json!({"owner":"test", "text":"", "width":1, "height":1, "version":1})).unwrap();
+        assert!(screen.invalid.is_empty());
         assert!(screen.fallback.is_empty());
         assert_eq!(screen.placement("a1"), None);
         screen.below.push("a1 #tile".into());

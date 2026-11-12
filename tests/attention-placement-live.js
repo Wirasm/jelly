@@ -37,6 +37,7 @@ async (page) => {
     const results=[];
     const cases=[
       ...['grid','flex','list','table'].map(layout=>({layout,selector:'#'+layout+'0',status:'below'})),
+      {selector:'[',status:'invalid'},
       {selector:'#absent',status:'missing'},
       {selector:'#floating',status:'floating'},
       {selector:'#hidden',status:'hidden'},
@@ -57,6 +58,18 @@ async (page) => {
         ? screen.fallback?.some(f=>f.id===id)
         : screen[status]?.includes(id+' '+selector)));
       if(!snapshot) throw Error('reply lacks browser-produced '+status+' measurement for '+id);
+      if (status==='invalid' || status==='missing') {
+        await page.evaluate(id=>{
+          if(!document.getElementById('jf-q-'+id)?.closest('.jf-ask-top')) throw Error('selector fallback is not at top');
+        },id);
+        const seen=await page.request.get(api+'/see');
+        const text=await seen.text();
+        const diagnosis=status==='invalid'?'has invalid CSS selector syntax':'matches nothing on the page';
+        if(!seen.ok() || !text.includes(id+' asks about '+selector+', which '+diagnosis+'; it shows at the top instead')) {
+          throw Error('see lost selector diagnosis: '+text);
+        }
+        if(snapshot[status==='invalid'?'missing':'invalid']?.includes(id+' '+selector)) throw Error('selector reported in both diagnostic categories');
+      }
       if(destination) {
         const measurement=snapshot.fallback.find(f=>f.id===id);
         if(measurement.destination.kind!==destination.kind || measurement.destination.selector!==destination.selector ||

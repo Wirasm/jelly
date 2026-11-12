@@ -850,11 +850,12 @@ fn report_line(ev: &Value) -> String {
 /// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
     let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
-    if ev["anchor_exposed"] == true {
+    if ev["anchor_exposed"] == true && ev["anchor"] != "invalid" {
         return format!("{at} is in a part that is unavailable right now, so the question is shown at the top");
     }
     match ev["anchor"].as_str() {
         Some("below") => format!("it shows on the page below {at}"),
+        Some("invalid") => format!("{at} has invalid CSS selector syntax, so it shows at the top"),
         Some("missing") => format!("{at} matches nothing on the page, so it shows at the top"),
         Some("floating") => format!("{at} is in a fixed or sticky part of the page, so it shows at the top"),
         Some("hidden") => format!("it shows below {at}, which is not on screen right now"),
@@ -1115,6 +1116,9 @@ mod tests {
             placement(&ev)
         };
         assert_eq!(at(json!({"anchor": "below"})), "it shows on the page below #list");
+        for exposed in [false, true] {
+            assert_eq!(placement(&json!({"args":{"anchor":{"selector":"["}}, "anchor":"invalid", "anchor_exposed":exposed})), "[ has invalid CSS selector syntax, so it shows at the top");
+        }
         assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
         assert_eq!(at(json!({"anchor": "hidden"})), "it shows below #list, which is not on screen right now");

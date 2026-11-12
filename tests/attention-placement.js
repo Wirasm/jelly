@@ -120,6 +120,9 @@ async (page) => {
       for(const pos of ['fixed','sticky','absolute']) addCase(pos,`<div style="position:${pos}"><span id="${pos}">Floating</span></div>`,'#'+pos);
       addCase('hidden','<div hidden><button id="hidden">Hidden</button></div>','#hidden');
       addCase('missing','', '#missing'); addCase('invalid','', '['); addCase('top','');
+      for (const [id,selector] of [['look-missing','#missing'],['look-invalid','[']]) {
+        items.push({id,kind:'look',title:id,by:'test',anchor:{selector}});
+      }
       addCase('ul','<ul id="ul"><li id="ul1">One</li><li>Two</li></ul>','#ul1');
       addCase('reverse','<ol id="reverse" reversed><li id="rev1">Three</li><li>Two</li><li>One</li></ol>','#rev1');
       addCase('reverse-start','<ol id="reverse-start" reversed start="10"><li id="revstart">Ten</li><li>Nine</li></ol>','#revstart');
@@ -207,7 +210,12 @@ async (page) => {
       assert(host('reject').parentElement.nextElementSibling===host('reject-group').parentElement,'fallback and direct cards retain attention order');
       assert(screen.hidden.includes('hidden #hidden'),'hidden outcome preserved');
       for(const pos of ['fixed','sticky','absolute']) assert(screen.floating.some(m=>m.startsWith(pos+' ')),pos+' floating');
-      for(const id of ['missing','invalid']) assert(screen.missing.some(m=>m.startsWith(id+' ')),id+' missing');
+      for(const prefix of ['', 'look-']) {
+        assert(screen.missing.includes(prefix+'missing #missing'),prefix+'missing diagnostic');
+        assert(screen.invalid?.includes(prefix+'invalid ['),prefix+'invalid syntax diagnostic');
+        assert(!screen.missing.includes(prefix+'invalid ['),prefix+'invalid is not missing');
+        for (const suffix of ['missing','invalid']) assert(host(prefix+suffix).closest('.jf-ask-top'),prefix+suffix+' fallback at top');
+      }
       assert(host('top').closest('.jf-ask-top'),'no anchor at top');
       assert(document.querySelectorAll('#reverse > li').length===3,'reversed auto numbering preserved');
       assert(document.getElementById('sp').style.gridRow==='span 2','original styles preserved');
@@ -249,7 +257,11 @@ async (page) => {
     await page.evaluate(()=>{
       assert(!document.querySelector('.jf-slot'),'inline attention opts out');
       const screen=screens.at(-1);
-      assert(screen.missing.some(m=>m.startsWith('missing ')),'inline missing diagnostic');
+      for(const prefix of ['', 'look-']) {
+        assert(screen.missing.includes(prefix+'missing #missing'),'inline missing diagnostic');
+        assert(screen.invalid.includes(prefix+'invalid ['),'inline invalid diagnostic');
+        assert(!screen.missing.includes(prefix+'invalid ['),'inline invalid is not missing');
+      }
       assert(screen.floating.some(m=>m.startsWith('fixed ')),'inline floating diagnostic');
       assert(screen.hidden.some(m=>m.startsWith('hidden ')),'inline hidden diagnostic');
       assert(!screen.below.length && !screen.fallback.length,'inline visible placements remain unchecked');

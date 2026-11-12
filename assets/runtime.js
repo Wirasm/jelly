@@ -286,7 +286,7 @@
     const shown = visible();
     const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor?.selector || "body" } })), keepFocus());
     shown.forEach((f, i) => {
-      const el = anchors[i];
+      const el = anchors[i].element;
       if (!el) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
@@ -417,7 +417,8 @@
         ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(el, pseudo).content));
     });
   }
-  function resolvePlacement(a, el) {
+  function resolvePlacement(a, { element: el, invalid }) {
+    if (invalid) return { kind: "block", after: null, status: "invalid" };
     if (!el) return { kind: "block", after: null, status: a.anchor?.selector ? "missing" : "direct" };
     if (el === document.body || el === document.documentElement || isOurs(el)) return { kind: "block", after: null, status: "floating" };
     const hidden = !available(el);
@@ -637,7 +638,10 @@
         });
       };
       return items.map((a) => {
-        try { return a.anchor?.selector ? (inline() && a.anchor.selector.startsWith("#q-") ? document.getElementById(a.anchor.selector.slice(1)) : document.querySelector(selectorWithFocus(a.anchor.selector))) : null; } catch { return null; }
+        try {
+          const element = a.anchor?.selector ? (inline() && a.anchor.selector.startsWith("#q-") ? document.getElementById(a.anchor.selector.slice(1)) : document.querySelector(selectorWithFocus(a.anchor.selector))) : null;
+          return { element };
+        } catch { return { element: null, invalid: true }; }
       });
     } finally {
       for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
@@ -713,7 +717,7 @@
     restoreFocus();
     outcomes = new Map((refreshingAttention ? [] : allItems).map((a, i) => {
       const p = placements[i];
-      const status = selfRendered && !["missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
+      const status = selfRendered && !["invalid", "missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
       return [a.id, { status, destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
     }));
     if (topStack && !topStack.children.length) topStack.remove();
@@ -833,7 +837,7 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
+          page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
           fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) location.reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
