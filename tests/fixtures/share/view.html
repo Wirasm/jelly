@@ -14,7 +14,6 @@ customElements.define('share-root-probe', class extends HTMLElement {
   connectedCallback() { declarativeRoots.push(this.getRootNode()); }
 });
 </script>
-__GC_ROOTS__
 <div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
 <div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
 <template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"></template>
@@ -35,6 +34,8 @@ const assert = (ok, message) => { if (!ok) throw Error(message); };
 function finish(outcome) {
   fetch('__TEST_RESULT__', {method: 'POST', mode: 'no-cors', body: JSON.stringify(outcome)});
 }
+let step = 'initial resources';
+setTimeout(() => finish({complete: true, ok: false, error: `Timed out during ${step}`, errors}), 25000);
 const ids = items => items.map(a => a.id).join(',');
 async function loaded(image) {
   await new Promise((resolve, reject) => {
@@ -245,68 +246,12 @@ async function loaded(image) {
     assert(getComputedStyle(target, '::after').content === '"café"', `stylesheet encoding ${file}`);
     await backgroundPixels(target, `stylesheet encoding ${file}`);
   }
+  assert(new Uint8Array(await (await fetch('assets/legacy.css')).arrayBuffer()).includes(0xe9), 'original legacy CSS bytes');
+  assert(new Uint8Array(await (await fetch(jelly.asset('utf16.css'))).arrayBuffer())[0] === 0xff, 'original UTF-16 CSS bytes');
+  step = 'object resources';
   const literalObject = document.getElementById('literal-object');
   if (!literalObject.dataset.loaded) await new Promise((resolve, reject) => { literalObject.onload = resolve; literalObject.onerror = reject; });
   assert(literalObject.data === jelly.asset('green.svg'), 'parsed object image');
-  const encodingFailures = [];
-  async function checkLinkEncoding(rel, route) {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const root = host.attachShadow({mode: 'closed'});
-    root.innerHTML = '<div id="encoding-link-selected" class="café"></div>';
-    const link = document.createElement('link');
-    const url = route.startsWith('api') ? jelly.asset('link-selected.css') : 'assets/link-selected.css';
-    if (!route.includes('late-rel')) link.rel = rel;
-    if (!route.includes('late-charset')) link.charset = 'windows-1252';
-    link.href = url;
-    root.append(link);
-    // Let reconciliation run before the link gets its final decoding context.
-    await new Promise(resolve => setTimeout(resolve, 0));
-    if (route.includes('late-rel')) link.rel = rel;
-    if (route.includes('late-charset')) link.charset = 'windows-1252';
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const deadline = performance.now() + 1000;
-    while (!link.sheet && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
-    assert(link.sheet, `stylesheet loaded ${rel}: ${route}`);
-    const target = root.querySelector('div');
-    if (getComputedStyle(target, '::after').content !== '"café"') encodingFailures.push(`${rel}: ${route}`);
-    else await backgroundPixels(target, `${rel}: ${route}`);
-    assert(new Uint8Array(await (await fetch(link.href)).arrayBuffer()).includes(0xe9), 'requalified CSS retains original bytes');
-    host.remove();
-  }
-  for (const route of ['literal', 'api', 'late-rel', 'late-charset', 'late-rel-late-charset', 'api-late-rel', 'api-late-charset', 'api-late-rel-late-charset']) {
-    await checkLinkEncoding('StyleSheet', route);
-  }
-  await Promise.all(Array.from({length: 1024}, (_, bits) => {
-    const rel = [...'stylesheet'].map((c, i) => bits & (1 << i) ? c.toUpperCase() : c).join('');
-    return checkLinkEncoding(rel, 'literal');
-  }));
-  document.querySelectorAll('.discard-root').forEach(host => host.remove());
-  function discardImperativeRoots() {
-    for (const mode of ['open', 'closed']) for (const connected of [true, false]) for (let i = 0; i < 25; i++) {
-      const host = document.createElement('div');
-      if (connected) document.body.append(host);
-      const root = host.attachShadow({mode});
-      root.innerHTML = '<span>discarded</span>';
-      discardedRoots.push({kind: `imperative-${mode}-${connected}`, ref: new WeakRef(root)});
-      host.remove();
-    }
-  }
-  discardImperativeRoots();
-  assert(discardedRoots.length === 150, 'all six discarded-root groups populated');
-  // WeakRef targets survive their creating job; collect in later browser tasks.
-  for (let i = 0; i < 3; i++) {
-    await new Promise(resolve => setTimeout(resolve, 0));
-    gc();
-  }
-  const retained = discardedRoots.filter(({ref}) => ref.deref()).map(({kind}) => kind);
-  assert(!encodingFailures.length && !retained.length, JSON.stringify({encodingFailures: encodingFailures.length, examples: encodingFailures.slice(0, 8), retained: Object.fromEntries([...new Set(retained)].map(kind => [kind, retained.filter(value => value === kind).length]))}));
-  for (const root of liveRoots) {
-    root.innerHTML = '<img src="assets/unused.png">';
-    await loaded(root.querySelector('img'));
-  }
-  assert(new Uint8Array(await (await fetch('assets/legacy.css')).arrayBuffer()).includes(0xe9), 'original legacy CSS bytes');
-  assert(new Uint8Array(await (await fetch(jelly.asset('utf16.css'))).arrayBuffer())[0] === 0xff, 'original UTF-16 CSS bytes');
   for (const initial of [true, false]) {
     const object = document.createElement('object');
     const ready = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
@@ -395,6 +340,65 @@ async function loaded(image) {
   }
   assert((await fetch(path, {method: 'HEAD'})).ok, 'HEAD asset fetch');
   assert(await (await fetch('data:text/plain,unrelated')).text() === 'unrelated', 'native fetch');
+  step = 'stylesheet encodings and root collection';
+  const encodingFailures = [];
+  async function checkLinkEncoding(rel, route) {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = host.attachShadow({mode: 'closed'});
+    root.innerHTML = '<div id="encoding-link-selected" class="café"></div>';
+    const link = document.createElement('link');
+    const url = route.startsWith('api') ? jelly.asset('link-selected.css') : 'assets/link-selected.css';
+    if (!route.includes('late-rel')) link.rel = rel;
+    if (!route.includes('late-charset')) link.charset = 'windows-1252';
+    link.href = url;
+    root.append(link);
+    // Let reconciliation run before the link gets its final decoding context.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (route.includes('late-rel')) link.rel = rel;
+    if (route.includes('late-charset')) link.charset = 'windows-1252';
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const deadline = performance.now() + 1000;
+    while (!link.sheet && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    assert(link.sheet, `stylesheet loaded ${rel}: ${route}`);
+    const target = root.querySelector('div');
+    if (getComputedStyle(target, '::after').content !== '"café"') encodingFailures.push(`${rel}: ${route}`);
+    else await backgroundPixels(target, `${rel}: ${route}`);
+    assert(new Uint8Array(await (await fetch(link.href)).arrayBuffer()).includes(0xe9), 'requalified CSS retains original bytes');
+    host.remove();
+  }
+  for (const route of ['literal', 'api', 'late-rel', 'late-charset', 'late-rel-late-charset', 'api-late-rel', 'api-late-charset', 'api-late-rel-late-charset']) {
+    await checkLinkEncoding('StyleSheet', route);
+  }
+  await Promise.all(Array.from({length: 1024}, (_, bits) => {
+    const rel = [...'stylesheet'].map((c, i) => bits & (1 << i) ? c.toUpperCase() : c).join('');
+    return checkLinkEncoding(rel, 'literal');
+  }));
+  document.querySelectorAll('.discard-root').forEach(host => host.remove());
+  function discardImperativeRoots() {
+    for (const mode of ['open', 'closed']) for (const connected of [true, false]) for (let i = 0; i < 25; i++) {
+      const host = document.createElement('div');
+      if (connected) document.body.append(host);
+      const root = host.attachShadow({mode});
+      root.innerHTML = '<span>discarded</span>';
+      discardedRoots.push({kind: `imperative-${mode}-${connected}`, ref: new WeakRef(root)});
+      host.remove();
+    }
+  }
+  discardImperativeRoots();
+  assert(discardedRoots.length === 150, 'all six discarded-root groups populated');
+  // WeakRef targets survive their creating job; collect in later browser tasks.
+  for (let i = 0; i < 3; i++) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    gc();
+  }
+  const retained = discardedRoots.filter(({ref}) => ref.deref()).map(({kind}) => kind);
+  assert(!encodingFailures.length && !retained.length, JSON.stringify({encodingFailures: encodingFailures.length, examples: encodingFailures.slice(0, 8), retained: Object.fromEntries([...new Set(retained)].map(kind => [kind, retained.filter(value => value === kind).length]))}));
+  for (const root of liveRoots) {
+    root.innerHTML = '<img src="assets/unused.png">';
+    await loaded(root.querySelector('img'));
+  }
+  step = 'attention readers';
   const matrix = [];
   for (const kind of ['ask', 'look']) for (const answer of [undefined, {text: 'yes'}]) for (const withdrawn of [undefined, {by: 'agent'}]) for (const selector of [undefined, '#pictures', '#other']) {
     matrix.push({id: `item-${matrix.length}`, kind, title: 'test', answer, withdrawn, anchor: selector ? {selector} : undefined});
@@ -430,4 +434,6 @@ async function loaded(image) {
   assert(errors.length === 0, errors.join('; '));
   finish({complete: true, ok: true, errors});
 })().catch(e => finish({complete: true, ok: false, error: String(e), errors}));
-</script></body></html>
+</script>
+__GC_ROOTS__
+</body></html>
