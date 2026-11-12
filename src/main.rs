@@ -439,7 +439,13 @@ fn run(cli: Cli) -> Result<(), String> {
                 return Err("the daemon did not say which attention item it made".into());
             };
             let item = await_answer(&cli.url, jelly, item, timeout)?;
-            if json { print(item) } else { println!("{}", answer_line(&item)); Ok(()) }
+            if !json {
+                println!("{}", answer_line(&item));
+                return Ok(());
+            }
+            let mut out = json!(item);
+            out["jelly"] = json!(jelly);
+            print(out)
         }
         Cmd::Look { name, what, at, context } => {
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
@@ -704,22 +710,18 @@ fn detect_project(given: Option<String>) -> String {
 }
 
 /// Blocks until attention item `item` on `jelly` is answered or withdrawn, and
-/// returns it with a `jelly` field. It subscribes before reading the item, and
-/// reads it again on every event of that jelly, so no answer is missed.
-fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Result<Value, String> {
+/// returns it. It subscribes before reading the item, and reads it again on
+/// every event of that jelly, so no answer is missed.
+fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Result<store::Attention, String> {
     let mut req = ureq::get(&format!("{url}/api/events?jelly={}", encode(jelly)));
     if let Some(t) = timeout {
         req = req.timeout(std::time::Duration::from_secs(t));
     }
-    let settled = || -> Result<Option<Value>, String> {
+    let settled = || -> Result<Option<store::Attention>, String> {
         let j = get(&format!("{url}/api/jellies/{jelly}"))?;
-        let mut found = j["attention"].as_array().into_iter().flatten().find(|a| a["id"] == item).cloned()
-            .ok_or_else(|| format!("{jelly} has no attention item {item}"))?;
-        if found["answer"].is_null() && found["withdrawn"].is_null() {
-            return Ok(None);
-        }
-        found["jelly"] = json!(jelly);
-        Ok(Some(found))
+        let items = Vec::<store::Attention>::deserialize(&j["attention"]).map_err(|e| e.to_string())?;
+        let found = items.into_iter().find(|a| a.id == item).ok_or_else(|| format!("{jelly} has no attention item {item}"))?;
+        Ok((!found.is_open()).then_some(found))
     };
     let resp = req.call().map_err(describe)?;
     if let Some(done) = settled()? {
@@ -744,15 +746,15 @@ fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Res
 }
 
 /// What the person made of an ask: `a1 answered: roomy · "keep the table"`.
-fn answer_line(item: &Value) -> String {
-    let id = item["id"].as_str().unwrap_or("?");
-    if !item["withdrawn"].is_null() {
-        return format!("{id} withdrawn");
-    }
-    let option = item["answer"]["option"].as_str().filter(|o| !o.is_empty());
-    let note = item["answer"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!("{t:?}"));
-    let what: Vec<String> = option.map(String::from).into_iter().chain(note).collect();
-    format!("{id} answered: {}", what.join(" · "))
+fn answer_line(item: &store::Attention) -> String {
+    let answer = match (&item.withdrawn, &item.answer) {
+        (None, Some(answer)) => answer,
+        _ => return format!("{} withdrawn", item.id),
+    };
+    let option = answer.option.clone().filter(|o| !o.is_empty());
+    let note = Some(&answer.text).filter(|t| !t.is_empty()).map(|t| format!("{t:?}"));
+    let what: Vec<String> = option.into_iter().chain(note).collect();
+    format!("{} answered: {}", item.id, what.join(" · "))
 }
 
 /// One line on what a write did. The full event is in `jelly events`.
@@ -872,11 +874,16 @@ mod tests {
 
     #[test]
     fn an_answer_is_one_line() {
-        let answered = |option: serde_json::Value, text: &str| answer_line(&json!({"id": "a1", "answer": {"option": option, "text": text}}));
+        let item = |extra: serde_json::Value| {
+            let mut a = json!({"id": "a1", "kind": "ask", "title": "Q", "by": "agent", "at_ms": 1});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            answer_line(&serde_json::from_value(a).unwrap())
+        };
+        let answered = |option: serde_json::Value, text: &str| item(json!({"answer": {"option": option, "text": text, "by": "person", "at_ms": 2}}));
         assert_eq!(answered(json!("roomy"), "but keep the dense table"), r#"a1 answered: roomy · "but keep the dense table""#);
         assert_eq!(answered(json!("roomy"), ""), "a1 answered: roomy");
         assert_eq!(answered(json!(null), "neither"), r#"a1 answered: "neither""#);
-        assert_eq!(answer_line(&json!({"id": "a1", "answer": null, "withdrawn": {"by": "agent", "at_ms": 1}})), "a1 withdrawn");
+        assert_eq!(item(json!({"withdrawn": {"by": "agent", "at_ms": 2}})), "a1 withdrawn");
     }
 
     #[test]

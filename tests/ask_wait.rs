@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Output};
+use std::time::Duration;
 
 /// A daemon on a free port and a throwaway home, killed on drop.
 struct Daemon {
@@ -42,13 +43,14 @@ fn daemon() -> Daemon {
                 .unwrap();
             return d;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
     }
     panic!("the daemon did not start");
 }
 
-/// On the first attention event, posts `action` to that item as the person would.
-fn react(url: &str, action: &'static str, body: Value) -> std::thread::JoinHandle<()> {
+/// On the first attention event, waits `after`, then posts `action` to that
+/// item as the person would.
+fn react(url: &str, after: Duration, action: &'static str, body: Value) -> std::thread::JoinHandle<()> {
     let url = url.to_string();
     let resp = ureq::get(&format!("{url}/api/events?jelly=t:q")).call().unwrap();
     std::thread::spawn(move || {
@@ -58,6 +60,7 @@ fn react(url: &str, action: &'static str, body: Value) -> std::thread::JoinHandl
             let ev: Value = serde_json::from_str(data.trim()).unwrap();
             if ev["kind"] == "attention" {
                 let item = ev["args"]["id"].as_str().unwrap();
+                std::thread::sleep(after);
                 ureq::post(&format!("{url}/api/jellies/t:q/attention/{item}/{action}")).send_json(body).unwrap();
                 return;
             }
@@ -76,7 +79,7 @@ fn ask(url: &str, extra: &[&str]) -> Output {
 #[test]
 fn an_answer_given_before_the_asker_listens_is_returned() {
     let d = daemon();
-    let person = react(&d.url, "answer", json!({"option": "b", "text": "keep it short", "by": "person"}));
+    let person = react(&d.url, Duration::ZERO, "answer", json!({"option": "b", "text": "keep it short", "by": "person"}));
     let out = ask(&d.url, &["--at", "#x", "--timeout", "20"]);
     person.join().unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -84,9 +87,20 @@ fn an_answer_given_before_the_asker_listens_is_returned() {
 }
 
 #[test]
+fn an_answer_given_while_the_asker_listens_is_returned() {
+    let d = daemon();
+    // Ample time for the asker to subscribe and find the item still open.
+    let person = react(&d.url, Duration::from_secs(2), "answer", json!({"option": "a", "by": "person"}));
+    let out = ask(&d.url, &["--timeout", "20"]);
+    person.join().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "a1 answered: a\n");
+}
+
+#[test]
 fn a_withdrawn_ask_returns_and_json_prints_the_item() {
     let d = daemon();
-    let other = react(&d.url, "withdraw", json!({"by": "other"}));
+    let other = react(&d.url, Duration::ZERO, "withdraw", json!({"by": "other"}));
     let out = ask(&d.url, &["--json", "--timeout", "20"]);
     other.join().unwrap();
     assert!(out.status.success(), "{out:?}");
