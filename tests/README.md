@@ -15,7 +15,7 @@ printf 'const verbs = {};\n' > /tmp/jelly-visibility-verbs.js
 Run the browser from a scratch directory so generated browser files stay outside
 the checkout. A home created by an earlier build retains its stored jelly page;
 use a fresh home, or update that test page with
-`jelly --url http://127.0.0.1:17881 reshape surface --view assets/surface.html`
+`/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 reshape surface --view assets/surface.html`
 from the checkout before running. The program takes the daemon URL from the open page and creates
 fresh jellies through the API. Use an absolute path to the test:
 
