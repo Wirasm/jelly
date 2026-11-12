@@ -100,9 +100,10 @@
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
     }
-    if (ev.view_rev !== boot.viewRev) { location.reload(); return; }
+    if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { location.reload(); return; }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads().catch(console.error);
+
     if (ev.kind === "working") { working = ev.args ? { what: ev.args, by: ev.by } : null; drawWorking(); }
     apply(ev);
   });
@@ -193,17 +194,19 @@
   btn.textContent = "Comment";
   btn.title = "Pin a comment to any part of this jelly (or hold Option and click)";
 
+  // Everything the runtime adds to a view. Selectors name view elements only.
+  const OURS = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
+  const isOurs = (el) => el.closest(OURS);
   function selectorFor(el) {
     const parts = [];
     for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
       if (n.id) { parts.unshift("#" + CSS.escape(n.id)); break; }
       let i = 1;
-      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) i++;
+      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName && !isOurs(s)) i++;
       parts.unshift(`${n.tagName.toLowerCase()}:nth-of-type(${i})`);
     }
     return parts.join(" > ") || "body";
   }
-  const isOurs = (el) => el.closest(".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work");
 
   // On the jelly page, the page's header owns the Comment button.
   const embedded = window.parent !== window;
@@ -280,9 +283,10 @@
     drawAttention();
     markerEls.forEach((p) => p.remove());
     markerEls = [];
-    visible().forEach((f, i) => {
-      let el = null;
-      try { el = document.querySelector(f.anchor?.selector || "body"); } catch {}
+    const shown = visible();
+    const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor?.selector || "body" } })), keepFocus());
+    shown.forEach((f, i) => {
+      const el = anchors[i];
       if (!el) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
@@ -300,7 +304,7 @@
     });
   }
   // ---- attention: questions sit on the page, right below what they are about ----
-  // Each question is a card in the page flow, after its anchor element (or at the
+  // Each question is a card in the page flow, after its anchor row (or at the
   // top when it has none). It lives in a shadow root so the page's CSS and ours
   // never touch. Answered questions shrink to one line for a day, with Change.
   const DAY_MS = 86400000;
@@ -330,7 +334,7 @@
     .o.rec-o b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
     .o.on { border-color: var(--accent); background: var(--tint); }
     .row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
-    textarea { flex: 1; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+    textarea { flex: 1; min-width: 0; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
     textarea:focus { outline: none; border-color: var(--accent); }
     .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent); color: #fff; white-space: nowrap; }
     .go[disabled] { opacity: .4; cursor: default; }
@@ -350,21 +354,101 @@
     const scheme = getComputedStyle(document.documentElement).colorScheme + " " + (document.querySelector('meta[name="color-scheme"]')?.content || "");
     return /dark/.test(scheme) && matchMedia("(prefers-color-scheme: dark)").matches;
   }
-  // Where a card goes: after its anchor, lifted out of grids, flex rows, lists and
-  // tables so it gets a full row; at the top when the anchor is missing or floats.
-  function placeAfter(a) {
-    let el = anchorElement(a);
-    if (!el || el === document.body) return null;
-    if (el.closest(".jf-ask")) return null;
-    // A card cannot live inside a drawing: go below the whole SVG.
-    while (el.ownerSVGElement) el = el.ownerSVGElement;
-    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return null;
-    while (el.parentElement && el.parentElement !== document.body) {
+  function normalBoundary(el) {
+    while (el?.parentElement && el.parentElement !== document.body) {
+
       const p = el.parentElement, d = getComputedStyle(p).display;
-      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
+      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TFOOT", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
       else break;
     }
-    return el;
+    return el === document.body || el === document.documentElement ? null : el;
+  }
+  function fallback(group) {
+    return { kind: "block", after: normalBoundary(group), observe: group, status: "fallback", reason: "this layout cannot take a full-width question row" };
+  }
+  function rowPlacement(group, item) {
+    const cs = getComputedStyle(group), grid = cs.display.includes("grid");
+    if (cs.transform !== "none" || [...group.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) ||
+        cs.writingMode !== "horizontal-tb" || cs.direction !== "ltr" ||
+        (grid ? cs.gridAutoFlow !== "row" : cs.flexDirection !== "row" || cs.flexWrap !== "wrap")) return fallback(group);
+    const children = [...group.children].filter((el) => !isOurs(el) && el.getClientRects().length && !["absolute", "fixed"].includes(getComputedStyle(el).position));
+    const rows = [];
+    for (const el of children) {
+      const style = getComputedStyle(el), r = el.getBoundingClientRect();
+      if (style.order !== "0" || style.transform !== "none" || style.position === "relative" && [style.top, style.right, style.bottom, style.left].some((v) => v !== "auto" && parseFloat(v) !== 0) ||
+          (grid && [style.gridRowStart, style.gridRowEnd, style.gridColumnStart, style.gridColumnEnd].some((v) => v !== "auto"))) return fallback(group);
+      if (!r.width || !r.height) continue;
+      let row = rows.at(-1);
+      if (!row || r.top >= row.bottom - 1) { row = { top: r.top, bottom: r.bottom, members: [] }; rows.push(row); }
+      else if (r.bottom <= row.top + 1 || row.members.some((peer) => {
+        const pr = peer.getBoundingClientRect();
+        return r.left < pr.right - 1 && r.right > pr.left + 1;
+      })) return fallback(group);
+      row.top = Math.min(row.top, r.top); row.bottom = Math.max(row.bottom, r.bottom); row.members.push(el);
+    }
+    const i = rows.findIndex((row) => row.members.includes(item));
+    if (i < 0) return fallback(group);
+    return { kind: grid ? "grid" : "flex", group, after: rows[i].members.at(-1), peers: rows[i].members, later: rows.slice(i + 1).flatMap((row) => row.members) };
+  }
+  function tablePlacement(row) {
+    const table = row.closest("table"), rows = [...table.rows].filter((r) => !isOurs(r));
+    let occupied = [], rowGroup = null;
+    let columns = 0, crossing = false;
+    for (const r of rows) {
+      if (r.parentElement !== rowGroup) { occupied = []; rowGroup = r.parentElement; }
+      let col = 0;
+      for (const cell of r.cells) {
+        while (occupied[col] > 0) col++;
+        const span = cell.rowSpan || Infinity;
+        for (let i = 0; i < cell.colSpan; i++) occupied[col++] = span;
+      }
+      columns = Math.max(columns, occupied.length);
+      if (r === row) crossing = occupied.some((span) => span > 1);
+      for (let i = 0; i < occupied.length; i++) occupied[i] = Math.max(0, occupied[i] - 1);
+    }
+    return crossing ? fallback(table) : { kind: "table", group: table, after: row, columns, peers: [row], later: rows.slice(rows.indexOf(row) + 1) };
+  }
+  function listCanInsert(group) {
+    // Without an explicit start, a reversed list counts every li, including slots.
+    if (group.reversed && !group.hasAttribute("start")) return false;
+    return [...group.children].filter((el) => !isOurs(el)).every((el) => {
+      const increment = getComputedStyle(el).counterIncrement;
+      return ["none", "list-item 1", "list-item -1"].includes(increment) &&
+        ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(el, pseudo).content));
+    });
+  }
+  function resolvePlacement(a, el) {
+    if (!el) return { kind: "block", after: null, status: a.anchor?.selector ? "missing" : "direct" };
+    if (el === document.body || el === document.documentElement || isOurs(el)) return { kind: "block", after: null, status: "floating" };
+    const hidden = !available(el);
+    const svg = !!el.ownerSVGElement;
+    while (el.ownerSVGElement) el = el.ownerSVGElement;
+    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return { kind: "block", after: null, status: "floating" };
+    if (hidden) return { kind: "block", after: null, status: "hidden" };
+    let result;
+    for (let item = el; item && item !== document.body; item = item.parentElement) {
+      const group = item.parentElement;
+      if (!group) break;
+      const display = getComputedStyle(group).display;
+      if (["TD", "TH"].includes(item.tagName)) { result = tablePlacement(item.parentElement); break; }
+      if (item.tagName === "TR") { result = tablePlacement(item); break; }
+      if (["UL", "OL"].includes(group.tagName) && !listCanInsert(group)) { result = fallback(group); break; }
+      if (display.includes("grid") || display.includes("flex")) {
+        const restricted = group.closest("button, a, label, p");
+        if (restricted === group) continue;
+        result = restricted ? fallback(restricted) : rowPlacement(group, item);
+        break;
+      }
+      if (item.tagName === "LI" && ["UL", "OL"].includes(group.tagName)) {
+        const siblings = [...group.children].filter((el) => !isOurs(el));
+        result = { kind: "list", after: item, group, peers: [item], later: siblings.slice(siblings.indexOf(item) + 1) };
+        break;
+      }
+    }
+    result ||= { kind: "block", after: normalBoundary(el) };
+    if (!result.status && result.kind === "block" && result.after !== el) { result.status = "fallback"; result.reason = "the anchor cannot contain a question card"; }
+    if (svg && !result.status) { result.status = "fallback"; result.reason = "the anchor is inside a drawing"; }
+    return result;
   }
   function renderCard(host, a) {
     const root = host.shadowRoot;
@@ -444,15 +528,6 @@
   addEventListener("focusin", () => { blurredCardControl = null; });
   addEventListener("focusout", (e) => { blurredCardControl = e.target.matches?.(".jf-ask") && !available(e.target) ? e.composedPath()[0] : null; });
   let topStack = null;
-  function atTop(host) {
-    if (!topStack?.isConnected) {
-      topStack = document.createElement("div");
-      topStack.className = "jf-ask jf-ask-top";
-      topStack.style.cssText = "display:block;grid-column:1/-1;flex-basis:100%;box-sizing:border-box;width:100%;min-width:0;max-width:calc(100vw - 32px);margin:14px 0";
-    }
-    if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
-    if (host.parentElement !== topStack) topStack.appendChild(host);
-  }
   function exposureLabel(host, a, rescued) {
     let label = host.shadowRoot.querySelector(".exposure");
     if (!label) {
@@ -464,61 +539,193 @@
     if (label.textContent !== text) label.textContent = text;
     host.toggleAttribute("data-exposed", rescued);
   }
-  function drawAttention() {
+  let outcomes = new Map();
+  const slots = new Map();
+  const groupObserver = new ResizeObserver(() => queueDraw());
+  let observedGroups = new Set();
+  function slotFor(id, host, place) {
+    // The form's intrinsic width must not widen an auto-layout table.
+    host.style.contain = place.kind === "table" ? "inline-size" : "";
+    const tag = place.kind === "table" ? "tr" : place.kind === "list" || ["UL", "OL"].includes(place.group?.tagName) ? "li" : "div";
+    let slot = slots.get(id);
+    if (!slot || slot.localName !== tag) {
+      slot?.remove();
+      slot = document.createElement(tag);
+      slot.className = "jf-ask jf-slot";
+      slots.set(id, slot);
+      if (tag === "tr") slot.appendChild(document.createElement("td"));
+    }
+    const container = tag === "tr" ? slot.firstElementChild : slot;
+    if (host.parentElement !== container) container.appendChild(host);
+    let style = "display:block;min-width:0;box-sizing:border-box;";
+    if (tag === "li") style += "list-style:none;counter-increment:list-item 0;padding:0;";
+    if (place.kind === "grid") style += "grid-column:1 / -1;grid-row:auto;align-self:stretch;justify-self:stretch;";
+    if (place.kind === "flex") style += "flex:0 0 100%;";
+    if (tag === "tr") {
+      style = "";
+      const cell = slot.firstElementChild;
+      cell.colSpan = place.columns;
+      cell.style.cssText = "padding:0;min-width:0;";
+    }
+    if (slot.style.cssText !== style) slot.style.cssText = style;
+    return slot;
+  }
+  function insertSlot(slot, place, tails) {
+    if (place.after) {
+      const tail = tails.get(place.after) || place.after;
+      if (tail.nextElementSibling !== slot) tail.after(slot);
+      tails.set(place.after, slot);
+    } else {
+      if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
+      if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
+      const first = [...document.body.children].find((c) => !isOurs(c) && c.getBoundingClientRect().width > 0);
+      const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
+      const style = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
+      if (topStack.style.cssText !== style) topStack.style.cssText = style;
+      const tail = tails.get(topStack);
+      if (tail) { if (tail.nextElementSibling !== slot) tail.after(slot); }
+      else if (topStack.firstElementChild !== slot) topStack.prepend(slot);
+      tails.set(topStack, slot);
+    }
+  }
+  function rowFits(place, slot) {
+    const r = slot.getBoundingClientRect(), g = place.group.getBoundingClientRect(), cs = getComputedStyle(place.group);
+    if (place.kind === "table") {
+      const peer = place.after.getBoundingClientRect();
+      return Math.abs(r.left - peer.left) <= 1 && Math.abs(r.right - peer.right) <= 1 &&
+        peer.bottom <= r.top + 1 && place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
+    }
+    const left = g.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+    const right = g.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+    return Math.abs(r.left - left) <= 1 && Math.abs(r.right - right) <= 1 &&
+      place.peers.every((el) => el.getBoundingClientRect().bottom <= r.top + 1) &&
+      place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
+  }
+  function attentionAnchors(items, restoreFocus) {
+    const focusStates = ["focus", "focus-visible", "focus-within"].map((pseudo) => ({
+      pseudo, elements: [...document.querySelectorAll(`:${pseudo}`)].filter((el) => !isOurs(el)),
+    }));
+    // Structural selectors need owned siblings absent, but detachment clears
+    // focus pseudos. Match saved elements by their paths in the original tree.
+    // A style rule's selectorText is the browser's own serialization: escapes
+    // resolved, names lowercased, invalid forgiving arguments dropped.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("*{}");
+    const rule = sheet.cssRules[0];
+    const elementPath = (el) => {
+      const path = [];
+      for (let node = el; node.parentElement; node = node.parentElement) {
+        let index = 1;
+        for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) index++;
+        path.unshift(`:nth-child(${index})`);
+      }
+      return [":root", ...path].join(" > ");
+    };
+    const owned = [...document.querySelectorAll(OURS)]
+      .filter((el) => !el.parentElement || !isOurs(el.parentElement));
+    const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
+    try {
+      for (const el of owned) el.remove();
+      const focusSelectors = focusStates.map(({ pseudo, elements }) => ({
+        pseudo, selector: elements.map(elementPath).join(",") || ":not(*)",
+      }));
+      const selectorWithFocus = (selector) => {
+        // An invalid selector leaves selectorText as it was, so reject it first.
+        document.createDocumentFragment().querySelector(selector);
+        rule.selectorText = selector;
+        return rule.selectorText.replace(/"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|:[\w-]+/g, (token) => {
+          const state = focusSelectors.find((state) => `:${state.pseudo}` === token);
+          return state ? `:is(${state.selector})` : token;
+        });
+      };
+      return items.map((a) => {
+        try { return a.anchor?.selector ? (inline() && a.anchor.selector.startsWith("#q-") ? document.getElementById(a.anchor.selector.slice(1)) : document.querySelector(selectorWithFocus(a.anchor.selector))) : null; } catch { return null; }
+      });
+    } finally {
+      for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
+      restoreFocus();
+    }
+  }
+  // Returns a function that puts focus and selection back where they are now.
+  function keepFocus() {
     const focusedHost = document.hasFocus() ? [...cards.values()].find((h) => h.shadowRoot.activeElement || (h.shadowRoot.contains(blurredCardControl) && !available(h))) : null;
-    const focused = focusedHost?.shadowRoot.activeElement || (focusedHost ? blurredCardControl : null);
-    const selection = focused?.tagName === "TEXTAREA" ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
-    const oldParent = focusedHost?.parentElement;
-    const items = inline() ? [] : shownItems();
+    const focused = focusedHost?.shadowRoot.activeElement || (focusedHost ? blurredCardControl : document.activeElement);
+    const oldSlotParent = focusedHost?.parentElement?.parentElement;
+    const selection = focused && "selectionStart" in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+    return () => {
+      if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+        if (selection) focused.setSelectionRange(...selection);
+      }
+      if (focusedHost?.isConnected && oldSlotParent !== focusedHost.parentElement?.parentElement) focused.scrollIntoView({ block: "nearest" });
+    };
+  }
+  function drawAttention() {
+    const restoreFocus = keepFocus();
+    const allItems = shownItems();
+    const selfRendered = inline();
+    const items = selfRendered ? [] : allItems;
+
     const keep = new Set(items.map((a) => a.id));
-    for (const [id, host] of cards) if (!keep.has(id)) { host.remove(); cards.delete(id); }
+    for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
     if (!document.body) return;
+    const anchors = attentionAnchors(allItems, restoreFocus);
+    const positions = [...slots.values()].filter((slot) => slot.isConnected).map((slot) => [slot, slot.style.cssText]);
+    let placements;
+    try {
+      // Keep focus and :focus-within live while taking cards out of row flow.
+      for (const [slot] of positions) slot.style.setProperty("position", "absolute", "important");
+      placements = allItems.map((a, i) => resolvePlacement(a, anchors[i]));
+    } finally {
+      for (const [slot, style] of positions) slot.style.cssText = style;
+    }
+    const groups = new Set(placements.map((p) => p.group || p.observe).filter(Boolean));
+    for (const g of observedGroups) if (!groups.has(g)) groupObserver.unobserve(g);
+    for (const g of groups) if (!observedGroups.has(g)) groupObserver.observe(g);
+    observedGroups = groups;
     const dark = pageIsDark(), tails = new Map();
-    for (const a of items) {
+    items.forEach((a, i) => {
       let host = cards.get(a.id);
       if (!host) {
-        host = document.createElement("div");
-        host.className = "jf-ask";
-        host.id = `jf-q-${a.id}`;
-        host.attachShadow({ mode: "open" });
-        cards.set(a.id, host);
+        host = document.createElement("div"); host.className = "jf-ask"; host.id = `jf-q-${a.id}`;
+        host.attachShadow({ mode: "open" }); cards.set(a.id, host);
       }
       host.toggleAttribute("dark", dark);
       const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
-      const after = placeAfter(a), anchor = anchorElement(a);
-      let rescued = !!after && !available(anchor);
-      if (after && !rescued) {
-        exposureLabel(host, a, false);
-        const previous = tails.get(after) || after;
-        if (previous.nextElementSibling !== host) previous.after(host);
-        rescued = !available(host, true);
-        if (!rescued) tails.set(after, host);
-      }
-      if (!after || rescued) {
-        atTop(host);
-        const previous = tails.get(topStack);
-        if (previous && previous.nextElementSibling !== host) previous.after(host);
-        else if (!previous && topStack.firstElementChild !== host) topStack.prepend(host);
-        tails.set(topStack, host);
-      }
-      exposureLabel(host, a, rescued);
+      insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
+    });
+    restoreFocus();
+    const failed = items.map((a, i) => placements[i].peers && !rowFits(placements[i], slots.get(a.id)));
+    if (failed.some(Boolean)) {
+      failed.forEach((fail, i) => { if (fail) placements[i] = fallback(placements[i].group); });
+      const settledTails = new Map();
+      items.forEach((a, i) => insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], settledTails));
     }
+    restoreFocus();
+    const rescued = items.map((a, i) => placements[i].status === "hidden" || !available(cards.get(a.id), true));
+    if (rescued.some(Boolean)) {
+      const visibleTails = new Map();
+      items.forEach((a, i) => {
+        if (rescued[i]) placements[i] = { kind: "block", after: null, status: placements[i].status };
+        insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], visibleTails);
+      });
+    }
+    items.forEach((a, i) => exposureLabel(cards.get(a.id), a, rescued[i]));
+    restoreFocus();
+    outcomes = new Map((refreshingAttention ? [] : allItems).map((a, i) => {
+      const p = placements[i];
+      const status = selfRendered && !["missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
+      return [a.id, { status, destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
+    }));
     if (topStack && !topStack.children.length) topStack.remove();
-    if (focused?.isConnected) {
-      if (focusedHost.shadowRoot.activeElement !== focused) {
-        focused.focus({ preventScroll: true });
-        if (selection) focused.setSelectionRange(...selection);
-      }
-      if (oldParent !== focusedHost.parentElement) focused.scrollIntoView({ block: "nearest" });
-    }
     postSnapshot();
   }
   let drawQueued = false;
-  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawAttention(); }); } };
+  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawMarkers(); }); } };
   new MutationObserver((ms) => {
-    if (ms.some((m) => !isOurs(m.target) && (m.type === "attributes" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
-  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    if (ms.some((m) => !isOurs(m.target.nodeType === 1 ? m.target : m.target.parentElement) && (m.type !== "childList" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
   for (const type of ["resize", "transitionend", "animationend"]) addEventListener(type, queueDraw);
 
   let opening = 0, openingMessage = null;
@@ -554,6 +761,7 @@
       return;
     }
     for (const fn of attendSubs) { try { fn(item); } catch (e) { console.error(e); } }
+
     drawAttention();
     const host = inline() ? anchorElement(item) : cards.get(id);
     if (!host) return;
@@ -593,7 +801,6 @@
   }
 
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
-  const SKIP = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   function agentSnapshot() {
@@ -603,7 +810,7 @@
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
     (function walk(el, depth) {
       for (const c of el.children) {
-        if (lines.length > 400 || c.matches(SKIP) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
+        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
         else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
@@ -628,37 +835,36 @@
     snapT = setTimeout(() => {
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          page_height: document.documentElement.scrollHeight, missing: deadAnchors(), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"), exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id) }) }).catch(() => {});
+        body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
+          page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
+          exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
+          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) location.reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
-  // Questions whose --at matches nothing on the page (they fall back to the top).
-  function deadAnchors() {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => !anchorElement(a)).map((a) => `${a.id} ${a.anchor.selector}`);
-  }
-  // Questions whose anchor is there but whose card is not where the agent thinks:
-  // "floating" anchors sit in a fixed or sticky part, so the card went to the top;
-  // "hidden" describes the anchor independently of rescued card placement.
   function anchorsThat(kind) {
-    return attention.filter((a) => isOpen(a) && a.anchor?.selector).filter((a) => {
-      const el = anchorElement(a);
-      if (!el) return false;
-      const top = !placeAfter(a);
-      return kind === "floating" ? top : !top && !available(el);
-    }).map((a) => `${a.id} ${a.anchor.selector}`);
+    return attention.filter((a) => isOpen(a) && a.anchor?.selector && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
+
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
   // Text a page fills in later (fetches, timers) counts too.
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
+  let refreshingAttention = false;
+  let attentionRefresh = 0;
   async function refreshThreads() {
+    const refresh = ++attentionRefresh;
+    refreshingAttention = true;
+    outcomes.clear();
     const r = await fetch(api);
     if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
     const j = await r.json();
+    if (refresh !== attentionRefresh) return;
+    refreshingAttention = false;
     comments = j.comments || []; attention = j.attention || []; working = j.working || null;
     drawMarkers(); drawWorking();
     for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
+
   }
 
   addEventListener("DOMContentLoaded", () => {
@@ -670,7 +876,8 @@
     if (!embedded && !optOut) document.body.appendChild(btn);
     drawMarkers();
     drawWorking();
-    new ResizeObserver(drawMarkers).observe(document.body);
+    new ResizeObserver(queueDraw).observe(document.body);
+    addEventListener("resize", queueDraw);
   });
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };

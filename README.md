@@ -70,3 +70,10 @@ authentication: anything that can reach the port can run verbs. Verbs run one at
 time in QuickJS with a 1 second, 64 MB limit and no network, which keeps every
 change attributable and undoable. Live data is pushed in from outside with
 `jelly call`. Contributors: read [`AGENTS.md`](AGENTS.md).
+
+Browser snapshots belong to the current served view. The daemon supplies ownership
+evidence in view boot data and the bundled runtime echoes it when posting a
+snapshot. Missing evidence is rejected; stale evidence returns 409 and the runtime
+reloads. After upgrading the daemon, reload older open pages and update tokenless
+snapshot callers before they can contribute snapshots again. This is an internal
+daemon/runtime protocol, not authentication.

@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, Store, PAGE, PERSON};
+use crate::store::{AttentionKind, Error, Event, EventKind, Store, PAGE, PERSON};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -30,14 +30,16 @@ struct App {
     store: Mutex<Store>,
     events: broadcast::Sender<Event>,
     /// What some browser last showed of each jelly, as text. Memory only.
-    screens: Mutex<std::collections::HashMap<String, Screen>>,
+    screens: Mutex<std::collections::HashMap<String, ViewScreen>>,
 }
 type Shared = Arc<App>;
 
 impl App {
     /// Several store changes as one: every event is broadcast.
     fn change_many(&self, f: impl FnOnce(&mut Store) -> Result<Vec<Event>, Error>) -> Result<Json<Value>, ApiError> {
-        let evs = f(&mut self.store.lock().expect("store lock"))?;
+        let mut store = self.store.lock().expect("store lock");
+        let evs = f(&mut store)?;
+        self.invalidate_screens(&store, &evs);
         for ev in &evs {
             let _ = self.events.send(ev.clone());
         }
@@ -47,9 +49,60 @@ impl App {
     /// Runs one store change and broadcasts its event. The store lock is what
     /// makes verbs run one at a time.
     fn change(&self, f: impl FnOnce(&mut Store) -> Result<Event, Error>) -> Result<Json<Event>, ApiError> {
-        let ev = f(&mut self.store.lock().expect("store lock"))?;
+        let mut store = self.store.lock().expect("store lock");
+        let ev = f(&mut store)?;
+        self.invalidate_screens(&store, std::slice::from_ref(&ev));
         let _ = self.events.send(ev.clone());
         Ok(Json(ev))
+    }
+
+    // All combined access takes the store lock before the screens lock, so a
+    // late post cannot refill a cache entry invalidated by a lifecycle change.
+    fn invalidate_screens(&self, store: &Store, events: &[Event]) {
+        let mut screens = self.screens.lock().expect("screens lock");
+        for ev in events {
+            if ev.kind == EventKind::Move {
+                if let Some(from) = ev.args.as_ref().and_then(|a| a["from"].as_str()) {
+                    screens.remove(from);
+                }
+            }
+            if matches!(ev.kind, EventKind::New | EventKind::Remove | EventKind::Move)
+                || screens.get(&ev.jelly).is_some_and(|s| store.get(&ev.jelly).map_or(true, |j| j.view_rev != s.view_rev)) {
+                screens.remove(&ev.jelly);
+            }
+        }
+    }
+
+    fn snapshot_owner(&self, name: &str, view_rev: u64) -> Result<String, ApiError> {
+        use base64::Engine as _;
+        let mut screens = self.screens.lock().expect("screens lock");
+        if let Some(entry) = screens.get(name).filter(|s| s.view_rev == view_rev) {
+            return Ok(entry.owner.clone());
+        }
+        let mut bytes = [0; 32];
+        getrandom::fill(&mut bytes).map_err(|e| ApiError::Internal(format!("could not issue snapshot owner: {e}")))?;
+        let owner = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        screens.insert(name.into(), ViewScreen { owner: owner.clone(), view_rev, screen: None });
+        Ok(owner)
+    }
+
+    fn screen(&self, name: &str, owner: &str) -> Result<Option<Screen>, ApiError> {
+        let store = self.store.lock().expect("store lock");
+        let j = store.get(name)?;
+        let screens = self.screens.lock().expect("screens lock");
+        let entry = screens.get(name).filter(|s| s.owner == owner && s.view_rev == j.view_rev)
+            .ok_or_else(snapshot_changed)?;
+        Ok(entry.screen.clone())
+    }
+
+    fn validate_see(&self, name: &str, owner: &str, version: u64) -> Result<(), ApiError> {
+        let store = self.store.lock().expect("store lock");
+        let j = store.get(name)?;
+        let screens = self.screens.lock().expect("screens lock");
+        if j.version != version || !screens.get(name).is_some_and(|s| s.owner == owner && s.view_rev == j.view_rev) {
+            return Err(snapshot_changed());
+        }
+        Ok(())
     }
 }
 
@@ -128,20 +181,36 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
     axum::serve(listener, router).await
 }
 
-struct ApiError(Error);
+#[derive(Debug)]
+enum ApiError {
+    Store(Error),
+    Conflict(String),
+    Internal(String),
+}
+
+fn snapshot_changed() -> ApiError {
+    ApiError::Conflict("the jelly changed; reload the page or retry see".into())
+}
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
-        ApiError(e)
+        ApiError::Store(e)
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self.0 {
-            Error::NotFound(_) => StatusCode::NOT_FOUND,
-            Error::Exists(_) => StatusCode::CONFLICT,
-            Error::Invalid(_) => StatusCode::BAD_REQUEST,
+        let (status, message) = match self {
+            Self::Store(e) => {
+                let status = match e {
+                    Error::NotFound(_) => StatusCode::NOT_FOUND,
+                    Error::Exists(_) => StatusCode::CONFLICT,
+                    Error::Invalid(_) => StatusCode::BAD_REQUEST,
+                };
+                (status, e.to_string())
+            }
+            Self::Conflict(message) => (StatusCode::CONFLICT, message),
+            Self::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
-        (status, Json(json!({"error": self.0.to_string()}))).into_response()
+        (status, Json(json!({"error": message}))).into_response()
     }
 }
 
@@ -372,7 +441,8 @@ async fn pump(mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
 async fn view(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
     let store = app.store.lock().expect("store lock");
     let j = store.get(&name)?;
-    let boot = json!({"name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
+    let owner = app.snapshot_owner(&name, j.view_rev)?;
+    let boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
     // `</` cannot appear inside the script, or state text could close the tag.
     let boot = boot.to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script src=\"/runtime.js\"></script>");
@@ -498,8 +568,12 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
     if args["anchor"]["selector"].is_string() {
         match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
             Ok((place, exposed)) => {
-                out["anchor"] = json!(place);
+                out["anchor"] = json!(place.status());
                 if exposed { out["anchor_exposed"] = json!(true); }
+                if let AnchorPlace::Fallback(f) = place {
+                    out["anchor_destination"] = json!(f.destination);
+                    out["anchor_reason"] = json!(f.reason);
+                }
             },
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
@@ -510,26 +584,29 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 /// How long an ask waits for a browser before it answers "not checked".
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Anchor classification and measured card exposure, from a snapshot taken
-/// after the item was asked. `Err` says why the browser could not check.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<(&'static str, bool), String> {
+/// Placement from a fresh browser snapshot; failure to render does not undo the ask.
+async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<(AnchorPlace, bool), String> {
+    let owner = {
+        let store = app.store.lock().expect("store lock");
+        let j = store.get(name).map_err(|e| e.to_string())?;
+        app.snapshot_owner(name, j.view_rev).map_err(|_| "could not issue snapshot owner".to_string())?
+    };
+
     let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
     // as the snapshot is in; dropping the render stops the browser.
     let mut rendered: Option<(Result<(), String>, std::time::Instant)> = None;
     loop {
-        // Screens are kept by name, so one from before the ask may belong to
-        // a jelly this one replaced: only a snapshot taken since counts.
-        let snap = app.screens.lock().expect("screens lock").get(name).filter(|s| s.version >= version && s.at_ms >= asked).cloned();
-        if let Some(s) = snap {
-            let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-            return Ok((if lists(&s.missing) { "missing" } else if lists(&s.floating) { "floating" } else if lists(&s.hidden) { "hidden" } else { "below" }, s.exposed.iter().any(|id| id == item)));
+        let snap = app.screen(name, &owner).map_err(|_| "the jelly changed during the anchor check".to_string())?
+            .filter(|s| s.version >= version && s.at_ms >= asked);
+        if let Some(measured) = snap.and_then(|s| s.placement(item).map(|place| (place, s.exposed.iter().any(|id| id == item)))) {
+            return Ok(measured);
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
             Some((r, at)) if at.elapsed() > std::time::Duration::from_secs(2) => {
-                return Err(r.clone().err().unwrap_or_else(|| "the page rendered but sent no snapshot".into()));
+                return Err(r.clone().err().unwrap_or_else(|| "the page sent no placement measurement for this question".into()));
             }
             Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
             None => tokio::select! {
@@ -614,9 +691,54 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
 
 // ---- the agent view -------------------------------------------------------
 
+#[derive(serde::Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub(crate) enum AnchorDestination {
+    Top,
+    After { selector: String },
+}
+
+impl AnchorDestination {
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Top => "at the top".into(),
+            Self::After { selector } => format!("after {selector}"),
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+struct AnchorFallback {
+    id: String,
+    destination: AnchorDestination,
+    reason: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum AnchorPlace {
+    Below,
+    Missing,
+    Floating,
+    Hidden,
+    Fallback(AnchorFallback),
+}
+
+impl AnchorPlace {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Below => "below",
+            Self::Missing => "missing",
+            Self::Floating => "floating",
+            Self::Hidden => "hidden",
+            Self::Fallback(_) => "fallback",
+        }
+    }
+}
+
 /// What a browser shows of a jelly, as text, posted by the runtime for `jelly see`.
 #[derive(Deserialize, Clone)]
 struct Screen {
+    owner: String,
     text: String,
     width: u32,
     height: u32,
@@ -641,12 +763,39 @@ struct Screen {
     exposed: Vec<String>,
     #[serde(default)]
     page_height: u32,
+    #[serde(default)]
+    fallback: Vec<AnchorFallback>,
+    #[serde(default)]
+    below: Vec<String>,
 }
 
-async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> StatusCode {
+impl Screen {
+    fn placement(&self, item: &str) -> Option<AnchorPlace> {
+        let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
+        Some(if lists(&self.missing) { AnchorPlace::Missing }
+        else if lists(&self.floating) { AnchorPlace::Floating }
+        else if lists(&self.hidden) { AnchorPlace::Hidden }
+        else if let Some(f) = self.fallback.iter().find(|f| f.id == item) { AnchorPlace::Fallback(f.clone()) }
+        else if lists(&self.below) { AnchorPlace::Below }
+        else { return None })
+    }
+}
+
+struct ViewScreen {
+    owner: String,
+    view_rev: u64,
+    screen: Option<Screen>,
+}
+
+async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> Result<StatusCode, ApiError> {
+    let store = app.store.lock().expect("store lock");
+    let j = store.get(&name)?;
+    let mut screens = app.screens.lock().expect("screens lock");
+    let entry = screens.get_mut(&name).filter(|s| s.owner == sc.owner && s.view_rev == j.view_rev)
+        .ok_or_else(snapshot_changed)?;
     sc.at_ms = now_ms();
-    app.screens.lock().expect("screens lock").insert(name, sc);
-    StatusCode::NO_CONTENT
+    entry.screen = Some(sc);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -730,26 +879,38 @@ struct SeeQ {
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
 /// what the person did, what waits on them, and what is on screen.
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
-    let (j, home) = {
-        let store = app.store.lock().expect("store lock");
-        (store.get(&name)?.clone(), store.home().to_path_buf())
-    };
     let port = port_of(&req_headers);
+    let render_name = name.clone();
+    see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>| {
+        let name = render_name.clone();
+        async move { render(port, &name, width, height, png.as_deref(), RENDER_LIMIT).await }
+    }).await
+}
+
+async fn see_with_renderer<F, Fut>(app: Shared, name: String, q: SeeQ, mut render_page: F) -> Result<Response, ApiError>
+where
+    F: FnMut(u32, u32, Option<std::path::PathBuf>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let (j, home, owner) = {
+        let store = app.store.lock().expect("store lock");
+        let j = store.get(&name)?;
+        (j.clone(), store.home().to_path_buf(), app.snapshot_owner(&name, j.view_rev)?)
+    };
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
-    // Use a snapshot from an open view if it is current and the right width; otherwise render one.
-    // An open view's screen counts if it shows this version at the width asked for (1280 by default).
-    let fresh = |app: &App| app.screens.lock().expect("screens lock").get(&name).cloned()
-        .filter(|s| s.version == j.version && s.width == width);
+    let fresh = |app: &App| -> Result<Option<Screen>, ApiError> {
+        Ok(app.screen(&name, &owner)?.filter(|s| s.version == j.version && s.width == width))
+    };
     let mut notes: Vec<String> = Vec::new();
-    let mut snap = fresh(&app);
+    let mut snap = fresh(&app)?;
     if snap.is_none() {
         let asked = now_ms();
-        match render(port, &name, width, height, None, RENDER_LIMIT).await {
+        match render_page(width, height, None).await {
             Ok(()) => {
                 for _ in 0..30 {
-                    if let Some(s) = app.screens.lock().expect("screens lock").get(&name).filter(|s| s.at_ms >= asked) {
-                        snap = Some(s.clone());
+                    if let Some(s) = fresh(&app)?.filter(|s| s.at_ms >= asked) {
+                        snap = Some(s);
                         break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -765,12 +926,13 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         let path = dir.join(format!("{}-{width}.png", name.replace(':', "_")));
         // The full page: as tall as the page said it was, within reason.
         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
-        match render(port, &name, width, h, Some(&path), RENDER_LIMIT).await {
+        match render_page(width, h, Some(path.clone())).await {
             Ok(()) => Some(path),
             Err(e) => { notes.push(format!("No screenshot: {e}")); None }
         }
     } else { None };
 
+    app.validate_see(&name, &owner, j.version)?;
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
     let history: Vec<Event> = std::fs::read_to_string(home.join("events.jsonl")).unwrap_or_default().lines()
@@ -816,6 +978,9 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
         for m in &sc.floating {
             let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
             line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; it shows at the top instead"));
+        }
+        for f in &sc.fallback {
+            line(&mut out, format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
         }
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
@@ -938,8 +1103,349 @@ mod screen_tests {
     #[test]
     fn older_screens_have_no_exposed_cards() {
         let screen: Screen = serde_json::from_value(serde_json::json!({
-            "text": "page", "width": 1280, "height": 900, "version": 1
+            "owner": "test", "text": "page", "width": 1280, "height": 900, "version": 1
         })).unwrap();
         assert!(screen.exposed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_selects_the_actual_destination_for_this_item() {
+        let mut screen: Screen = serde_json::from_value(json!({
+            "owner": "test", "text": "", "width": 1280, "height": 900, "version": 3,
+            "fallback": [
+                {"id": "a1", "destination": {"kind": "after", "selector": "#tiles"}, "reason": "layout"},
+                {"id": "a2", "destination": {"kind": "top"}, "reason": "no boundary"}
+            ]
+        })).unwrap();
+        assert_eq!(screen.placement("other"), None);
+        let AnchorPlace::Fallback(first) = screen.placement("a1").unwrap() else { panic!("expected fallback") };
+        assert_eq!(first.destination.describe(), "after #tiles");
+        assert_eq!(first.reason, "layout");
+        let AnchorPlace::Fallback(second) = screen.placement("a2").unwrap() else { panic!("expected fallback") };
+        assert_eq!(second.destination, AnchorDestination::Top);
+        screen.hidden.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Hidden));
+        screen.floating.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Floating));
+        screen.missing.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Missing));
+    }
+
+    #[tokio::test]
+    async fn attention_response_preserves_snapshot_destination_and_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
+        let (events, _) = broadcast::channel(16);
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default() });
+        for kind in ["ask", "look"] {
+            for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
+                let mut received = app.events.subscribe();
+                let post_snapshot = async {
+                    let ev = received.recv().await.unwrap();
+                    let owner = {
+                        let store = app.store.lock().unwrap();
+                        app.snapshot_owner("placement", store.get("placement").unwrap().view_rev).unwrap()
+                    };
+                    let snapshot: Screen = serde_json::from_value(json!({
+                        "owner":owner, "text":"", "width":1280, "height":900, "version":ev.version,
+                        "fallback":[{"id":ev.args.as_ref().unwrap()["id"], "destination":destination, "reason":"layout cannot take a question row"}]
+                    })).unwrap();
+                    let mut unmeasured = snapshot.clone();
+                    unmeasured.fallback.clear();
+                    put_screen(State(app.clone()), Path("placement".into()), Json(unmeasured)).await.unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    assert_eq!(put_screen(State(app.clone()), Path("placement".into()), Json(snapshot)).await.unwrap(), StatusCode::NO_CONTENT);
+                };
+                let request = attend(State(app.clone()), Path("placement".into()), axum::http::HeaderMap::new(), Json(AttendReq {
+                    spec: json!({"kind":kind, "title":"Choose", "by":"test", "anchor":{"selector":"#tile"}})
+                }));
+                let (response, ()) = tokio::join!(request, post_snapshot);
+                let Json(response) = response.unwrap_or_else(|_| panic!("attention request failed"));
+                assert_eq!(response["anchor"], "fallback");
+                assert_eq!(response["anchor_destination"], destination);
+                assert_eq!(response["anchor_reason"], "layout cannot take a question row");
+                let location = if destination["kind"] == "after" { "after #tiles" } else { "at the top" };
+                assert_eq!(crate::placement(&response), format!("it shows {location} instead; layout cannot take a question row"));
+            }
+        }
+        let log = std::fs::read_to_string(app.store.lock().unwrap().events_path()).unwrap();
+        assert!(!log.contains("anchor_destination") && !log.contains("anchor_reason"));
+    }
+
+    #[test]
+    fn unmeasured_snapshots_do_not_confirm_placement() {
+        let mut screen: Screen = serde_json::from_value(json!({"owner":"test", "text":"", "width":1, "height":1, "version":1})).unwrap();
+        assert!(screen.fallback.is_empty());
+        assert_eq!(screen.placement("a1"), None);
+        screen.below.push("a1 #tile".into());
+        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Below));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> (tempfile::TempDir, Shared) {
+        let dir = tempfile::tempdir().unwrap();
+        let (events, _) = broadcast::channel(32);
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default() });
+        (dir, app)
+    }
+
+    async fn create_page(app: &Shared, text: &str, replace: bool) {
+        let _ = create(State(app.clone()), Json(CreateReq {
+            name: "test:x".into(), view: format!("<h1>{text}</h1>"), verbs: "const verbs = {};".into(),
+            state: json!({}), by: Some("test".into()), replace, about: String::new(), project: String::new(),
+        })).await.unwrap();
+    }
+
+    async fn owner(app: &Shared, name: &str) -> String {
+        let Html(html) = view(State(app.clone()), Path(name.into())).await.unwrap();
+        let boot = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
+        serde_json::from_str::<Value>(boot).unwrap()["snapshotOwner"].as_str().unwrap().into()
+    }
+
+    fn snapshot(owner: &str, text: &str, version: u64) -> Screen {
+        serde_json::from_value(json!({"owner": owner, "text": text, "width": 1280, "height": 900, "version": version})).unwrap()
+    }
+
+    async fn post(app: &Shared, sc: Screen) -> Result<StatusCode, ApiError> {
+        put_screen(State(app.clone()), Path("test:x".into()), Json(sc)).await
+    }
+
+    async fn seen(app: &Shared) -> String {
+        let response = see(State(app.clone()), Path("test:x".into()),
+            Query(SeeQ { width: None, height: None, png: false, full: false }), axum::http::HeaderMap::new()).await.unwrap();
+        String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn bundled_runtime_posts_served_ownership_and_reloads_obsolete_pages() {
+        let (_dir, app) = app();
+        create_page(&app, "PAGE", false).await;
+        let Html(html) = view(State(app.clone()), Path("test:x".into())).await.unwrap();
+        let boot = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        let eval = |script: &str| ctx.with(|ctx| {
+            ctx.eval::<(), _>(script).unwrap_or_else(|err| panic!("{err}: {:?}", ctx.catch()));
+        });
+        eval(include_str!("../tests/runtime-browser.js"));
+        eval(&format!("window.__JELLY__={boot};"));
+        eval(RUNTIME_JS);
+        eval("loaded();");
+        while rt.execute_pending_job().unwrap() {}
+        let request: Value = ctx.with(|ctx| {
+            serde_json::from_str(&ctx.eval::<String, _>("JSON.stringify(requests[0])").unwrap()).unwrap()
+        });
+        assert_eq!(request["url"], "/api/jellies/test%3Ax/screen");
+        assert_eq!(post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap(), StatusCode::NO_CONTENT);
+        eval("if (reloads !== 0) throw Error('accepted post reloaded');");
+        eval("message({jelly:'other:x', kind:'new', view_rev:1}); if (reloads !== 0) throw Error('other jelly reloaded');");
+        eval("message({jelly:'test:x', kind:'new', view_rev:1, version:1}); if (reloads !== 1) throw Error('same-revision replacement did not reload');");
+        create_page(&app, "REPLACEMENT", true).await;
+        let stale_status = post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap_err().into_response().status();
+        assert_eq!(stale_status, StatusCode::CONFLICT);
+        eval(&format!("responseStatus={}; loaded();", stale_status.as_u16()));
+        while rt.execute_pending_job().unwrap() {}
+        eval("if (reloads !== 2) throw Error('stale post did not reload');");
+    }
+
+    #[tokio::test]
+    async fn see_rechecks_currentness_after_text_and_png_rendering() {
+        for png in [false, true] {
+            for replace in [false, true] {
+                let (_dir, app) = app();
+                create_page(&app, "OLD PAGE", false).await;
+                let current = owner(&app, "test:x").await;
+                if png { post(&app, snapshot(&current, "OLD PAGE", 1)).await.unwrap(); }
+                let (started, suspended) = tokio::sync::oneshot::channel();
+                let (resume, resumed) = tokio::sync::oneshot::channel();
+                let mut rendezvous = Some((started, resumed));
+                let seeing = see_with_renderer(app.clone(), "test:x".into(),
+                    SeeQ { width: None, height: None, png, full: false },
+                    move |_, _, path| {
+                        assert_eq!(path.is_some(), png);
+                        let (started, resumed) = rendezvous.take().expect("one render");
+                        async move {
+                            started.send(()).unwrap();
+                            resumed.await.unwrap();
+                            // A failed text render bypasses polling, so only the final
+                            // currentness check can reject the captured jelly here.
+                            if png { Ok(()) } else { Err("controlled render failure".into()) }
+                        }
+                    });
+                let changing = async {
+                    suspended.await.unwrap();
+                    if replace { create_page(&app, "NEW PAGE", true).await; }
+                    else { let _ = app.change(|s| s.set_state("test:x", "", Some(json!({"n":1})), "test")).unwrap(); }
+                    resume.send(()).unwrap();
+                };
+                let (result, _) = tokio::join!(seeing, changing);
+                assert_eq!(result.expect_err("obsolete see must fail").into_response().status(), StatusCode::CONFLICT,
+                    "png={png}, replace={replace}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_see_waits_for_matching_version_and_width() {
+        for wrong_width in [false, true] {
+            let (_dir, app) = app();
+            create_page(&app, "PAGE", false).await;
+            let current = owner(&app, "test:x").await;
+            let (rendered, polling) = tokio::sync::oneshot::channel();
+            let mut rendered = Some(rendered);
+            let posting_app = app.clone();
+            let posting_owner = current.clone();
+            let seeing = see_with_renderer(app.clone(), "test:x".into(),
+                SeeQ { width: None, height: None, png: false, full: false },
+                move |_, _, path| {
+                    assert!(path.is_none());
+                    let app = posting_app.clone();
+                    let owner = posting_owner.clone();
+                    let rendered = rendered.take().expect("one render");
+                    async move {
+                        let mut wrong = snapshot(&owner, "WRONG SNAPSHOT", if wrong_width { 1 } else { 2 });
+                        if wrong_width { wrong.width = 390; }
+                        post(&app, wrong).await.unwrap();
+                        rendered.send(()).unwrap();
+                        Ok(())
+                    }
+                });
+            let updating = async {
+                polling.await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                post(&app, snapshot(&current, "MATCHING SNAPSHOT", 1)).await.unwrap();
+            };
+            let (result, _) = tokio::join!(seeing, updating);
+            let response = result.unwrap();
+            let output = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+            assert!(output.contains("MATCHING SNAPSHOT"), "{output}");
+            assert!(!output.contains("WRONG SNAPSHOT"), "{output}");
+        }
+    }
+
+    #[tokio::test]
+    async fn replaced_and_recreated_pages_never_reuse_old_screens() {
+        let (_dir, app) = app();
+        create_page(&app, "OLD PAGE", false).await;
+        let old = owner(&app, "test:x").await;
+        assert_eq!(post(&app, snapshot(&old, "OLD PAGE", 1)).await.unwrap(), StatusCode::NO_CONTENT);
+        assert!(seen(&app).await.contains("OLD PAGE"));
+        for (text, remove_first) in [("NEW PAGE", false), ("RECREATED PAGE", true)] {
+            let previous = owner(&app, "test:x").await;
+            if remove_first {
+                let _ = remove(State(app.clone()), Path("test:x".into()), Query(ByQ { by: Some("test".into()), jelly: None })).await.unwrap();
+                assert!(!app.screens.lock().unwrap().contains_key("test:x"));
+                assert_eq!(post(&app, snapshot(&previous, "OLD PAGE", 1)).await.unwrap_err().into_response().status(), StatusCode::NOT_FOUND);
+            }
+            create_page(&app, text, !remove_first).await;
+            assert!(!app.screens.lock().unwrap().contains_key("test:x"));
+            assert_eq!(post(&app, snapshot(&previous, "OLD PAGE", 1)).await.unwrap_err().into_response().status(), StatusCode::CONFLICT);
+            let current = owner(&app, "test:x").await;
+            assert_eq!(owner(&app, "test:x").await, current);
+            for invalid in [old.as_str(), previous.as_str(), "", "unknown"] {
+                assert_eq!(post(&app, snapshot(invalid, "OLD PAGE", 1)).await.unwrap_err().into_response().status(), StatusCode::CONFLICT);
+            }
+            assert!(app.screen("test:x", &current).unwrap().is_none());
+            post(&app, snapshot(&current, text, 1)).await.unwrap();
+            assert!(post(&app, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
+            let output = seen(&app).await;
+            assert!(output.contains(text), "{output}");
+            assert!(!output.contains("OLD PAGE"), "{output}");
+            assert!(app.validate_see("test:x", &previous, 1).is_err());
+        }
+        assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
+        let dir = app.store.lock().unwrap().home().to_path_buf();
+        let (events, _) = broadcast::channel(32);
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default() });
+        let previous = owner(&app, "test:x").await;
+        let current = owner(&restarted, "test:x").await;
+        assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
+        post(&restarted, snapshot(&current, "RECREATED PAGE", 1)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn view_changes_invalidate_ownership_but_state_and_failed_validation_preserve_it() {
+        let (_dir, app) = app();
+        create_page(&app, "OLD PAGE", false).await;
+        let first = owner(&app, "test:x").await;
+        post(&app, snapshot(&first, "OLD PAGE", 1)).await.unwrap();
+        assert!(app.change(|s| s.create("test:x", "bad".into(), "invalid JS!".into(), json!({}), "test", true, "", "")).is_err());
+        assert!(app.change(|s| s.reshape("test:x", Some("bad".into()), Some("invalid JS!".into()), None, "test")).is_err());
+        assert!(seen(&app).await.contains("OLD PAGE"));
+        let _ = app.change(|s| s.set_state("test:x", "", Some(json!({"n":1})), "test")).unwrap();
+        assert_eq!(owner(&app, "test:x").await, first);
+        assert_eq!(app.screen("test:x", &first).unwrap().unwrap().version, 1);
+        assert!(app.validate_see("test:x", &first, 1).is_err());
+        let _ = app.change(|s| s.reshape("test:x", Some("<h1>NEW PAGE</h1>".into()), None, None, "test")).unwrap();
+        assert!(post(&app, snapshot(&first, "OLD PAGE", 1)).await.is_err());
+        let reshaped = owner(&app, "test:x").await;
+        let _ = app.change(|s| s.undo("test:x", "test")).unwrap();
+        assert!(post(&app, snapshot(&reshaped, "NEW PAGE", 3)).await.is_err());
+        let undone = owner(&app, "test:x").await;
+        let _ = app.change(|s| s.set_project("test:x", "moved", "test")).unwrap();
+        assert!(!app.screens.lock().unwrap().contains_key("test:x"));
+        assert!(post(&app, snapshot(&undone, "OLD PAGE", 4)).await.is_err());
+        create_page(&app, "REUSED NAME", false).await;
+        assert!(post(&app, snapshot(&undone, "OLD PAGE", 1)).await.is_err());
+        let moved = owner(&app, "moved:x").await;
+        assert_ne!(moved, undone);
+    }
+
+    #[tokio::test]
+    async fn ask_rounds_invalidate_reshaped_views_and_anchor_checks_require_fresh_owned_screens() {
+        let (_dir, app) = app();
+        let spec = json!({"question":"Which?", "options":[{"id":"a", "label":"A"}, {"id":"b", "label":"B"}]});
+        let _ = app.change_many(|s| s.ask_round("test:x", &spec, ASK_VIEW, ASK_VERBS, "", "test")).unwrap();
+        let original = owner(&app, "test:x").await;
+        let _ = app.change(|s| s.reshape("test:x", Some("different".into()), None, None, "test")).unwrap();
+        let different = owner(&app, "test:x").await;
+        let _ = app.change_many(|s| s.ask_round("test:x", &spec, ASK_VIEW, ASK_VERBS, "", "test")).unwrap();
+        assert!(post(&app, snapshot(&different, "different", 1)).await.is_err());
+        assert!(app.screen("test:x", &original).is_err());
+        let current = owner(&app, "test:x").await;
+        let version = app.store.lock().unwrap().get("test:x").unwrap().version;
+        let asked = now_ms();
+        let mut sc = snapshot(&current, "ASK PAGE", version);
+        sc.missing.push("a2 #q-q1".into());
+        post(&app, sc).await.unwrap();
+        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap().0, AnchorPlace::Missing);
+        // The wait must ignore a screen from before the ask and an older state.
+        app.screens.lock().unwrap().get_mut("test:x").unwrap().screen.as_mut().unwrap().at_ms = asked - 1;
+        let checking = anchor_place(&app, 1, "test:x", "a2", version, asked);
+        let update = async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut sc = snapshot(&current, "AFTER ASK", version);
+            sc.below.push("a2 #q-q1".into());
+            post(&app, sc).await.unwrap();
+        };
+        let (result, _) = tokio::join!(checking, update);
+        assert_eq!(result.unwrap().0, AnchorPlace::Below);
+        let checking = anchor_place(&app, 1, "test:x", "a2", version + 1, asked);
+        let update = async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut sc = snapshot(&current, "NEW STATE", version + 1);
+            sc.hidden.push("a2 #q-q1".into());
+            post(&app, sc).await.unwrap();
+        };
+        let (result, _) = tokio::join!(checking, update);
+        assert_eq!(result.unwrap().0, AnchorPlace::Hidden);
+        let checking = anchor_place(&app, 1, "test:x", "a2", version + 2, now_ms());
+        let replace = async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            create_page(&app, "REPLACED", true).await;
+        };
+        let (result, _) = tokio::join!(checking, replace);
+        assert!(result.unwrap_err().contains("changed"));
+
     }
 }
