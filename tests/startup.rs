@@ -211,6 +211,44 @@ fn racing_starts_initialize_only_one_home() {
     assert!(ready(p));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn daemon_listens_only_on_127_0_0_1() {
+    let s = Sandbox::new();
+    let p = port();
+    let out = s.launch(p, 0, false, "test");
+    assert!(out.status.success(), "{out:?}");
+    let other_address = TcpListener::bind(("127.0.0.2", p))
+        .expect("daemon must leave addresses other than 127.0.0.1 unbound");
+    assert!(ready(p));
+    drop(other_address);
+}
+
+#[test]
+fn readiness_allows_slow_response_body() {
+    for quiet in [false, true] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let p = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(350));
+            let _ = stream.write_all(b"[]");
+        });
+        let result = startup::ensure_with_timeout(
+            &url(p),
+            quiet,
+            Command::new("/must/not/spawn"),
+            Duration::from_secs(3),
+        );
+        server.join().unwrap();
+        assert!(result.is_ok(), "{result:?}");
+    }
+}
+
 #[test]
 fn quiet_hooks_start_inside_and_outside_projects_and_keep_new_items() {
     for project in ["", "test"] {
@@ -400,14 +438,12 @@ fn waits_for_bound_server_and_leaves_timed_out_daemon_running() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let p = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        // Delay accepting longer than one readiness request's timeout.
         std::thread::sleep(Duration::from_millis(300));
-        for _ in 0..2 {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_request(&mut stream);
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]");
-        }
+        let (mut stream, _) = listener.accept().unwrap();
+        read_request(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]")
+            .unwrap();
     });
     startup::ensure_running(&url(p), false, Command::new("/must/not/spawn")).unwrap();
     server.join().unwrap();

@@ -58,11 +58,7 @@ pub(super) fn ensure_with_timeout(
     timeout: Duration,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
-    let request_timeout = || {
-        deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(250))
-    };
+    let request_timeout = || deadline.saturating_duration_since(Instant::now());
     let first = probe(url, request_timeout());
     if matches!(first, Probe::Ready) {
         return Ok(());
