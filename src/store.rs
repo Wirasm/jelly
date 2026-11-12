@@ -108,6 +108,14 @@ impl Attention {
     pub fn is_open(&self) -> bool {
         self.answer.is_none() && self.withdrawn.is_none()
     }
+
+    /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly see`
+    /// and `jelly attention` both use it.
+    pub fn summary(&self) -> String {
+        let opts = self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
+        let kind = if self.kind == AttentionKind::Look { "look" } else { "ask" };
+        format!("{} {kind} {:?}{}{}", self.id, self.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, self.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +241,63 @@ struct Entry {
     undo: Vec<Snapshot>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InboxReader {
+    Named { name: String },
+    Conversation { id: String },
+    Parent { pid: u32, start_time: u64 },
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxRequest {
+    #[serde(default)]
+    pub project: String,
+    pub reader: InboxReader,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxCommit {
+    #[serde(flatten)]
+    pub inbox: InboxRequest,
+    pub through: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxBatch {
+    pub events: Vec<InboxItem>,
+    pub through: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxItem {
+    #[serde(flatten)]
+    pub event: Event,
+    pub text: String,
+}
+
+impl From<Event> for InboxItem {
+    fn from(event: Event) -> Self {
+        let text = event.describe();
+        Self { event, text }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct InboxCursor {
+    project: String,
+    reader: InboxReader,
+    #[serde(flatten)]
+    position: InboxPosition,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum InboxPosition {
+    After { seq: u64 },
+    Recent { since_ms: u64 },
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Event {
     pub seq: u64,
@@ -296,6 +361,11 @@ pub const PERSON: &str = "person";
 pub const PAGE: &str = "surface";
 
 impl Event {
+    pub fn is_inbox_item(&self, project: &str) -> bool {
+        self.by == PERSON && self.jelly != PAGE && self.kind.is_for_agent()
+            && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
+    }
+
     /// One line on what happened, for agents: the inbox and `jelly see` both use it.
     pub fn describe(&self) -> String {
         let a = self.args.clone().unwrap_or(Value::Null);
@@ -386,9 +456,14 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let seq = fs::read_to_string(dir.join("events.jsonl")).ok()
-            .and_then(|t| t.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()?["seq"].as_u64()))
-            .unwrap_or(0);
+        let log = read_optional(&dir.join("events.jsonl"))?;
+        if !log.is_empty() && !log.ends_with('\n') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
+        }
+        let seq = log.lines().try_fold(0, |seq, line| -> std::io::Result<u64> {
+            let event: Event = serde_json::from_str(line)?;
+            Ok(seq.max(event.seq))
+        })?;
         Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None, #[cfg(test)] log_failure: None })
     }
 
@@ -653,10 +728,23 @@ impl Store {
     }
 
     pub fn assets(&self, name: &str) -> Vec<String> {
-        let mut out: Vec<String> = fs::read_dir(self.asset_dir(name)).into_iter().flatten().flatten()
-            .filter_map(|e| e.file_name().into_string().ok()).filter(|f| !f.starts_with('.')).collect();
+        self.try_assets(name).unwrap_or_default()
+    }
+
+    pub fn try_assets(&self, name: &str) -> std::io::Result<Vec<String>> {
+        let entries = match fs::read_dir(self.asset_dir(name)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+        for entry in entries {
+            if let Ok(file) = entry?.file_name().into_string() {
+                if !file.starts_with('.') { out.push(file); }
+            }
+        }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
@@ -884,6 +972,65 @@ impl Store {
         self.dir.join("events.jsonl")
     }
 
+    fn inbox_cursors(&self) -> std::io::Result<Vec<InboxCursor>> {
+        match fs::read(self.dir.join("inbox-readers.json")) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn read_inbox(&self, project: &str, reader: &InboxReader) -> Result<InboxBatch, Error> {
+        self.read_inbox_at(project, reader, now_ms())
+    }
+
+    fn read_inbox_at(&self, project: &str, reader: &InboxReader, at_ms: u64) -> Result<InboxBatch, Error> {
+        let read = || -> std::io::Result<InboxBatch> {
+            let mut cursors = self.inbox_cursors()?;
+            let existing = cursors.iter().find(|c| c.project == project && &c.reader == reader);
+            let initial = InboxPosition::Recent { since_ms: at_ms.saturating_sub(3_600_000) };
+            let position = existing.map_or(&initial, |c| &c.position);
+            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => 0 };
+            let mut events = Vec::new();
+            for line in read_optional(&self.events_path())?.lines() {
+                let event: Event = serde_json::from_str(line)?;
+                through = through.max(event.seq);
+                let unread = match position {
+                    InboxPosition::After { seq } => event.seq > *seq,
+                    InboxPosition::Recent { since_ms } => event.at_ms > *since_ms,
+                };
+                if unread && event.is_inbox_item(project) {
+                    events.push(event.into());
+                }
+            }
+            if existing.is_none() {
+                // Fix the initial window so an unacknowledged response can be retried even an hour later.
+                cursors.push(InboxCursor { project: project.into(), reader: reader.clone(), position: initial });
+                write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)?;
+            }
+            Ok(InboxBatch { events, through })
+        };
+        read().map_err(|e| Error::Invalid(format!("could not read inbox: {e}")))
+    }
+
+    pub fn commit_inbox(&mut self, req: InboxCommit) -> Result<(), Error> {
+        let commit = || -> std::io::Result<()> {
+            let mut cursors = self.inbox_cursors()?;
+            let InboxRequest { project, reader } = req.inbox;
+            if let Some(cursor) = cursors.iter_mut().find(|c| c.project == project && c.reader == reader) {
+                let seq = match cursor.position {
+                    InboxPosition::After { seq } => seq.max(req.through),
+                    InboxPosition::Recent { .. } => req.through,
+                };
+                cursor.position = InboxPosition::After { seq };
+            } else {
+                cursors.push(InboxCursor { project, reader, position: InboxPosition::After { seq: req.through } });
+            }
+            write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)
+        };
+        commit().map_err(|e| Error::Invalid(format!("could not commit inbox progress: {e}")))
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join("jellies").join(format!("{name}.json"))
     }
@@ -1024,6 +1171,13 @@ pub fn diff(a: &Value, b: &Value, path: &mut String, out: &mut Vec<String>) {
     }
 }
 
+fn read_optional(path: &Path) -> std::io::Result<String> {
+    match fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        result => result,
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, bytes)?;
@@ -1114,6 +1268,258 @@ mod tests {
             assert_eq!(fs::read_to_string(s.asset_dir("j").join("file.txt")).unwrap(), "kept");
             assert!(!s.asset_dir("j").join("new.txt").exists());
         }
+    }
+
+    fn consume_inbox(s: &mut Store, project: &str, reader: InboxReader) -> Result<Vec<Event>, Error> {
+        let batch = s.read_inbox(project, &reader)?;
+        s.commit_inbox(InboxCommit { inbox: InboxRequest { project: project.into(), reader }, through: batch.through })?;
+        Ok(batch.events.into_iter().map(|item| item.event).collect())
+    }
+
+    #[test]
+    fn inbox_startup_refuses_unreadable_event_log() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("events.jsonl")).unwrap();
+        assert!(Store::open(dir.path()).is_err());
+        fs::remove_dir(dir.path().join("events.jsonl")).unwrap();
+        fs::write(dir.path().join("events.jsonl"), [0xff]).unwrap();
+        assert_eq!(Store::open(dir.path()).err().unwrap().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn inbox_startup_refuses_unterminated_event_log() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "existing".into() };
+        consume_inbox(&mut s, "p", reader).unwrap();
+        let saved = fs::read(dir.path().join("inbox-readers.json")).unwrap();
+        let log = fs::read_to_string(s.events_path()).unwrap();
+        let record = log.trim_end();
+        for prefix in ["", log.as_str()] {
+            for suffix in ["", "\r"] {
+                let unterminated = format!("{prefix}{record}{suffix}");
+                fs::write(s.events_path(), &unterminated).unwrap();
+                let error = Store::open(dir.path()).err().expect("unterminated logs must prevent startup");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                assert_eq!(fs::read_to_string(s.events_path()).unwrap(), unterminated);
+                assert_eq!(fs::read(dir.path().join("inbox-readers.json")).unwrap(), saved);
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_accepted_log_remains_readable_after_append_and_restart() {
+        for ending in [None, Some("\n"), Some("\r\n")] {
+            let (dir, mut s) = store();
+            s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+            let log = fs::read_to_string(s.events_path()).unwrap();
+            let log = ending.map_or_else(String::new, |ending| format!("{}{ending}", log.trim_end()));
+            fs::write(s.events_path(), log).unwrap();
+            let mut s = Store::open(dir.path()).unwrap();
+            let readers = ["a", "b"].map(|name| InboxReader::Named { name: name.into() });
+            for reader in &readers {
+                assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
+            }
+            let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+            let mut s = Store::open(dir.path()).unwrap();
+            for reader in &readers {
+                let events = consume_inbox(&mut s, "p", reader.clone()).unwrap();
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].seq, event.seq);
+            }
+            let mut s = Store::open(dir.path()).unwrap();
+            for reader in readers {
+                assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_startup_validates_every_event_before_recovering_sequence() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        event.state = None;
+        let reader = InboxReader::Named { name: "existing".into() };
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        let saved = fs::read(dir.path().join("inbox-readers.json")).unwrap();
+        let valid = serde_json::to_value(&event).unwrap();
+        let mut damaged = vec!["{".to_string(), "".into()];
+        let mut missing_seq = valid.clone();
+        missing_seq.as_object_mut().unwrap().remove("seq");
+        damaged.push(missing_seq.to_string());
+        for seq in [json!(null), json!(-1), json!(1.5), json!("2")] {
+            let mut record = valid.clone();
+            record["seq"] = seq;
+            damaged.push(record.to_string());
+        }
+        damaged.push(valid.to_string().replace(&format!("\"seq\":{}", event.seq), "\"seq\":18446744073709551616"));
+        for field in ["at_ms", "jelly", "kind", "by", "version", "view_rev"] {
+            let mut record = valid.clone();
+            record.as_object_mut().unwrap().remove(field);
+            damaged.push(record.to_string());
+        }
+        let mut unknown_kind = valid.clone();
+        unknown_kind["kind"] = json!("unknown");
+        damaged.push(unknown_kind.to_string());
+        for record in damaged {
+            fs::write(s.events_path(), format!("{valid}\n{record}\n")).unwrap();
+            let error = Store::open(dir.path()).err().expect("malformed logs must prevent startup");
+            assert!(matches!(error.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof), "{record}: {error}");
+            assert_eq!(fs::read(dir.path().join("inbox-readers.json")).unwrap(), saved);
+        }
+
+        let mut older = event.clone();
+        older.seq -= 1;
+        fs::write(s.events_path(), format!("{valid}\n{}\n", serde_json::to_string(&older).unwrap())).unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let next = s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        assert_eq!(next.seq, event.seq + 1);
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap()[0].seq, next.seq);
+    }
+
+    #[test]
+    fn inbox_positions_preserve_filters_and_initial_window() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let reader = InboxReader::Named { name: "a".into() };
+        let mut events = Vec::new();
+        let mut push = |e: &Event| events.push(serde_json::to_string(e).unwrap());
+        event.seq = 1;
+        event.at_ms = now_ms() - 7_200_000;
+        push(&event);
+        event.seq = 2;
+        event.at_ms = now_ms();
+        push(&event);
+        event.seq = 3;
+        push(&event);
+        event.seq = 4;
+        event.by = "agent".into();
+        push(&event);
+        event.seq = 5;
+        event.by = PERSON.into();
+        event.jelly = PAGE.into();
+        push(&event);
+        event.seq = 6;
+        event.jelly = "p:sample".into();
+        event.kind = EventKind::Working;
+        push(&event);
+        event.seq = 7;
+        event.jelly = "other:sample".into();
+        event.kind = EventKind::Call;
+        push(&event);
+        fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
+        assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
+        assert_eq!(consume_inbox(&mut s, "", reader.clone()).unwrap().len(), 3);
+        assert_eq!(consume_inbox(&mut s, "other", reader.clone()).unwrap().len(), 1);
+        assert!(consume_inbox(&mut s, "missing", reader.clone()).unwrap().is_empty());
+        let records: Vec<InboxCursor> = serde_json::from_slice(&fs::read(dir.path().join("inbox-readers.json")).unwrap()).unwrap();
+        assert!(records.iter().all(|c| matches!(c.position, InboxPosition::After { seq: 7 })));
+        event.seq = 8;
+        event.jelly = "p:sample".into();
+        event.at_ms = 1;
+        let mut log = fs::OpenOptions::new().append(true).open(s.events_path()).unwrap();
+        writeln!(log, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap()[0].seq, 8);
+        assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbox_initial_window_stays_fixed_until_commit() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        event.state = None;
+        let reader = InboxReader::Named { name: "retry".into() };
+        let first_read_at = 7_200_000;
+        let mut events = Vec::new();
+        for (seq, at_ms) in [(1, first_read_at - 3_600_001), (2, first_read_at - 3_599_999), (3, first_read_at)] {
+            event.seq = seq;
+            event.at_ms = at_ms;
+            events.push(serde_json::to_string(&event).unwrap());
+        }
+        fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        assert!(!dir.path().join("inbox-readers.json").exists());
+        let first = s.read_inbox_at("p", &reader, first_read_at).unwrap();
+        assert_eq!(first.events.iter().map(|item| item.event.seq).collect::<Vec<_>>(), [2, 3]);
+        let retry_at = first_read_at + 3_600_001;
+        let expected = serde_json::to_value(&first).unwrap();
+        assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        let new_reader = InboxReader::Named { name: "new".into() };
+        assert!(s.read_inbox_at("p", &new_reader, retry_at).unwrap().events.is_empty());
+        s.commit_inbox(InboxCommit { inbox: InboxRequest { project: "p".into(), reader: reader.clone() }, through: first.through }).unwrap();
+        assert!(s.read_inbox_at("p", &reader, retry_at).unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn inbox_malformed_events_do_not_consume() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let existing = InboxReader::Named { name: "existing".into() };
+        let new = InboxReader::Named { name: "new".into() };
+        for project in ["p", ""] {
+            consume_inbox(&mut s, project, existing.clone()).unwrap();
+        }
+        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let path = dir.path().join("inbox-readers.json");
+        let saved = fs::read(&path).unwrap();
+        let log = fs::read_to_string(s.events_path()).unwrap();
+        let mut lines: Vec<_> = log.lines().collect();
+        lines[1] = "malformed";
+        fs::write(s.events_path(), lines.join("\n") + "\n").unwrap();
+        for project in ["p", ""] {
+            for reader in [&existing, &new] {
+                let error = consume_inbox(&mut s, project, reader.clone()).unwrap_err();
+                assert!(error.to_string().contains("could not read inbox"));
+                assert_eq!(fs::read(&path).unwrap(), saved);
+            }
+        }
+        fs::write(s.events_path(), log).unwrap();
+        for project in ["p", ""] {
+            for reader in [&existing, &new] {
+                assert_eq!(consume_inbox(&mut s, project, reader.clone()).unwrap().len(), 2);
+                assert!(consume_inbox(&mut s, project, reader.clone()).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_storage_failures_do_not_consume() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "a".into() };
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let path = dir.path().join("inbox-readers.json");
+        let saved = fs::read(&path).unwrap();
+        fs::write(&path, "broken").unwrap();
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, &saved).unwrap();
+        let tmp = path.with_extension("json.tmp");
+        fs::create_dir(&tmp).unwrap();
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        fs::remove_dir(tmp).unwrap();
+        let log = fs::read(s.events_path()).unwrap();
+        fs::remove_file(s.events_path()).unwrap();
+        fs::create_dir(s.events_path()).unwrap();
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        fs::remove_dir(s.events_path()).unwrap();
+        fs::write(s.events_path(), log).unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().len(), 1);
     }
 
     #[test]

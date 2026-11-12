@@ -63,7 +63,7 @@ impl Daemon {
     }
 
     fn wait(&self, token: &str) -> Value {
-        serde_json::from_str(&self.ok(&["wait", "plan", "--since", token, "--timeout", "0"])).unwrap()
+        serde_json::from_str(&self.ok(&["wait", "--json", "plan", "--since", token, "--timeout", "0"])).unwrap()
     }
 }
 
@@ -87,7 +87,10 @@ fn answers_completed_before_wait_are_replayed_in_all_attention_forms() {
         let mut expected = answered.clone();
         expected.as_object_mut().unwrap().remove("state");
         assert_eq!(daemon.wait(token(&output)), expected);
-        let timeout = daemon.cli(&["wait", "plan", "--since", &format!("seq:{}", answered["seq"]), "--timeout", "0"]);
+        let line = daemon.ok(&["wait", "plan", "--since", token(&output), "--timeout", "0"]);
+        assert!(line.starts_with(&format!("test:plan v{}: person answered {id} ", expected["version"])), "{line}");
+        assert_eq!(line.lines().count(), 1);
+        let timeout = daemon.cli(&["wait", "--json", "plan", "--since", &format!("seq:{}", answered["seq"]), "--timeout", "0"]);
         assert_eq!(timeout.status.code(), Some(2));
         assert!(timeout.stdout.is_empty());
     }
@@ -104,7 +107,7 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
     let spec = daemon.home.path().join("spec.json");
     std::fs::write(&spec, json!({"title": "Choice", "questions": [{"id": "one", "question": "Which?", "options": [{"id": "a", "label": "Quiet"}]}]}).to_string()).unwrap();
     for round in 1..=2 {
-        let output: Value = serde_json::from_str(&daemon.ok(&["ask", "sharing", "--spec", spec.to_str().unwrap()])).unwrap();
+        let output: Value = serde_json::from_str(&daemon.ok(&["ask", "sharing", "--spec", spec.to_str().unwrap(), "--json"])).unwrap();
         let log = daemon.log();
         let event = log.last().unwrap();
         assert_eq!(event["kind"], "attention");
@@ -119,19 +122,19 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
                 a["anchor"]["selector"] == "#q-one" && a["group"] == "round-2").unwrap();
             assert_eq!(item["id"], "a2");
             daemon.post(&format!("/api/jellies/test:sharing/attention/{}/answer", item["id"].as_str().unwrap()), json!({"option": "a", "by": "person"}));
-            let answer: Value = serde_json::from_str(&daemon.ok(&["wait", "sharing", "--since", output["since"].as_str().unwrap(), "--timeout", "0"])).unwrap();
+            let answer: Value = serde_json::from_str(&daemon.ok(&["wait", "--json", "sharing", "--since", output["since"].as_str().unwrap(), "--timeout", "0"])).unwrap();
             assert_eq!(answer["args"]["id"], item["id"]);
             assert_eq!(answer["args"]["group"], "round-2");
         }
     }
-    let bad_name = daemon.cli(&["wait", "missing", "--since", "seq:0", "--timeout", "10"]);
+    let bad_name = daemon.cli(&["wait", "--json", "missing", "--since", "seq:0", "--timeout", "10"]);
     assert_eq!(bad_name.status.code(), Some(1));
     for bad in ["v2", "seq:-1", "seq:", "seq:+2", "seq:18446744073709551616"] {
-        let result = daemon.cli(&["wait", "plan", "--since", bad]);
+        let result = daemon.cli(&["wait", "--json", "plan", "--since", bad]);
         assert_eq!(result.status.code(), Some(2));
         assert!(String::from_utf8_lossy(&result.stderr).contains("use seq:N"));
     }
-    let too_long = daemon.cli(&["wait", "plan", "--since", "seq:0", "--timeout", "18446744073709551615"]);
+    let too_long = daemon.cli(&["wait", "--json", "plan", "--since", "seq:0", "--timeout", "18446744073709551615"]);
     assert_eq!(too_long.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&too_long.stderr).contains("timeout is too large"));
     for query in ["since=0", "since=0&by=", "since=no&by=agent"] {
@@ -144,14 +147,14 @@ fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
     let daemon = Daemon::start();
     let asked = daemon.ok(&["ask", "plan", "Which?"]);
     daemon.post("/api/jellies/test:plan/attention/a1/answer", json!({"text": "yes", "by": "person"}));
-    let timeout = daemon.cli(&["wait", "plan", "--timeout", "1"]);
+    let timeout = daemon.cli(&["wait", "--json", "plan", "--timeout", "1"]);
     assert_eq!(timeout.status.code(), Some(2));
     assert!(timeout.stdout.is_empty());
     assert!(daemon.wait(token(&asked)).get("state").is_none());
 
     for since_mode in [false, true] {
         let head = format!("seq:{}", daemon.log().last().unwrap()["seq"]);
-        let mut args = vec!["wait", "plan", "--timeout", "3"];
+        let mut args = vec!["wait", "--json", "plan", "--timeout", "3"];
         if since_mode { args.extend(["--since", &head]); }
         let mut child = daemon.command(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let end = Instant::now() + Duration::from_secs(5);
@@ -173,7 +176,7 @@ fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
     }
 
     let head = daemon.log().last().unwrap()["seq"].clone();
-    let mut child = daemon.command(&["wait", "plan", "--since", &format!("seq:{head}"), "--timeout", "1"])
+    let mut child = daemon.command(&["wait", "--json", "plan", "--since", &format!("seq:{head}"), "--timeout", "1"])
         .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let end = Instant::now() + Duration::from_secs(4);
     while child.try_wait().unwrap().is_none() && Instant::now() < end {
@@ -213,7 +216,7 @@ fn historical_short_names_still_fall_back_to_a_unique_existing_jelly() {
         }
         let asked = daemon.ok(&["ask", "remote", "Which?"]);
         let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
-        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
         assert_eq!(result["seq"], answer["seq"]);
     }
 }
@@ -229,7 +232,7 @@ fn a_later_local_jelly_cannot_redirect_a_fallback_wait() {
             ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
         }
         let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
-        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
         assert_eq!(result["seq"], answer["seq"]);
         assert_eq!(result["jelly"], "other:remote");
     }
@@ -262,7 +265,7 @@ fn an_unrelated_cursor_cannot_override_the_current_project() {
             ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
         }
         daemon.post("/api/jellies/other:remote/attention", json!({"title": "Other question?", "by": "person"}));
-        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", &format!("seq:{}", cursor["seq"]), "--timeout", "0"])).unwrap();
+        let result: Value = serde_json::from_str(&daemon.ok(&["wait", "--json", "remote", "--since", &format!("seq:{}", cursor["seq"]), "--timeout", "0"])).unwrap();
         assert_eq!(result["seq"], answer["seq"]);
         assert_eq!(result["jelly"], "test:remote");
     }
@@ -290,7 +293,7 @@ fn historical_names_match_cli_precedence_with_bare_and_qualified_candidates() {
                 }
                 daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
                 daemon.post("/api/jellies/test:remote/attention", json!({"title": "Unrelated", "by": "person"}));
-                let result = daemon.command_in_project(project, &["wait", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
+                let result = daemon.command_in_project(project, &["wait", "--json", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
                 assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
                 let result: Value = serde_json::from_slice(&result.stdout).unwrap();
                 assert_eq!(result["seq"], answer["seq"], "project={project}, qualified={qualified_count}, after_answer={after_answer}");
@@ -308,7 +311,7 @@ fn historical_candidates_account_for_moves_before_the_cursor() {
     let asked = daemon.ok(&["ask", "remote", "Which?"]);
     let answer = daemon.post("/api/jellies/remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
     daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
-    let result: Value = serde_json::from_str(&daemon.ok(&["wait", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
+    let result: Value = serde_json::from_str(&daemon.ok(&["wait", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
     assert_eq!(result["seq"], answer["seq"]);
     assert_eq!(result["jelly"], "remote");
 }
@@ -322,7 +325,7 @@ fn historical_names_outside_a_project_keep_a_formerly_unique_candidate() {
     let asked = String::from_utf8(asked.stdout).unwrap();
     let answer = daemon.post("/api/jellies/other:remote/attention/a1/answer", json!({"text": "yes", "by": "person"}));
     daemon.post("/api/jellies", json!({"name": "remote", "project": "third", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
-    let result = daemon.command_in_project("", &["wait", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
+    let result = daemon.command_in_project("", &["wait", "--json", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let result: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(result["seq"], answer["seq"]);
