@@ -578,9 +578,7 @@
     } else {
       if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
       if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
-      const first = [...document.body.children].find((c) => !isOurs(c) && c.getBoundingClientRect().width > 0);
-      const r = first?.getBoundingClientRect(), b = document.body.getBoundingClientRect();
-      const style = r ? `box-sizing:border-box;width:${r.width}px;margin:14px 0 14px ${r.left - b.left}px;max-width:calc(100vw - 16px)` : "margin:14px 16px";
+      const style = "display:block;grid-column:1/-1;flex-basis:100%;box-sizing:border-box;width:100%;min-width:0;max-width:calc(100vw - 32px);margin:14px 0";
       if (topStack.style.cssText !== style) topStack.style.cssText = style;
       const tail = tails.get(topStack);
       if (tail) { if (tail.nextElementSibling !== slot) tail.after(slot); }
@@ -665,7 +663,6 @@
     const allItems = shownItems();
     const selfRendered = inline();
     const items = selfRendered ? [] : allItems;
-
     const keep = new Set(items.map((a) => a.id));
     for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
     if (!document.body) return;
@@ -761,7 +758,6 @@
       return;
     }
     for (const fn of attendSubs) { try { fn(item); } catch (e) { console.error(e); } }
-
     drawAttention();
     const host = inline() ? anchorElement(item) : cards.get(id);
     if (!host) return;
@@ -843,7 +839,6 @@
   }
   function anchorsThat(kind) {
     return attention.filter((a) => isOpen(a) && a.anchor?.selector && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
-
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
@@ -864,7 +859,6 @@
     comments = j.comments || []; attention = j.attention || []; working = j.working || null;
     drawMarkers(); drawWorking();
     for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
-
   }
 
   addEventListener("DOMContentLoaded", () => {

@@ -591,7 +591,6 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         let j = store.get(name).map_err(|e| e.to_string())?;
         app.snapshot_owner(name, j.view_rev).map_err(|_| "could not issue snapshot owner".to_string())?
     };
-
     let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
@@ -1446,6 +1445,5 @@ mod tests {
         };
         let (result, _) = tokio::join!(checking, replace);
         assert!(result.unwrap_err().contains("changed"));
-
     }
 }

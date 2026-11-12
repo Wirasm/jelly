@@ -107,7 +107,6 @@ If row insertion is unsafe, the reply and `see` name the actual fallback destina
 Without a measurement for that question, the reply says it was not checked. Pages
 that render their own inline attention retain missing, floating and hidden anchor
 diagnostics; the runtime cannot confirm where their visible questions appear. Clear your own
-
 test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
@@ -121,8 +120,7 @@ spans the group's width after the item's row, before later rows. List items and
 table rows get a full-width question row too. An anchor inside an SVG puts the
 card below the whole drawing. Layouts that cannot take a question row keep their
 layout; the reply names the group the card follows, or says it went to the top.
-If its anchor or adjacent card is hidden or
-clipped, the same card appears at the top with a line naming the part it is about.
+If its anchor or adjacent card is hidden or clipped, the same card appears at the top with a line naming the part it is about.
 It returns beside the anchor when that part appears, keeping the draft and focus.
 
 `jelly.onAttend(fn)` notifies the view synchronously with the attention item before
@@ -131,7 +129,6 @@ It returns an unsubscribe function. The runtime shows a fallback immediately;
 asynchronous reveals never delay it, and later DOM changes relocate the card.
 A presentation-only reveal can change the DOM as above; persistent selection
 changes still go through a verb with `jelly.call`.
-
 
 One question on an existing jelly, about one part of it:
 

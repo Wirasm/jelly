@@ -54,6 +54,10 @@ async page => {
     const r = h.getBoundingClientRect();
     return {width:r.width,height:r.height,parent:h.parentElement.className,parentHidden:h.parentElement.hidden,focusedInCard:!!h.shadowRoot.activeElement,questionVisible:h.checkVisibility()};
   });
+  assert(await frame.locator(`#jf-q-${id}`).evaluate(h => {
+    const r = h.getBoundingClientRect();
+    return r.width >= innerWidth - 40 && r.left >= 0 && r.right <= innerWidth;
+  }), 'rescued card uses the page width even when its first element is a small button');
   // Move the same focused draft out of, and back into, an attribute-only reveal.
   await frame.locator(`#jf-q-${id} textarea`).fill('keep this draft');
   await frame.evaluate(id => {
