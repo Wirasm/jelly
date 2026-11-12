@@ -846,6 +846,10 @@ const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 /// screenshot there; either way the page's runtime posts a fresh snapshot.
 async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
     let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
+    run_browser(&bin, port, name, width, height, png, limit).await
+}
+
+async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
     let url = if width < 500 {
@@ -871,7 +875,8 @@ async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std
     }
     let run = cmd.arg(url).status();
     match tokio::time::timeout(limit, run).await {
-        Ok(Ok(_)) => Ok(()),
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(format!("the browser failed ({status})")),
         Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
         Err(_) => Err(format!("the browser took longer than {} s", limit.as_secs())),
     }
@@ -1306,6 +1311,43 @@ mod tests {
                 let (result, _) = tokio::join!(seeing, changing);
                 assert_eq!(result.expect_err("obsolete see must fail").into_response().status(), StatusCode::CONFLICT,
                     "png={png}, replace={replace}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn see_png_reports_only_a_screenshot_the_browser_made() {
+        use std::os::unix::fs::PermissionsExt;
+        for (exit, old_png) in [(3, false), (3, true), (0, false)] {
+            let (dir, app) = app();
+            create_page(&app, "PAGE", false).await;
+            let current = owner(&app, "test:x").await;
+            post(&app, snapshot(&current, "PAGE", 1)).await.unwrap();
+            let png = dir.path().join("see/test_x-1280.png");
+            if old_png {
+                std::fs::create_dir_all(png.parent().unwrap()).unwrap();
+                std::fs::write(&png, b"old").unwrap();
+            }
+            let browser = dir.path().join("browser.sh");
+            std::fs::write(&browser, format!("#!/bin/sh\nexit {exit}\n")).unwrap();
+            std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let browser = browser.to_str().unwrap().to_string();
+            let response = see_with_renderer(app.clone(), "test:x".into(),
+                SeeQ { width: None, height: None, png: true, full: false },
+                move |width, height, path| {
+                    let browser = browser.clone();
+                    async move {
+                        run_browser(&browser, 0, "test:x", width, height, path.as_deref(), std::time::Duration::from_secs(5)).await
+                    }
+                }).await.unwrap();
+            let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+            let png_line = format!("png      {}", png.display());
+            if exit == 0 {
+                assert!(out.contains(&png_line), "{out}");
+            } else {
+                assert!(!out.contains("png      "), "old_png={old_png}: {out}");
+                assert!(out.contains("No screenshot: the browser failed (exit status: 3)"), "{out}");
             }
         }
     }
