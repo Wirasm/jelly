@@ -119,10 +119,16 @@ One question on an existing jelly, about one part of it:
 ```bash
 jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
   --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
-  --why "Calmer, and the button stands out more" --at "#hero"
+  --why "Calmer, and the button stands out more" --at "#hero" --wait
+# blocks; prints: a1 answered: quiet · "keep the button blue"
 jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
+
+`--wait` is the default way to ask one question: it blocks until the person answers
+(or the ask is withdrawn) and prints only that, with `--json` for the whole item.
+`--timeout SECONDS` gives up with exit code 2. Without `--wait`, the answer arrives in
+`jelly inbox` or `jelly wait`.
 
 Several related questions, with options laid out side by side, make an ask page:
 
