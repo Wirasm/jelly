@@ -1,5 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"></head><body>
-<img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div>
+<img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
+<script src="assets/helper.js"></script>
 <script>
 const errors = [];
 addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true);
@@ -18,6 +19,10 @@ async function loaded(image) {
   assert(image.complete && image.naturalWidth > 0, `pixels: ${image.id}`);
 }
 (async () => {
+  assert(jelly.state.picture === 'assets/dot.png', 'literal script value unchanged');
+  assert(document.getElementById('literal-label').textContent === jelly.state.picture, 'ordinary text unchanged');
+  assert('assets/dot.png.extra' === jelly.state.picture + '.extra', 'absent longer literal unchanged');
+  assert(window.localHelper === true, 'literal uploaded script executes');
   const original = JSON.stringify(jelly.state);
   const history = JSON.stringify(jelly.items);
   let attentionCalls = 0, stateCalls = 0;
@@ -40,6 +45,23 @@ async function loaded(image) {
   assert(jelly.asset('absent.png') === 'assets/absent.png', 'missing asset fallback');
   await Promise.all([...document.images].map(loaded));
 
+  for (const assign of [
+    image => { image.src = jelly.state.picture; },
+    image => { image.srcset = `${jelly.state.picture} 1x`; },
+    image => image.setAttribute('SRC', jelly.state.picture),
+    image => image.setAttribute('srcset', `${jelly.state.picture} 1x`),
+    image => image.setAttributeNS(null, 'src', jelly.state.picture),
+    image => image.setAttributeNS(null, 'srcset', `${jelly.state.picture} 1x`),
+  ]) {
+    const detached = new Image();
+    detached.id = 'detached';
+    assign(detached);
+    await loaded(detached);
+    const canvas = document.createElement('canvas');
+    canvas.getContext('2d').drawImage(detached, 0, 0);
+    assert(canvas.getContext('2d').getImageData(0, 0, 1, 1).data[3] > 0, 'detached canvas pixels');
+    document.body.append(detached);
+  }
   const responsive = new Image();
   responsive.id = 'responsive';
   responsive.srcset = `${jelly.state.picture}?v=1 1x, ${jelly.state.picture}#fragment 2x`;
@@ -68,6 +90,18 @@ async function loaded(image) {
   await new Promise(resolve => setTimeout(resolve, 0));
   assert(style.textContent.includes('data:image/png') && background.style.backgroundImage.includes('data:image/png'), 'CSS changes resolved');
 
+  for (const escaped of [jelly.state.picture.replace('.', '\\.'), jelly.state.picture.replace('.', '\\2e '), jelly.state.picture.replace('d', '\\64 ')]) {
+    for (const quote of ['', '"', "'"]) {
+      const value = `url(${quote}${escaped}${quote})`;
+      style.textContent = `#background { background-image: ${value}; }`;
+      background.setAttribute('style', `background-image: ${value}`);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert(style.textContent.includes('data:image/png') && background.style.backgroundImage.includes('data:image/png'), 'escaped CSS at both consumers');
+      const image = new Image();
+      image.src = getComputedStyle(background).backgroundImage.slice(5, -2);
+      await loaded(image);
+    }
+  }
   await new Promise(resolve => setTimeout(resolve, 20));
   document.getElementById('pictures').innerHTML = `<img id="late" src="${jelly.state.picture}">`;
   await loaded(document.getElementById('late'));
@@ -97,7 +131,10 @@ async function loaded(image) {
   script.textContent = JSON.stringify({path: jelly.state.picture});
   document.body.append(script);
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert(svgImage.getAttribute('xlink:href') === jelly.asset('dot.png'), 'SVG resource');
+  assert(svgImage.getAttributeNS('http://www.w3.org/1999/xlink', 'href') === jelly.asset('dot.png'), 'SVG resource');
+  svgImage.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', 'assets/' + 'unused.png');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(svgImage.getAttributeNS('http://www.w3.org/1999/xlink', 'href') === jelly.asset('unused.png'), 'later namespaced SVG update');
   assert(links.every((a, i) => a.getAttribute('href') === untouched[i] && a.dataset.path === jelly.state.picture), 'exact local resource matching');
   assert(JSON.parse(script.textContent).path === jelly.state.picture, 'script data unchanged');
   document.getElementById('late').src = './' + jelly.state.picture + '?changed';
@@ -109,6 +146,26 @@ async function loaded(image) {
   }
   assert((await fetch(path, {method: 'HEAD'})).ok, 'HEAD asset fetch');
   assert(await (await fetch('data:text/plain,unrelated')).text() === 'unrelated', 'native fetch');
+  const matrix = [];
+  for (const kind of ['ask', 'look']) for (const answer of [undefined, {text: 'yes'}]) for (const withdrawn of [undefined, {by: 'agent'}]) for (const selector of [undefined, '#pictures', '#other']) {
+    matrix.push({id: `item-${matrix.length}`, kind, title: 'test', answer, withdrawn, anchor: selector ? {selector} : undefined});
+  }
+  const readers = [];
+  for (const source of [__LIVE_RUNTIME__, __SNAPSHOT_RUNTIME__]) {
+    const frame = document.createElement('iframe');
+    const ready = new Promise(resolve => { frame.onload = resolve; });
+    frame.srcdoc = '<!doctype html><html><head></head><body></body></html>';
+    document.body.append(frame);
+    await ready;
+    const w = frame.contentWindow;
+    w.__JELLY__ = {name: 'test:conformance', state: {}, attention: matrix, assets: [], version: 1};
+    w.WebSocket = class {};
+    w.fetch = async () => ({ok: true, json: async () => w.__JELLY__});
+    w.eval(source);
+    readers.push({items: ids(w.jelly.items), attention: ids(w.jelly.attention), at: ['#pictures', '#other', '#missing'].map(selector => ids(w.jelly.itemsAt(selector)))});
+    frame.remove();
+  }
+  assert(JSON.stringify(readers[0]) === JSON.stringify(readers[1]), 'live and shared attention conformance');
   const calls = [];
   const nativeFetch = window.fetch;
   window.fetch = (...args) => { calls.push(args); return nativeFetch(...args); };

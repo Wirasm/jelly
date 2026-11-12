@@ -526,7 +526,8 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     let (j, dir, files) = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(&name)?.clone();
-        (j, store.asset_dir(&name), store.assets(&name))
+        (j, store.asset_dir(&name), store.try_assets(&name)
+            .map_err(|e| ApiError::Internal(format!("could not share assets for {name}: {e}")))?)
     };
     let mut assets = Vec::new();
     for file in files {
@@ -535,15 +536,10 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
         let uri = format!("data:{};base64,{}", content_type(&file), base64::engine::general_purpose::STANDARD.encode(bytes));
         assets.push((file, uri));
     }
-    assets.sort_by_key(|(file, _)| std::cmp::Reverse(file.len()));
-    let mut html = j.view.clone();
-    for (file, uri) in &assets {
-        html = html.replace(&format!("assets/{file}"), uri);
-    }
     let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
-    Ok(Html(inject_head(&html, &inject)))
+    Ok(Html(inject_head(&j.view, &inject)))
 }
 
 #[derive(Deserialize)]
@@ -1210,7 +1206,7 @@ mod share_tests {
         assert_eq!(assets["dot.png"], "data:image/png;base64,cG5n");
         assert_eq!(assets["dot.png.extra"], "data:application/octet-stream;base64,bG9uZw==");
         assert_eq!(assets["unused.txt"], "data:text/plain; charset=utf-8;base64,dW51c2Vk");
-        assert!(html.contains(&format!("<img src='{}'><img src='{}'>", assets["dot.png.extra"], assets["dot.png"])));
+        assert!(html.contains("<img src='assets/dot.png.extra'><img src='assets/dot.png'>"));
     }
 
     #[tokio::test]
@@ -1231,10 +1227,23 @@ mod share_tests {
     }
 
     #[tokio::test]
+    async fn share_refuses_asset_enumeration_failure() {
+        let (_dir, app) = fixture("");
+        let path = app.store.lock().unwrap().asset_dir("test:share");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"not a directory").unwrap();
+        let error = share(State(app), Path("test:share".into())).await.expect_err("asset enumeration must succeed");
+        assert!(matches!(error, ApiError::Internal(message) if message.contains("could not share assets for test:share")));
+    }
+
+    #[tokio::test]
     #[ignore = "requires Chrome/Chromium; run explicitly with --ignored"]
     async fn shared_file_renders_assets_and_reading_api() {
         let browser = chrome().expect("Chrome/Chromium required; set JELLY_CHROME to the browser binary");
-        let (dir, app) = fixture(include_str!("../tests/fixtures/share/view.html"));
+        let view = include_str!("../tests/fixtures/share/view.html")
+            .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS).unwrap().replace("</", "<\\/"))
+            .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS).unwrap().replace("</", "<\\/"));
+        let (dir, app) = fixture(&view);
         {
             let mut store = app.store.lock().unwrap();
             let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGP4z8DwHxkzkC4AADxAH+HggXe0AAAAAElFTkSuQmCC").unwrap();
@@ -1242,6 +1251,7 @@ mod share_tests {
                 store.put_asset("test:share", file, &png, "agent").unwrap();
             }
             store.put_asset("test:share", "hello.txt", b"hello offline", "agent").unwrap();
+            store.put_asset("test:share", "helper.js", b"window.localHelper = true;", "agent").unwrap();
         }
         let html = exported(app).await;
         let path = dir.path().join("shared.html");

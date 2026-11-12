@@ -14,11 +14,16 @@
     return uri ? uri + url.hash : value;
   }
   function css(value) {
-    // Skip comments and strings so only URL tokens are resolved.
-    return value.replace(/\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?<![\w-])url\(\s*(?:"([^"\\]*)"|'([^'\\]*)'|([^\s)'"\\]*))\s*\)/gi,
+    // CSS escapes are decoded only inside URL tokens, never in strings or comments.
+    return value.replace(/\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|(?<![\w-])url\(\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|((?:\\(?:[0-9a-f]{1,6}(?:\r\n|[ \t\n\r\f])?|[^\n\r\f])|[^\s)'"\\])*))\s*\)/gi,
       (token, double, single, bare) => {
-        const url = double ?? single ?? bare;
-        if (url === undefined) return token;
+        const raw = double ?? single ?? bare;
+        if (raw === undefined) return token;
+        const url = raw.replace(/\\(?:([0-9a-f]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\s\S]))/gi, (_, hex, char) => {
+          if (!hex) return /[\n\r\f]/.test(char) ? "" : char;
+          const point = parseInt(hex, 16);
+          return String.fromCodePoint(!point || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff) ? 0xfffd : point);
+        });
         const resolved = resource(url);
         return resolved === url ? token : `url("${resolved}")`;
       });
@@ -30,12 +35,37 @@
       return resource(clean) + url.slice(clean.length) + descriptor;
     });
   }
+  // Detached images can finish loading before ever joining the observed tree.
+  for (const name of ["src", "srcset"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, name);
+    Object.defineProperty(HTMLImageElement.prototype, name, {
+      ...descriptor,
+      set(value) { descriptor.set.call(this, name === "srcset" ? srcset(String(value)) : resource(String(value))); },
+    });
+  }
+  const setAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value) {
+    const key = String(name).toLowerCase();
+    if (this instanceof HTMLImageElement) {
+      if (key === "src") value = resource(String(value));
+      if (key === "srcset") value = srcset(String(value));
+    }
+    return setAttribute.call(this, name, value);
+  };
+  const setAttributeNS = Element.prototype.setAttributeNS;
+  Element.prototype.setAttributeNS = function(namespace, name, value) {
+    if (!namespace && this instanceof HTMLImageElement) return this.setAttribute(name, value);
+    return setAttributeNS.call(this, namespace, name, value);
+  };
   function reconcile(element) {
-    for (const attr of ["src", "srcset", "href", "xlink:href", "poster", "style"]) {
-      const value = element.getAttribute(attr);
-      if (value === null) continue;
-      const resolved = attr === "style" ? css(value) : attr === "srcset" ? srcset(value) : resource(value);
-      if (resolved !== value) element.setAttribute(attr, resolved);
+    for (const attr of [...element.attributes]) {
+      if (!["src", "srcset", "href", "xlink:href", "poster", "style"].includes(attr.name)) continue;
+      const value = attr.value;
+      const resolved = attr.name === "style" ? css(value) : attr.name === "srcset" ? srcset(value) : resource(value);
+      if (resolved !== value) {
+        if (attr.namespaceURI) element.setAttributeNS(attr.namespaceURI, attr.name, resolved);
+        else element.setAttribute(attr.name, resolved);
+      }
     }
     if (element.localName === "style") {
       const value = element.textContent;
@@ -57,8 +87,7 @@
         change.addedNodes.forEach(subtree);
       }
     }
-  }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true,
-    attributeFilter: ["src", "srcset", "href", "xlink:href", "poster", "style"] });
+  }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
   subtree(document.documentElement);
   const fetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
