@@ -590,22 +590,25 @@ fn run(cli: Cli) -> Result<(), String> {
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n).to_string();
             let dir = dir.unwrap_or_else(|| PathBuf::from(&short));
             let j = get(&api(&format!("/{name}")))?;
+            let inventory = get(&api(&format!("/{name}/assets")))
+                .map_err(|e| format!("could not read asset inventory: {e}"))?;
+            let files = serde_json::from_value::<Vec<String>>(inventory)
+                .map_err(|e| format!("invalid asset inventory: {e}"))?;
             std::fs::create_dir_all(dir.join("assets")).map_err(|e| e.to_string())?;
             std::fs::write(dir.join("view.html"), j["view"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
             std::fs::write(dir.join("verbs.js"), j["verbs"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
             std::fs::write(dir.join("state.json"), serde_json::to_string_pretty(&j["state"]).unwrap_or_default()).map_err(|e| e.to_string())?;
             let assets_dir = format!("{}/j/{}/assets", cli.url, name);
-            let list = std::fs::read_dir(std::env::var_os("JELLY_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".jelly")).join("assets").join(&name));
-            let mut n = 0;
-            for f in list.into_iter().flatten().flatten() {
-                let file = f.file_name().to_string_lossy().to_string();
-                if let Ok(r) = ureq::get(&format!("{assets_dir}/{}", encode(&file))).call() {
-                    let mut bytes = Vec::new();
-                    r.into_reader().read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                    std::fs::write(dir.join("assets").join(&file), bytes).map_err(|e| e.to_string())?;
-                    n += 1;
-                }
+            for file in &files {
+                let response = ureq::get(&format!("{assets_dir}/{}", encode(file))).call()
+                    .map_err(|e| format!("could not download asset {file}: {}", describe(e)))?;
+                let mut bytes = Vec::new();
+                response.into_reader().read_to_end(&mut bytes)
+                    .map_err(|e| format!("could not read asset {file}: {e}"))?;
+                std::fs::write(dir.join("assets").join(file), bytes)
+                    .map_err(|e| format!("could not write asset {file}: {e}"))?;
             }
+            let n = files.len();
             println!("{}/  view.html  verbs.js  state.json  assets/ ({n})\nEdit, then: jelly dev {name} {}", dir.display(), dir.display());
             Ok(())
         }
