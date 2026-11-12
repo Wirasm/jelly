@@ -101,7 +101,7 @@ async page => {
         await waitSaved(name,'pinned',false);
         await page.locator('#back').click();
         await page.locator('#full').waitFor({state:'hidden'});
-        await page.evaluate(() => document.activeElement.blur());
+        await page.locator('.entry.sel h2').click();
         await page.keyboard.press('Enter');
         await page.locator('#full').waitFor({state:'visible'});
         await page.locator('#back').focus();
