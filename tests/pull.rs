@@ -76,7 +76,11 @@ fn pull_gets_assets_from_selected_daemon_with_separate_client_homes() {
     std::fs::write(local_assets.join("note.txt"), b"wrong client bytes").unwrap();
     std::fs::write(local_assets.join("client-only.txt"), b"not on daemon").unwrap();
     daemon.post("/api/jellies", json!({"name": "sample", "project": "p", "view": VIEW, "verbs": VERBS, "state": {"count": 7}, "by": "agent"}));
-    let assets: [(&str, &[u8]); 2] = [("note.txt", b"daemon note\n"), ("binary.bin", &[0, 255, 128, 10])];
+    let assets: [(&str, &[u8]); 6] = [
+        ("note.txt", b"daemon note\n"), ("binary.bin", &[0, 255, 128, 10]),
+        ("a..", b"trailing dots"), ("a..txt", b"consecutive dots"),
+        ("a...txt", b"longer dot run"), ("UPPER-_.txt", b"ordinary punctuation"),
+    ];
     for (file, bytes) in assets {
         let path = temp.path().join(file);
         std::fs::write(&path, bytes).unwrap();
@@ -86,13 +90,13 @@ fn pull_gets_assets_from_selected_daemon_with_separate_client_homes() {
     for (home, name, folder) in [(&client, "sample", "pulled"), (&empty_client, "p:sample", "pulled-again")] {
         let dest = temp.path().join(folder);
         let output = stdout(daemon.command(home).args(["pull", name]).arg(&dest).output().unwrap());
-        assert!(output.contains("assets/ (2)"), "{output}");
+        assert!(output.contains("assets/ (6)"), "{output}");
         assert_core(&dest);
         for (file, bytes) in assets {
             assert_eq!(std::fs::read(dest.join("assets").join(file)).unwrap(), bytes);
         }
         assert!(!dest.join("assets/client-only.txt").exists());
-        assert_eq!(std::fs::read_dir(dest.join("assets")).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(dest.join("assets")).unwrap().count(), assets.len());
     }
 }
 
@@ -173,4 +177,27 @@ fn pull_reports_inventory_and_download_failures() {
         if download { assert!(stderr.contains("asset unavailable"), "{stderr}"); }
         assert!(!String::from_utf8_lossy(&output.stdout).contains("assets/ ("));
     }
+}
+
+#[test]
+fn pull_reports_daemon_inventory_enumeration_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("daemon");
+    let daemon = Daemon::start(&home);
+    daemon.post("/api/jellies", json!({"name": "sample", "project": "p", "view": VIEW, "verbs": VERBS, "by": "agent"}));
+    ureq::post(&format!("{}/api/jellies/p:sample/assets/note.txt?by=agent", daemon.url))
+        .send_bytes(b"daemon note").unwrap();
+    let assets = home.join("assets/p:sample");
+    std::fs::rename(&assets, home.join("saved-assets")).unwrap();
+    std::fs::write(&assets, b"not a directory").unwrap();
+    let inventory = ureq::get(&format!("{}/api/jellies/p:sample/assets", daemon.url)).call();
+    let output = daemon.command(&temp.path().join("client")).args(["pull", "p:sample"])
+        .arg(temp.path().join("pulled")).output();
+
+    let error = inventory.unwrap_err();
+    assert!(matches!(error, ureq::Error::Status(500, _)), "{error}");
+    let output = output.unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not list assets"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("assets/ ("));
 }

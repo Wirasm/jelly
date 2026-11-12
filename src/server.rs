@@ -480,7 +480,7 @@ struct AssetQ {
 async fn list_assets(State(app): State<Shared>, Path(name): Path<String>) -> Result<Json<Vec<String>>, ApiError> {
     let store = app.store.lock().expect("store lock");
     store.get(&name)?;
-    Ok(Json(store.assets(&name)))
+    Ok(Json(store.try_assets(&name).map_err(|e| ApiError::Internal(format!("could not list assets for {name}: {e}")))?))
 }
 
 async fn put_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>, body: Bytes) -> Result<Json<Event>, ApiError> {
@@ -510,7 +510,7 @@ fn content_type(file: &str) -> &'static str {
 
 async fn asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>) -> Response {
     let dir = app.store.lock().expect("store lock").asset_dir(&name);
-    if file.starts_with('.') || file.contains('/') || file.contains("..") {
+    if file.starts_with('.') || file.contains('/') {
         return StatusCode::NOT_FOUND.into_response();
     }
     match tokio::fs::read(dir.join(&file)).await {
@@ -1241,6 +1241,21 @@ mod tests {
         assert_eq!(list_assets(State(app.clone()), Path("test:x".into())).await.unwrap().0, ["a.bin", "z.txt"]);
         assert_eq!(serde_json::to_value(app.store.lock().unwrap().get("test:x").unwrap()).unwrap(), before);
         assert_eq!(std::fs::read(dir.path().join("events.jsonl")).unwrap(), log);
+    }
+
+    #[tokio::test]
+    async fn asset_route_rejects_hidden_files_and_traversal() {
+        let (_dir, app) = app();
+        create_page(&app, "PAGE", false).await;
+        let dir = app.store.lock().unwrap().asset_dir("test:x");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for path in [dir.join(".hidden"), dir.join("sub/secret.txt"), dir.parent().unwrap().join("secret.txt")] {
+            std::fs::write(path, b"secret").unwrap();
+        }
+        for file in [".hidden", ".", "..", "../secret.txt", "sub/secret.txt"] {
+            let response = asset(State(app.clone()), Path(("test:x".into(), file.into()))).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{file}");
+        }
     }
 
     #[tokio::test]

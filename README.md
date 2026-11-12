@@ -106,7 +106,8 @@ on the next append.
 `jelly pull` gets asset names and bytes from the selected daemon, regardless of
 its home or the client's home. GET `/api/jellies/{name}/assets` returns a sorted
 JSON array of filenames, `[]` for an existing jelly without assets, or a JSON 404
-error for an unknown jelly. Bytes come from `/j/{name}/assets/{file}`. Pull reports
+error for an unknown jelly. Directory enumeration errors return a JSON 500 error.
+Bytes come from `/j/{name}/assets/{file}`. Pull reports
 success only after every listed file is written; inventory or download failures
 return an error and may leave a partial destination folder.
 

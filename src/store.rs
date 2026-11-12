@@ -678,10 +678,23 @@ impl Store {
     }
 
     pub fn assets(&self, name: &str) -> Vec<String> {
-        let mut out: Vec<String> = fs::read_dir(self.asset_dir(name)).into_iter().flatten().flatten()
-            .filter_map(|e| e.file_name().into_string().ok()).filter(|f| !f.starts_with('.')).collect();
+        self.try_assets(name).unwrap_or_default()
+    }
+
+    pub fn try_assets(&self, name: &str) -> std::io::Result<Vec<String>> {
+        let entries = match fs::read_dir(self.asset_dir(name)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+        for entry in entries {
+            if let Ok(file) = entry?.file_name().into_string() {
+                if !file.starts_with('.') { out.push(file); }
+            }
+        }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
