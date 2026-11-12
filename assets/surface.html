@@ -365,6 +365,7 @@
   // ---- attention dock ---------------------------------------------------------
 
   let dockOpen = false, lastCount = null;
+  let pendingAttend = null;
   // One row per thing to do: a round of questions on an ask page is one row
   // ("3 questions"), a single ask or look is one row, comment replies are one row.
   function attentionCards() {
@@ -372,7 +373,7 @@
     for (const a of attentionItems) {
       if (!a.group) { rows.push(a); continue; }
       const k = a.jelly + "/" + a.group;
-      if (!groups.has(k)) { const r = { jelly: a.jelly, kind: "ask", title: a.about || a.title, count: 0 }; groups.set(k, r); rows.push(r); }
+      if (!groups.has(k)) { const r = { jelly: a.jelly, id: a.id, kind: "ask", title: a.about || a.title, count: 0 }; groups.set(k, r); rows.push(r); }
       groups.get(k).count++;
     }
     const replies = jellies.filter((j) => j.replies_waiting > 0).map((j) => ({ jelly: j.name, kind: "reply", title: `${j.replies_waiting} comment repl${j.replies_waiting > 1 ? "ies" : "y"} from ${who(j.made_by)}` }));
@@ -382,7 +383,7 @@
   // happens there, next to what it is about.
   function row(a) {
     const pg = a.count ? `${a.count} question${a.count > 1 ? "s" : ""}` : a.kind;
-    const item = a.count || a.kind === "reply" ? "" : esc(a.id);
+    const item = a.kind === "reply" ? "" : esc(a.id);
     return `<button class="ditem" data-goto="${esc(a.jelly)}" data-item="${item}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
   }
   function renderDock() {
@@ -456,12 +457,20 @@
     if (g) {
       setDock(false);
       openFull(g.dataset.goto);
-      // Scroll the jelly to that question once the view has loaded.
+      pendingAttend = null;
       if (g.dataset.item) {
-        const send = () => $("full").querySelector("iframe")?.contentWindow?.postMessage({ type: "jelly:attend", id: g.dataset.item }, location.origin);
-        const f = $("full").querySelector("iframe");
-        f?.addEventListener("load", () => setTimeout(send, 150), { once: true });
-        setTimeout(send, 700);
+        const iframe = $("full").querySelector("iframe");
+        const request = { iframe, itemId: g.dataset.item };
+        pendingAttend = request;
+        const send = () => {
+          if (pendingAttend !== request || iframe !== $("full").querySelector("iframe")) { iframe.removeEventListener("load", send); return; }
+          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentWindow.jelly?.name !== g.dataset.goto) return;
+          pendingAttend = null;
+          iframe.removeEventListener("load", send);
+          iframe.contentWindow.postMessage({ type: "jelly:attend", id: request.itemId }, location.origin);
+        };
+        iframe.addEventListener("load", send);
+        send();
       }
     }
   });
@@ -507,9 +516,19 @@
     if (scroll) entries.get(name)?.scrollIntoView({ block: "start", behavior: "smooth" });
   }
 
+  // Older local focus echoes must not replace a more recent frame.
+  let focusWrites = Promise.resolve(), pendingFocusWrites = 0;
+  function writeFocus(name) {
+    pendingFocusWrites++;
+    focusWrites = focusWrites.then(() => jelly.call("focus", { name })).catch((err) => alert("Could not save your view selection. Try the action again.\n" + err.message)).finally(() => {
+      pendingFocusWrites--;
+      if (!pendingFocusWrites) applyFocus(jelly.state);
+    });
+  }
   function openFull(name, fromAgent) {
     if (!byName(name)) return;
     if (full !== name) {
+      pendingAttend = null;
       full = name;
       $("full").querySelector("iframe")?.remove();
       const f = document.createElement("iframe");
@@ -520,7 +539,7 @@
     $("full").hidden = false;
     renderFull();
     setCommenting($("fcomment"), false);
-    if (!fromAgent && jelly.state.focus !== name) jelly.call("focus", { name }).catch(() => {});
+    if (!fromAgent) writeFocus(name);
     setTimeout(() => markSeen(name), 800);
   }
   function renderFull() {
@@ -531,13 +550,14 @@
     $("fpin").textContent = j.pinned ? "Unpin" : "Pin";
   }
   function closeFull(fromAgent) {
+    pendingAttend = null;
     if (!full) return;
     const was = full;
     full = null;
     $("full").hidden = true;
     $("full").querySelector("iframe")?.remove();
     if (entries.has(was)) select(was, true);
-    if (!fromAgent && jelly.state.focus) jelly.call("focus", { name: null }).catch(() => {});
+    if (!fromAgent) writeFocus(null);
   }
 
   // ---- comments -------------------------------------------------------------
@@ -666,12 +686,16 @@
     clearTimeout(pending);
     pending = setTimeout(refresh, 120); // one refresh per burst of changes
   });
+  function applyFocus(s) {
+    if (s.focus && s.focus !== full) openFull(s.focus, true);
+    if (!s.focus && full) closeFull(true);
+  }
   // An agent focusing the surface opens that jelly full size; null closes it.
   jelly.onState((s, ev) => {
     if (!ev || !booted) return;
+    if (ev.verb === "focus" && pendingFocusWrites) return;
     if (ev.verb === "seen") return renderStream(); // a jelly was looked at: update New / Updated
-    if (s.focus && s.focus !== full) openFull(s.focus, true);
-    if (!s.focus && full) closeFull(true);
+    applyFocus(s);
   });
   setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
   $("live").classList.add("live");

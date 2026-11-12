@@ -24,6 +24,7 @@
     comments: [],
     feedback: [],
     onState(fn) { fn(boot.state, null); },
+    onAttend() { return () => {}; },
     events() { return () => {}; },
     watch() { return () => {}; },
     call: readOnly,

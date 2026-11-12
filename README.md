@@ -47,6 +47,19 @@ cargo install --path .
 jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 ```
 
+When upgrading, existing homes keep their stored jelly page, including any
+customizations. To install the bundled dock changes for opening and focusing
+questions, run this from the updated checkout against your running daemon:
+
+```bash
+jelly reshape surface --view assets/surface.html
+```
+
+This replaces the jelly page's view and keeps its state. If you customized that
+view, incorporate the dock changes from `assets/surface.html` into your version
+and reshape with that file instead. There is no automatic upgrade or compatibility
+layer for stored jelly pages.
+
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It prints nothing when there is nothing new or no daemon
 is running. A daemon that does not answer within a second, reader identification,
@@ -103,6 +116,14 @@ jelly's next change. Converted history is exempt from the new byte budget until
 new history displaces it, within the same 100-step limit. An older binary cannot
 read a rewritten file: it skips that jelly with a `missing field` error. To go
 back to an older binary, keep a copy of `~/.jelly/jellies/` from before the upgrade.
+
+`jelly pull` gets asset names and bytes from the selected daemon, regardless of
+its home or the client's home. GET `/api/jellies/{name}/assets` returns a sorted
+JSON array of filenames, `[]` for an existing jelly without assets, or a JSON 404
+error for an unknown jelly. Directory enumeration errors return a JSON 500 error.
+Bytes come from `/j/{name}/assets/{file}`. Pull reports
+success only after every listed file is written; inventory or download failures
+return an error and may leave a partial destination folder.
 
 ## How it works
 

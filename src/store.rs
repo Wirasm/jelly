@@ -118,6 +118,14 @@ impl Attention {
     pub fn is_open(&self) -> bool {
         self.answer.is_none() && self.withdrawn.is_none()
     }
+
+    /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly see`
+    /// and `jelly attention` both use it.
+    pub fn summary(&self) -> String {
+        let opts = self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
+        let kind = if self.kind == AttentionKind::Look { "look" } else { "ask" };
+        format!("{} {kind} {:?}{}{}", self.id, self.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, self.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -769,10 +777,23 @@ impl Store {
     }
 
     pub fn assets(&self, name: &str) -> Vec<String> {
-        let mut out: Vec<String> = fs::read_dir(self.asset_dir(name)).into_iter().flatten().flatten()
-            .filter_map(|e| e.file_name().into_string().ok()).filter(|f| !f.starts_with('.')).collect();
+        self.try_assets(name).unwrap_or_default()
+    }
+
+    pub fn try_assets(&self, name: &str) -> std::io::Result<Vec<String>> {
+        let entries = match fs::read_dir(self.asset_dir(name)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+        for entry in entries {
+            if let Ok(file) = entry?.file_name().into_string() {
+                if !file.starts_with('.') { out.push(file); }
+            }
+        }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
