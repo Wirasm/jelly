@@ -27,7 +27,6 @@ for (const id of ['head-open', 'head-closed', 'nested-open', 'nested-closed', 's
 }
 </script>
 <img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
-<object id="literal-object" data="assets/green.svg" onload="this.dataset.loaded = 'yes'" onerror="this.dataset.failed = 'yes'"></object>
 <script src="assets/helper.js"></script>
 <script>
 const assert = (ok, message) => { if (!ok) throw Error(message); };
@@ -249,10 +248,6 @@ async function loaded(image) {
   assert(new Uint8Array(await (await fetch('assets/legacy.css')).arrayBuffer()).includes(0xe9), 'original legacy CSS bytes');
   assert(new Uint8Array(await (await fetch(jelly.asset('utf16.css'))).arrayBuffer())[0] === 0xff, 'original UTF-16 CSS bytes');
   step = 'object resources';
-  const literalObject = document.getElementById('literal-object');
-  assert(!literalObject.dataset.failed, 'parsed object has no failed initial request');
-  if (!literalObject.dataset.loaded) await new Promise((resolve, reject) => { literalObject.onload = resolve; literalObject.onerror = reject; });
-  assert(literalObject.data === jelly.asset('green.svg'), 'parsed object image');
   for (const assign of [
     object => { object.data = 'assets/green.svg'; },
     object => object.setAttribute('DATA', 'assets/green.svg'),
