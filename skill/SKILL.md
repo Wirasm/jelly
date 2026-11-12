@@ -50,6 +50,12 @@ jelly.read("other"); jelly.watch("other", fn);  // another jelly's state
 jelly.focus("other");                           // open another jelly
 jelly.asset("shot.png");                        // URL of a file added with jelly asset
 jelly.itemsAt("#thumbs")[0]?.answer?.option;    // what they picked in a question about #thumbs
+const stop = jelly.onAttend(item => {             // when the dock opens this question
+  if (item.anchor?.selector === "#details-title") {
+    document.querySelector("#details").hidden = false;
+  }
+});
+// stop() unsubscribes; registration does not call the handler.
 ```
 
 Keep data in state, not in page variables or localStorage, so you and the person
@@ -92,29 +98,55 @@ jelly focus plan               # open it full size on their screen
 
 Always look before you show: run `jelly see`, and fix what is off before you focus
 the jelly or ask about it. `see` lists the errors your page threw (`error` lines)
-and questions whose `--at` matches nothing (`!` lines): fix both. `jelly ask` and
+and questions whose `--at` has invalid CSS selector syntax or matches nothing (`!`
+lines): fix them. `jelly ask` and
 `jelly look` say in their reply where the card landed: below the element, at the
-top because nothing matched or the element is in a fixed or sticky part, or below
-an element that is not on screen right now. Clear your own
-test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
+top because the selector is invalid, nothing matched or the element is in a fixed
+or sticky part, or below
+an element that is not on screen right now. If adjacent placement is unavailable,
+the card is shown at the top and the reply says so after the browser measures it.
+If row insertion is unsafe, the reply and `see` name the actual fallback destination.
+Without a measurement for that question, the reply says it was not checked. Pages
+that render their own inline attention retain invalid, missing, floating and hidden anchor
+diagnostics; the reply marks placement as not checked because the view places its
+own attention, as does `see` when reporting selector warnings. Clear your own test clicks with `jelly set` before the person uses the jelly. Add `assets/poster.png`, a frame that tells the story on
 its own, and the jelly page uses it as the thumbnail.
 
 ## Ask the person: attention
 
 Attention is everything you need from the person. Each question shows as a card
-in the page itself, right below the element `--at` points to (or at the top), and
+in the page itself, below the element `--at` points to (or at the top), and
 in their attention dock on the jelly page. They answer in place; an answered card
-shrinks to one line they can change.
+shrinks to one line they can change. In a grid or wrapping flex group, the card
+spans the group's width after the item's row, before later rows. List items and
+table rows get a full-width question row too. An anchor inside an SVG puts the
+card below the whole drawing. Layouts that cannot take a question row keep their
+layout; the reply names the group the card follows, or says it went to the top.
+If its anchor or adjacent card is hidden or clipped, the same card appears at the top with a line naming the part it is about.
+It returns beside the anchor when that part appears, keeping the draft and focus.
+
+`jelly.onAttend(fn)` notifies the view synchronously with the attention item before
+placement and focus, so it can reveal the part identified by `item.anchor.selector`.
+It returns an unsubscribe function. The runtime shows a fallback immediately;
+asynchronous reveals never delay it, and later DOM changes relocate the card.
+A presentation-only reveal can change the DOM as above; persistent selection
+changes still go through a verb with `jelly.call`.
 
 One question on an existing jelly, about one part of it:
 
 ```bash
 jelly ask plan "Which hero direction?" --option bold="Bold gradient" \
   --option quiet="Quiet white|Swaps to a plain hero" --recommend quiet \
-  --why "Calmer, and the button stands out more" --at "#hero"
+  --why "Calmer, and the button stands out more" --at "#hero" --wait
+# blocks; prints: a1 answered: quiet · "keep the button blue"
 jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
+
+`--wait` is the default way to ask one question: it blocks until the person answers
+(or the ask is withdrawn) and prints only that, with `--json` for the whole item.
+`--timeout SECONDS` gives up with exit code 2. Without `--wait`, the answer arrives in
+`jelly inbox` or `jelly wait`.
 
 Several related questions, with options laid out side by side, make an ask page:
 
@@ -159,6 +191,8 @@ jelly wait [plan]            # block until someone other than you changes someth
 jelly events [plan]          # stream every event as JSON lines
 ```
 
+`attention`, `comments` and `wait` print one line per item; add `--json` for the full data.
+
 Comments: the person can Option-click any element of any jelly and say what should
 change. Answer on the same thread, and change the jelly if they asked for it:
 
@@ -168,7 +202,24 @@ jelly reply plan c3 "Split it into two steps." --resolve   # done: closes the th
 jelly reply plan c3 "Which date, the 12th or the 19th?"    # asking back: stays open
 ```
 
-Set `JELLY_AS=<your name>` when several agents share one jelly page.
+Set `JELLY_AS=<your name>` when several agents share one jelly page. Each distinct
+name reads independently; reusing a name shares progress. Without an explicit
+`--as` / `JELLY_AS`, inbox uses `--session-id` / `JELLY_SESSION_ID`, then
+`CLAUDE_CODE_SESSION_ID`, then JSON `session_id` from `--hook` stdin. Use a stable,
+distinct `JELLY_SESSION_ID` for other agents' conversations and reuse it on resume.
+Without a supplied session ID, the invoking parent's PID and start time identify
+the reader until that process exits; a new parent starts a new reader.
+
+Cursors live in the daemon's home, per reader and project, and survive restarts.
+New readers see the last hour, then receive events since their own last read by
+event position. Old client timestamp cursors are unused after upgrading, so the
+recent hour may replay once for each new reader. Event attribution still defaults
+to `agent`. Use matching CLI and daemon versions. Inbox progress advances only
+after decoded events are successfully written and flushed to output. Lost or
+undecodable read responses leave events available for retry; ambiguous output,
+failed progress commits or client crashes may replay events. Hook diagnostics
+report reader identification, decoding and daemon read or commit failures;
+an empty inbox or unreachable daemon stays quiet.
 
 ## Projects and names
 
