@@ -10,8 +10,8 @@ customElements.define('share-root-probe', class extends HTMLElement {
   connectedCallback() { declarativeRoots.push(this.getRootNode()); }
 });
 </script>
-<div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
-<div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style></template></div>
+<div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
+<div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
 <template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"></template>
 <template id="outer"><template id="nested-open" shadowrootmode="open"><p>nested open</p></template><template id="nested-closed" shadowrootmode="closed"><p>nested closed</p></template></template>
 <div><template shadowrootmode="open"><p>root</p></template><template id="second-open" shadowrootmode="open"><p>second open</p></template><template id="second-closed" shadowrootmode="closed"><p>second closed</p></template></div>
@@ -183,6 +183,9 @@ async function loaded(image) {
   assert(declarativeRoots.length === 2, 'both declarative roots parsed');
   for (const root of declarativeRoots) {
     assert(!root.querySelector(window.__JELLY__.rootMarker), 'observer marker removed');
+    assert(!root.querySelector(`script[data-${window.__JELLY__.rootMarker}]`), 'shadow cleanup script removed');
+    const inert = root.querySelector('.shadow-inert').content.firstElementChild;
+    assert(inert.content.firstElementChild.localName === 'p' && inert.content.children.length === 1, 'inert content inside declarative root preserved');
     await loaded(root.querySelector('img'));
     await backgroundPixels(root.host, `declarative ${root.mode}`);
     root.querySelector('img').setAttribute('src', 'assets/unused.png');

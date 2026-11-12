@@ -202,7 +202,9 @@
       }
     }
   });
+  const observedRoots = new Set();
   function observe(root) {
+    observedRoots.add(root);
     observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
   }
   // Parser-created closed roots cannot be found from the document. The export's
@@ -218,7 +220,9 @@
   });
   // A declarative template can remain inert (including inside another template).
   // Its following parser script removes all instrumentation before view scripts run.
-  boot.finishTemplate = (script) => {
+  boot.finishTemplate = () => {
+    // currentScript is null inside shadow trees, including closed declarative roots.
+    const script = [...observedRoots].map(root => root.querySelector(`script[data-${boot.rootMarker}]`)).find(Boolean);
     function clean(template) {
       template.content.querySelectorAll("template").forEach(clean);
       template.content.querySelectorAll(`${boot.rootMarker}, script[data-${boot.rootMarker}]`).forEach(node => node.remove());

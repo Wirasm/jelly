@@ -547,7 +547,7 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
             if element.get_attribute("shadowrootmode").is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed")) {
                 element.prepend(&format!("<{marker} hidden></{marker}>"), lol_html::html_content::ContentType::Html);
             }
-            element.after(&format!("<script data-{marker}>window.__JELLY__.finishTemplate(document.currentScript)</script>"), lol_html::html_content::ContentType::Html);
+            element.after(&format!("<script data-{marker}>window.__JELLY__.finishTemplate()</script>"), lol_html::html_content::ContentType::Html);
             Ok(())
         })],
         ..Default::default()
