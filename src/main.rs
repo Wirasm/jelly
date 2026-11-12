@@ -315,7 +315,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(CommandError::Output(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            let _ = writeln!(std::io::stderr(), "jelly: {e}");
+            eprintln!("jelly: {e}");
             ExitCode::FAILURE
         }
     }
@@ -494,7 +494,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 let line = match line {
                     Ok(l) => l,
                     Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                        let _ = writeln!(std::io::stderr(), "jelly: nobody changed {what} in time");
+                        eprintln!("jelly: nobody changed {what} in time");
                         std::process::exit(2);
                     }
                     Err(e) => return Err(e.to_string().into()),
@@ -586,7 +586,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
                 (v, b) = (nv, nb);
                 match send("POST", &api(&format!("/{name}/reshape")), json!({"view": view, "verbs": verbs, "by": by})) {
                     Ok(ev) => output(format_args!("reshaped v{} ({})\n", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")))?,
-                    Err(e) => { let _ = writeln!(std::io::stderr(), "not reshaped: {e}"); },
+                    Err(e) => { eprintln!("not reshaped: {e}"); },
                 }
             }
         }
@@ -634,7 +634,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
             let browser = open_browser(&url);
             let printed = output(format_args!("{url}\n"));
             if let Err(e) = browser {
-                let _ = writeln!(std::io::stderr(), "jelly: could not open a browser ({e}); open {url} manually.");
+                eprintln!("jelly: could not open a browser ({e}); open {url} manually.");
             }
             printed
         }

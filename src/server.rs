@@ -13,7 +13,6 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -178,7 +177,7 @@ pub async fn serve(store: Store, port: u16) -> std::io::Result<()> {
 
     // Loopback only: anything that reaches this port can run verbs.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    let _ = writeln!(std::io::stderr(), "jelly on http://127.0.0.1:{port}");
+    eprintln!("jelly on http://127.0.0.1:{port}");
     axum::serve(listener, router).await
 }
 

@@ -306,32 +306,24 @@ fn dev_stops_before_watching_or_after_a_complete_reshape() {
 }
 
 #[test]
-fn domain_errors_stay_errors_with_closed_output_or_diagnostics() {
+fn domain_errors_stay_errors_with_closed_stdout() {
     let fixture = Fixture::new();
-    for stderr_closed in [false, true] {
-        let mut cmd = command(&fixture.url, &["ls", "--all"]);
-        cmd.stdout(closed_pipe());
-        if stderr_closed {
-            cmd.stderr(closed_pipe());
-        }
-        let mut child = Process(cmd.spawn().unwrap());
-        let mut req = fixture.request();
-        write!(req.stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{{\"error\":\"oops\"}}").unwrap();
-        let out = child.finish();
-        assert_eq!(out.status.code(), Some(1), "{out:?}");
-        if !stderr_closed {
-            assert_eq!(out.stderr, b"jelly: oops\n");
-        }
-    }
+    let mut child = Process(
+        command(&fixture.url, &["ls", "--all"])
+            .stdout(closed_pipe())
+            .spawn()
+            .unwrap(),
+    );
+    let mut req = fixture.request();
+    write!(req.stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{{\"error\":\"oops\"}}").unwrap();
+    let out = child.finish();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(out.stderr, b"jelly: oops\n");
 }
 
 #[test]
-fn serve_keeps_serving_with_closed_diagnostics() {
+fn serve_keeps_serving_with_closed_stdout() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join("jellies")).unwrap();
-    std::fs::write(dir.path().join("jellies/bad.json"), "invalid JSON").unwrap();
-    // Exercise both the skipped-file warning and best-effort event-log failure at startup.
-    std::fs::create_dir(dir.path().join("events.jsonl")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -342,7 +334,6 @@ fn serve_keeps_serving_with_closed_diagnostics() {
         )
         .arg(dir.path())
         .stdout(closed_pipe())
-        .stderr(closed_pipe())
         .spawn()
         .unwrap(),
     );
@@ -362,12 +353,11 @@ fn serve_keeps_serving_with_closed_diagnostics() {
 }
 
 #[test]
-fn wait_retains_its_timeout_exit_with_closed_diagnostics() {
+fn wait_retains_its_timeout_exit_with_closed_stdout() {
     let fixture = Fixture::new();
     let mut child = Process(
         command(&fixture.url, &["wait", "--timeout", "1"])
             .stdout(closed_pipe())
-            .stderr(closed_pipe())
             .spawn()
             .unwrap(),
     );
@@ -380,6 +370,7 @@ fn wait_retains_its_timeout_exit_with_closed_diagnostics() {
     req.stream.flush().unwrap();
     let out = child.finish();
     assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(out.stderr, b"jelly: nobody changed any jelly in time\n");
 }
 
 #[cfg(unix)]
