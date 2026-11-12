@@ -151,6 +151,25 @@ async page => {
     assert(inViewport, `answer control in viewport ${selector}`);
     cases.push(selector);
   }
+  // A normal card fits this bounded section, but its recovery label would not.
+  const boundedName = `visibility:bounded-${Date.now()}`;
+  await post('/api/jellies', {name:boundedName, view:'<!doctype html><style>body{margin:16px;font:16px system-ui}#part{overflow:hidden;border:1px solid}p{margin:16px 0}</style><section id="part"><p id="anchor">The anchor</p></section>', verbs:'const verbs = {};', state:{}});
+  const bounded = await post(`/api/jellies/${boundedName}/attention`, {kind:'ask',title:'Keep this choice by its anchor?',anchor:{selector:'#anchor'},options:[{id:'yes',label:'Yes'},{id:'no',label:'No'}]});
+  const boundedFrame = await dock(boundedName, bounded.args.id);
+  await boundedFrame.evaluate(id => {
+    window.savedHost = document.getElementById(`jf-q-${id}`);
+    const part = document.getElementById('part');
+    window.fitHeight = Math.ceil(savedHost.getBoundingClientRect().bottom - part.getBoundingClientRect().top + 16);
+    const ta = savedHost.shadowRoot.querySelector('textarea');
+    ta.value = 'bounded draft'; ta.focus(); ta.setSelectionRange(2,7);
+    part.hidden = true;
+  }, bounded.args.id);
+  await rescued(boundedFrame, bounded.args.id, true);
+  await boundedFrame.evaluate(() => { const part = document.getElementById('part'); part.style.height = `${fitHeight}px`; part.hidden = false; });
+  await rescued(boundedFrame, bounded.args.id, false);
+  assert(await boundedFrame.evaluate(() => document.getElementById('part').contains(savedHost) && savedHost.shadowRoot.activeElement?.value === 'bounded draft' && savedHost.shadowRoot.activeElement.selectionStart === 2 && savedHost.shadowRoot.activeElement.selectionEnd === 7), 'bounded reveal restores the same card, draft, selection and focus');
+  const returnItem = await ask('#tucked', 'look');
+  frame = await dock(name, returnItem.args.id);
   // A reused frame can miss an update; opening an unknown id refreshes it once.
   const beforeStale = await (await page.request.get(`${base}/api/jellies/${name}`)).json();
   const staleFrame = frame;
@@ -172,6 +191,56 @@ async page => {
   await rescued(frame, late.args.id, true);
   await page.unroute(showUrl, staleRoute);
   assert(late.anchor_exposed === true, 'Look reports measured exposure');
+  // Opening must wait for the newest comment refresh, even if its own reply arrives first.
+  for (const [superseded, newest] of [['success','success'],['http','success'],['network','success'],['success','http'],['success','network']]) {
+    const old = await (await page.request.get(`${base}/api/jellies/${name}`)).json();
+    let seenStale, startedOpening, startedNewer, releaseOpening, releaseNewer, finishedOpening;
+    const staleReady = new Promise(resolve => { seenStale = resolve; });
+    const openingReady = new Promise(resolve => { startedOpening = resolve; });
+    const newerReady = new Promise(resolve => { startedNewer = resolve; });
+    const openingGate = new Promise(resolve => { releaseOpening = resolve; });
+    const newerGate = new Promise(resolve => { releaseNewer = resolve; });
+    const openingFinished = new Promise(resolve => { finishedOpening = resolve; });
+    let requests = 0;
+    const overlap = async route => {
+      if (route.request().frame() !== frame) return route.continue();
+      requests++;
+      if (requests === 1) { await route.fulfill({json:old}); seenStale(); return; }
+      if (requests === 2) {
+        startedOpening(); await openingGate;
+        if (superseded === 'http') await route.fulfill({status:503,body:'temporarily unavailable'});
+        else if (superseded === 'network') await route.abort('failed');
+        else await route.fulfill({json:old});
+        finishedOpening(); return;
+      }
+      startedNewer(); await newerGate;
+      if (newest === 'http') return route.fulfill({status:503,body:'temporarily unavailable'});
+      if (newest === 'network') return route.abort('failed');
+      return route.continue();
+    };
+    await page.route(showUrl, overlap);
+    const waiting = await ask('#tucked', 'look');
+    await staleReady;
+    await frame.waitForFunction(id => !jelly.items.some(a => a.id === id), waiting.args.id);
+    await frame.evaluate(() => document.activeElement.blur());
+    if (!(await page.locator('#dock-panel').isVisible())) await page.locator('#dock-btn').click();
+    await page.locator(`#dock-list [data-goto="${name}"][data-item="${waiting.args.id}"]`).click();
+    await openingReady;
+    await post(`/api/jellies/${name}/comment`, {anchor:{selector:'#tucked'},text:'Please keep this visible.'});
+    await newerReady;
+    releaseOpening(); await openingFinished;
+    await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert(await frame.locator('[role="alert"]').count() === 0, 'superseded opening cannot report absence while current data is pending');
+    releaseNewer();
+    if (newest === 'success') {
+      await focused(frame, waiting.args.id);
+      assert(await frame.locator('[role="alert"]').count() === 0, 'committed refresh focuses the waiting card without an absence message');
+    } else {
+      await frame.waitForFunction(() => document.activeElement.matches('[role="alert"]') && document.activeElement.textContent.includes('Could not load'));
+      await frame.evaluate(() => document.querySelector('[role="alert"]').remove());
+    }
+    await page.unroute(showUrl, overlap);
+  }
   // Required refresh failures remain visible after the dock has closed;
   // a successfully refreshed, absent/withdrawn item has a separate message.
   for (const outcome of ['http','network','absent','withdrawn']) {

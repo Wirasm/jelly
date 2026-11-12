@@ -690,6 +690,7 @@
       host.toggleAttribute("dark", dark);
       const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
       if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
+      exposureLabel(host, a, false);
       insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
     });
     restoreFocus();
@@ -846,19 +847,28 @@
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   let refreshingAttention = false;
-  let attentionRefresh = 0;
-  async function refreshThreads() {
-    const refresh = ++attentionRefresh;
+  let latestRefresh;
+  function refreshThreads() {
     refreshingAttention = true;
     outcomes.clear();
-    const r = await fetch(api);
-    if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
-    const j = await r.json();
-    if (refresh !== attentionRefresh) return;
-    refreshingAttention = false;
-    comments = j.comments || []; attention = j.attention || []; working = j.working || null;
-    drawMarkers(); drawWorking();
-    for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
+    const refresh = (async () => {
+      let j;
+      try {
+        const r = await fetch(api);
+        if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
+        j = await r.json();
+      } catch (e) {
+        if (refresh !== latestRefresh) return latestRefresh;
+        throw e;
+      }
+      if (refresh !== latestRefresh) return latestRefresh;
+      refreshingAttention = false;
+      comments = j.comments || []; attention = j.attention || []; working = j.working || null;
+      drawMarkers(); drawWorking();
+      for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
+    })();
+    latestRefresh = refresh;
+    return refresh;
   }
 
   addEventListener("DOMContentLoaded", () => {

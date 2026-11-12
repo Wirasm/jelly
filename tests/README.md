@@ -38,5 +38,9 @@ question and without unseen Enter submissions, hash/query/path
 history navigation, attribute-driven opacity, visible refresh and focus-write
 failures with retry, delayed focus writes and agent
 focus during local open/close writes, and snapshot registration.
+Bounded-section reveals check that fallback context does not prevent the normal
+card from returning to its anchor. Overlapping opening and comment refreshes
+check that an opening waits for committed attention, including HTTP and network
+failures of the newest request.
 Hidden-section visibility fails on the pre-fix runtime. Stop the throwaway daemon
 after testing; no real jelly home is used.
