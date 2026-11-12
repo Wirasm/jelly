@@ -688,6 +688,21 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets, "rootMarker": marker})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
+    let document_url = url::Url::parse(if cfg!(windows) { "file:///C:/jelly-shared/" } else { "file:///jelly-shared/" }).expect("valid view URL");
+    let mut base_href = None;
+    lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![
+            lol_html::element!("template base", |element| { element.set_user_data(true); Ok(()) }),
+            lol_html::element!("base[href]", |element| {
+                if base_href.is_none() && element.user_data().downcast_ref::<bool>() != Some(&true) {
+                    base_href = element.get_attribute("href");
+                }
+                Ok(())
+            }),
+        ],
+        ..Default::default()
+    }).map_err(|e| ApiError::Internal(format!("could not read shared view base: {e}")))?;
+    let base = base_href.and_then(|href| document_url.join(&href).ok()).unwrap_or_else(|| document_url.clone());
     let html = lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
             lol_html::element!("template object", |element| {
@@ -698,8 +713,8 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
                 // Inert template markup must survive export unchanged.
                 if element.user_data().downcast_ref::<bool>() == Some(&true) { return Ok(()); }
                 let value = element.get_attribute("data").expect("matched data attribute");
-                if let Some(uri) = shared_object_asset(&value, &assets) {
-                    // An object can commit its missing-file fallback before the DOM observer runs.
+                if let Some(uri) = shared_static_asset(&value, &assets, &document_url, &base) {
+                    // Objects can commit their missing-file fallback before view scripts run.
                     element.set_attribute("data", &uri)?;
                 }
                 Ok(())
@@ -717,14 +732,10 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     Ok(Html(inject_head(&html, &inject)))
 }
 
-fn shared_object_asset(value: &str, assets: &[(String, String)]) -> Option<String> {
-    let mut relative = value.trim_matches([' ', '\t', '\n', '\r', '\x0c']);
-    while let Some(rest) = relative.strip_prefix("./") { relative = rest; }
-    // Only directory-independent local references can be resolved before the output file is named.
-    if !relative.starts_with("assets/") { return None; }
-    let base = url::Url::parse(if cfg!(windows) { "file:///C:/" } else { "file:///" }).expect("valid local URL");
-    let directory = base.join("assets/").expect("valid asset directory").to_file_path().ok()?;
-    let url = base.join(relative).ok()?;
+fn shared_static_asset(value: &str, assets: &[(String, String)], document: &url::Url, base: &url::Url) -> Option<String> {
+    let directory = document.join("assets/").ok()?;
+    let url = base.join(value).ok()?;
+    let directory = directory.to_file_path().ok()?;
     let path = url.to_file_path().ok()?;
     let file = path.strip_prefix(directory).ok()?.to_str()?;
     let (_, uri) = assets.iter().find(|(name, _)| name == file)?;
@@ -1418,15 +1429,23 @@ mod share_tests {
         assert!(html.contains(&format!("const markup = \"{inert}\";")));
     }
 
-    #[test]
-    fn share_object_resource_paths() {
-        let assets = vec![("a b.svg".into(), "data:image/svg+xml;base64,c3Zn".into())];
-        for path in ["assets/a b.svg", "./assets/a%20b.svg", " ././assets/a%20b.svg?download ", "assets/sub/../a%20b.svg"] {
-            assert_eq!(shared_object_asset(path, &assets).as_deref(), Some("data:image/svg+xml;base64,c3Zn"), "{path}");
+    #[tokio::test]
+    async fn share_static_objects_follow_the_document_base() {
+        for base in ["<base href='https://example.com/'>", "<base href='../'>"] {
+            for placement in [true, false] {
+                let object = "<object data='assets/green.svg'></object>";
+                let view = if placement { format!("<head>{base}</head>{object}") } else { format!("<head></head>{object}{base}") };
+                let (_dir, app) = fixture(&view);
+                app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+                assert!(exported(app).await.contains(object));
+            }
         }
-        assert_eq!(shared_object_asset("assets/a%20b.svg?q#part", &assets).as_deref(), Some("data:image/svg+xml;base64,c3Zn#part"));
-        for path in ["assets/absent.svg", "assets/../a%20b.svg", "../assets/a%20b.svg", "/assets/a%20b.svg", "https://example.com/assets/a%20b.svg", "data:image/svg+xml,svg"] {
-            assert_eq!(shared_object_asset(path, &assets), None, "{path}");
+        for path in ["assets/%67reen.svg", r"assets\%67reen.svg", r"assets\t/../%67reen.svg", "././assets/%67reen.svg", "assets/sub/../%67reen.svg?query#part"] {
+            let (_dir, app) = fixture(&format!("<head><template><base href='https://example.com/'></template><base href='./'></head><object data='{path}'></object>"));
+            app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+            let html = exported(app).await;
+            let fragment = if path.ends_with("#part") { "#part" } else { "" };
+            assert!(html.contains(&format!("<object data=\"data:image/svg+xml;base64,c3Zn{fragment}\"></object>")), "{path}");
         }
     }
 

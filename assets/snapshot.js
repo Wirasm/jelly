@@ -155,7 +155,7 @@
     });
   }
   // Resource loads can start before the mutation observer gets a turn.
-  for (const [prototype, name] of [[HTMLImageElement.prototype, "src"], [HTMLImageElement.prototype, "srcset"], [HTMLObjectElement.prototype, "data"]]) {
+  for (const [prototype, name] of [[HTMLImageElement.prototype, "src"], [HTMLImageElement.prototype, "srcset"]]) {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     Object.defineProperty(prototype, name, {
       ...descriptor,
@@ -169,18 +169,16 @@
       if (key === "src") value = resource(String(value));
       if (key === "srcset") value = srcset(String(value));
     }
-    if (this instanceof HTMLObjectElement && key === "data") value = resource(String(value));
     return setAttribute.call(this, name, value);
   };
   const setAttributeNS = Element.prototype.setAttributeNS;
   Element.prototype.setAttributeNS = function(namespace, name, value) {
-    if (!namespace && (this instanceof HTMLImageElement || this instanceof HTMLObjectElement)) return this.setAttribute(name, value);
+    if (!namespace && this instanceof HTMLImageElement) return this.setAttribute(name, value);
     return setAttributeNS.call(this, namespace, name, value);
   };
   function reconcile(element) {
     for (const attr of [...element.attributes]) {
-      if (!["src", "srcset", "href", "xlink:href", "poster", "style", "data"].includes(attr.name)) continue;
-      if (attr.name === "data" && element.localName !== "object") continue;
+      if (!["src", "srcset", "href", "xlink:href", "poster", "style"].includes(attr.name)) continue;
       const value = attr.value;
       let encoding = document.characterSet;
       if (element instanceof HTMLLinkElement && [...element.relList].some(token => token.toLowerCase() === "stylesheet") && element.charset) {

@@ -247,25 +247,34 @@ async function loaded(image) {
   }
   assert(new Uint8Array(await (await fetch('assets/legacy.css')).arrayBuffer()).includes(0xe9), 'original legacy CSS bytes');
   assert(new Uint8Array(await (await fetch(jelly.asset('utf16.css'))).arrayBuffer())[0] === 0xff, 'original UTF-16 CSS bytes');
-  step = 'object resources';
+  step = 'object asset API';
+  const object = document.createElement('object');
+  const objectReady = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
+  object.data = jelly.asset('green.svg');
+  document.body.append(object);
+  await objectReady;
+  assert(object.data.startsWith('data:image/svg+xml;'), 'dynamic object uses asset API');
+  const objectChanged = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
+  object.data = jelly.asset('red.svg');
+  await objectChanged;
+  assert(object.data === jelly.asset('red.svg'), 'dynamic object changes through asset API');
+  const implicitObject = document.createElement('object');
   for (const assign of [
-    object => { object.data = 'assets/green.svg'; },
-    object => object.setAttribute('DATA', 'assets/green.svg'),
-    object => object.setAttributeNS(null, 'data', 'assets/green.svg'),
-  ]) for (const initial of [true, false]) {
-    const object = document.createElement('object');
-    const ready = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
-    if (initial) assign(object);
-    document.body.append(object);
-    if (!initial) assign(object);
-    assert(object.data === jelly.asset('green.svg'), 'object resource resolved before loading');
-    await ready;
-    assert(object.data === jelly.asset('green.svg'), 'object resource embedded');
-    const changed = new Promise((resolve, reject) => { object.onload = resolve; object.onerror = reject; });
-    object.data = 'assets/red.svg';
-    await changed;
-    assert(object.data === jelly.asset('red.svg'), 'object resource changed');
+    () => { implicitObject.data = 'assets/green.svg'; },
+    () => implicitObject.setAttribute('DATA', 'assets/green.svg'),
+    () => implicitObject.setAttributeNS(null, 'data', 'assets/green.svg'),
+  ]) {
+    assign();
+    assert(implicitObject.getAttribute('data') === 'assets/green.svg', 'implicit object data stays unchanged');
   }
+  const detachedRoot = document.createElement('div').attachShadow({mode: 'closed'});
+  detachedRoot.innerHTML = '<object data="assets/green.svg"></object>';
+  const markupObject = detachedRoot.firstElementChild;
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(markupObject.getAttribute('data') === 'assets/green.svg', 'runtime leaves inserted object markup unchanged');
+  markupObject.setAttribute('data', 'assets/red.svg');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(markupObject.getAttribute('data') === 'assets/red.svg', 'runtime leaves object attribute mutations unchanged');
   const style = document.createElement('style');
   style.textContent = `#background { background-image: url('${jelly.state.picture}'); --label: "url(${jelly.state.picture})"; }`;
   document.head.append(style);

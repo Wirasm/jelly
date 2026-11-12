@@ -333,6 +333,11 @@ resolved with `jelly.asset(file)`. They open offline from `file://` and keep sta
 values unchanged. `items`, `attention`, `itemsAt(selector)` and `onAttention(fn)`
 read the attention captured when shared; `onAttention` runs once immediately.
 Answers and other mutations refuse changes and show the read-only note.
+For dynamic `<object>` resources, assign `object.data = jelly.asset(file)` (also
+when the filename comes from state). Shared files do not automatically rewrite
+object data assigned by scripts or inserted markup. Static `<object data="assets/file">`
+tags in the view HTML are embedded during export. Images named in state continue
+to resolve automatically.
 External dependencies and other jellies are not bundled.
 
 A repo's DESIGN.md (github.com/google-labs-code/design.md) becomes CSS variables at
