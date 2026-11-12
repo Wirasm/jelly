@@ -560,9 +560,8 @@
     const root = host.shadowRoot || host;
     const control = root.querySelector("button.o:not(:disabled), [data-pick]") || root.querySelector("textarea:not(:disabled)") || root.querySelector("button:not(:disabled)") || root.querySelector(".c") || host;
     if (!control.hasAttribute("tabindex") && control === host) control.tabIndex = -1;
-    host.scrollIntoView({ block: "center" });
+    host.scrollIntoView({ block: "start" });
     control.focus({ preventScroll: true });
-    control.scrollIntoView({ block: "nearest" });
     const c = root.querySelector(".c");
     if (c) { c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash"); }
   }

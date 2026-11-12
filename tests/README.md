@@ -31,7 +31,8 @@ playwright-cli -s=visibility close
 The check clicks real dock rows and asserts visibility, shadow-root focus,
 context, measured diagnostics, host/draft/selection preservation, synchronous and
 delayed reveals, subscription behavior, stable shared destinations, persisted
-answers, grouped inline questions with empty and punctuation IDs, hash/query/path
+answers, grouped inline questions with empty and punctuation IDs, readable grouped
+question headings alongside focused answers below the sticky bar, hash/query/path
 history navigation, attribute-driven opacity, visible refresh and focus-write
 failures with retry, delayed focus writes and agent
 focus during local open/close writes, and snapshot registration.

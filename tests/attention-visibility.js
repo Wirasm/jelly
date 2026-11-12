@@ -220,7 +220,7 @@ async page => {
   assert(stable === 0, 'stable destination order must not cause observer redraws');
   // Built-in grouped rounds use their existing inline question and focus a pick.
   const groupedName = `visibility:group-${Date.now()}`;
-  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'',question:'Empty ID?',options:[{id:'y',label:'Yes'}]},{id:'design:mobile',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'design.mobile[wide]',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
+  await post(`/api/jellies/${groupedName}/ask`, {spec:{title:'Grouped questions',questions:[{id:'',question:'Which format should we book?',recommend:'y',why:'Lets guests meet the team.',options:[{id:'y',label:'In person',does:'Book the venue for 40 guests.',gains:['Direct feedback'],costs:['Venue cost']},{id:'online',label:'Online',does:'Stream from the studio.'}]},{id:'design:mobile',question:'One?',options:[{id:'y',label:'Yes'}]},{id:'design.mobile[wide]',question:'Two?',options:[{id:'y',label:'Yes'}]}]}});
   await page.locator('#dock-list [data-goto="'+groupedName+'"]').waitFor({state:'attached'});
   let groupedId = await page.locator('#dock-list [data-goto="'+groupedName+'"]').getAttribute('data-item');
   assert(!!groupedId, 'grouped row carries an item id');
@@ -229,6 +229,14 @@ async page => {
     const a = jelly.items.find(a => a.id === id), target = document.getElementById(a.anchor.selector.slice(1));
     return target?.contains(document.activeElement) && document.activeElement.matches('[data-pick]');
   }, groupedId);
+  const groupedOpening = await frame.evaluate(() => {
+    const heading = document.querySelector('#q- h2').getBoundingClientRect();
+    const answer = document.activeElement.getBoundingClientRect();
+    const bar = document.getElementById('bar').getBoundingClientRect();
+    return {heading:heading.top >= bar.bottom && heading.bottom <= innerHeight,
+      answer:answer.top >= bar.bottom && answer.bottom <= innerHeight};
+  });
+  assert(groupedOpening.heading && groupedOpening.answer, 'grouped opening shows the question heading and focused answer below the sticky bar');
   const inlineItems = await frame.evaluate(() => jelly.items.map(a => ({id:a.id,selector:a.anchor.selector})));
   for (const item of inlineItems) {
     await page.locator(`#dock-list [data-goto="${groupedName}"][data-item="${item.id}"]`).waitFor({state:'attached'});
