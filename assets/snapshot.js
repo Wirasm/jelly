@@ -3,11 +3,11 @@
 (() => {
   const boot = window.__JELLY__;
   const assets = new Map(boot.assets);
-  const stylesheetBases = new Map();
+  const stylesheets = new Map();
   const assetBase = new URL("assets/", document.baseURI);
   function resource(value, base = document.baseURI, imports = []) {
     let url;
-    try { url = new URL(value, stylesheetBases.get(base) ?? base); } catch { return value; }
+    try { url = new URL(value, stylesheets.get(base)?.url ?? base); } catch { return value; }
     if (url.protocol !== assetBase.protocol || url.host !== assetBase.host || !url.pathname.startsWith(assetBase.pathname)) return value;
     let file;
     try { file = decodeURIComponent(url.pathname.slice(assetBase.pathname.length)); } catch { return value; }
@@ -16,10 +16,11 @@
       // CSS data URLs have no directory: resolve nested resources against the uploaded file.
       // Browsers ignore cyclic imports; the embedded graph must terminate too.
       if (imports.includes(file)) return "data:text/css,";
+      const source = uri;
       const bytes = Uint8Array.from(atob(uri.split(",")[1]), c => c.charCodeAt(0));
       const text = css(new TextDecoder().decode(bytes), url, [...imports, file]);
       uri = "data:text/css;charset=utf-8," + encodeURIComponent(text);
-      stylesheetBases.set(uri + url.hash, url.href);
+      stylesheets.set(uri + url.hash, {url: url.href, source});
     }
     return uri ? uri + url.hash : value;
   }
@@ -175,8 +176,9 @@
     const url = input instanceof Request ? input.url : String(input);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const resolved = resource(url);
-    if (resolved === url || !["GET", "HEAD"].includes(method)) return fetch(input, init);
-    return fetch(input instanceof Request ? new Request(resolved, input) : resolved, init);
+    const source = stylesheets.get(resolved)?.source ?? resolved;
+    if (source === url || !["GET", "HEAD"].includes(method)) return fetch(input, init);
+    return fetch(input instanceof Request ? new Request(source, input) : source, init);
   };
   const readOnly = () => {
     note();

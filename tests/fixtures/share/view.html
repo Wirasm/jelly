@@ -148,6 +148,9 @@ async function loaded(image) {
   await new Promise(resolve => setTimeout(resolve, 50));
   assert(imported.textContent.includes('data:text/css'), 'string import embedded');
   assert(jelly.asset('theme.css').startsWith('data:text/css'), 'CSS asset API');
+  for (const input of ['assets/theme.css', jelly.asset('theme.css')]) {
+    assert(await (await fetch(input)).text() === "@import 'nested.css'; #linked { background-image: url(dot.png); }", 'original stylesheet fetch bytes');
+  }
   const literalObject = document.getElementById('literal-object');
   if (!literalObject.dataset.loaded) await new Promise((resolve, reject) => { literalObject.onload = resolve; literalObject.onerror = reject; });
   assert(literalObject.data === jelly.asset('green.svg'), 'parsed object image');
