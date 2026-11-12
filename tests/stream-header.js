@@ -40,6 +40,7 @@ async page => {
         const h = rect(header), title = header.querySelector('h2'), meta = header.querySelector('.who');
         const t = rect(title), m = rect(meta), acts = header.querySelector('.acts'), a = rect(acts);
         const controls = [...acts.children], boxes = controls.map(rect);
+        const labels = [expanded ? 'Click a part · Esc' : 'Comment','Open','Pin','Remove'];
         const fail = message => { throw Error(`${label}: ${message}`); };
         const overlap = (a,b) => a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
         const inside = r => r.left >= h.left - 1 && r.right <= h.right + 1;
@@ -51,7 +52,8 @@ async page => {
           for (const r of range.getClientRects()) if (r.left < box.left - 1 || r.right > box.right + 1) fail(`text outside identification column ${el.tagName}: ${r.left}..${r.right} vs ${box.left}..${box.right}`);
         }
         for (const [i,r] of boxes.entries()) {
-          if (!inside(r) || r.left < 0 || r.right > innerWidth || overlap(r,t) || overlap(r,m)) fail('action outside header or overlaps identification');
+          if (controls[i].textContent !== labels[i] || controls[i].scrollWidth > controls[i].clientWidth + 1) fail('action label clipped or changed');
+          if (!inside(r) || r.top < h.top - 1 || r.bottom > h.bottom + 1 || r.left < 0 || r.right > innerWidth || overlap(r,t) || overlap(r,m)) fail('action outside header or overlaps identification');
           if (boxes.slice(i+1).some(b => overlap(r,b))) fail('actions overlap');
         }
         if (innerWidth <= 900) {
