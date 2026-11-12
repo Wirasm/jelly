@@ -189,6 +189,8 @@ jelly wait [plan]            # block until someone other than you changes someth
 jelly events [plan]          # stream every event as JSON lines
 ```
 
+`attention`, `comments` and `wait` print one line per item; add `--json` for the full data.
+
 Comments: the person can Option-click any element of any jelly and say what should
 change. Answer on the same thread, and change the jelly if they asked for it:
 

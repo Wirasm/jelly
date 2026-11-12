@@ -99,6 +99,14 @@ impl Attention {
     pub fn is_open(&self) -> bool {
         self.answer.is_none() && self.withdrawn.is_none()
     }
+
+    /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly see`
+    /// and `jelly attention` both use it.
+    pub fn summary(&self) -> String {
+        let opts = self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
+        let kind = if self.kind == AttentionKind::Look { "look" } else { "ask" };
+        format!("{} {kind} {:?}{}{}", self.id, self.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, self.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

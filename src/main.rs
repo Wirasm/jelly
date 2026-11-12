@@ -145,7 +145,7 @@ enum Cmd {
         /// The question, for an ask on an existing jelly.
         question: Option<String>,
         /// A spec file for an ask page.
-        #[arg(long, conflicts_with = "question")]
+        #[arg(long, conflicts_with = "question", group = "json_target")]
         spec: Option<PathBuf>,
         /// An option as id=label, or id=label|what picking it does. Repeat it.
         #[arg(long = "option")]
@@ -162,13 +162,13 @@ enum Cmd {
         #[arg(long, alias = "detail", default_value = "")]
         context: String,
         /// Block until the person answers or the ask is withdrawn, then print the answer.
-        #[arg(long, conflicts_with = "spec")]
+        #[arg(long, conflicts_with = "spec", group = "json_target")]
         wait: bool,
         /// With --wait: give up after this many seconds (exit 2).
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
-        /// With --wait: print the answered item as JSON.
-        #[arg(long, requires = "wait")]
+        /// With --wait or --spec: print the full JSON.
+        #[arg(long, requires = "json_target")]
         json: bool,
     },
     /// Ask the person to look at something: it lands in their attention queue,
@@ -181,10 +181,14 @@ enum Cmd {
         #[arg(long, alias = "detail", default_value = "")]
         context: String,
     },
-    /// Everything waiting on the person in this project (or everywhere with --all).
+    /// Everything waiting on the person in this project (or everywhere with
+    /// --all), one line per item.
     Attention {
         #[arg(long)]
         all: bool,
+        /// Print the full JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// See a jelly as an agent: what it is, its verbs and state, what waits on
     /// the person, what they did lately, and what is on screen as text.
@@ -227,22 +231,28 @@ enum Cmd {
     Working { name: String, what: String },
     /// Say you are done changing a jelly.
     Done { name: String },
-    /// Block until someone other than you changes the jelly, then print that
-    /// event and the state. This is how an agent waits for the person.
+    /// Block until someone other than you changes the jelly, then print what
+    /// they did in one line. This is how an agent waits for the person.
     Wait {
         /// Leave out to wait on every jelly (the jelly page's own changes are skipped).
         name: Option<String>,
         /// Give up after this many seconds (exit 2).
         #[arg(long)]
         timeout: Option<u64>,
+        /// Print the full event and the state as JSON.
+        #[arg(long)]
+        json: bool,
     },
-    /// List comments pinned to parts of a jelly's view, with their threads.
-    /// Leave out NAME for every jelly: this is the person's to-do list for you.
+    /// List comments pinned to parts of a jelly's view, one line each with its
+    /// thread. Leave out NAME for every jelly: this is the person's to-do list for you.
     Comments {
         name: Option<String>,
         /// Include resolved comments.
         #[arg(long)]
         all: bool,
+        /// Print the full JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
     #[command(alias = "project")]
@@ -458,22 +468,41 @@ fn run(cli: Cli) -> Result<(), String> {
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             report(send("POST", &api(&format!("/{}/attention", id(&name))), body)?)
         }
-        Cmd::Attention { all } => {
+        Cmd::Attention { all, json } => {
             let p = if all { String::new() } else { project() };
-            print(get(&format!("{}/api/attention?project={}", cli.url, encode(&p)))?)
+            let list = get(&format!("{}/api/attention?project={}", cli.url, encode(&p)))?;
+            if json {
+                return print(list);
+            }
+            let items = list.as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                println!("Nothing waits on the person{}.", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") });
+            }
+            for item in items {
+                let a = store::Attention::deserialize(&item).map_err(|e| e.to_string())?;
+                println!("{}  {}", item["jelly"].as_str().unwrap_or("?"), a.summary());
+            }
+            Ok(())
         }
         Cmd::Withdraw { name, id: aid } => report(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name), encode(&aid))), json!({"by": by}))?),
         Cmd::Focus { name } => report(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)), "by": by}))?),
         Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": what, "by": by}))?),
         Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name))), json!({"what": null, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
-        Cmd::Ask { name, spec: Some(spec), .. } => {
+        Cmd::Ask { name, spec: Some(spec), json, .. } => {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
+            // The store's rule: a spec without `questions` is one question.
+            let questions = spec.get("questions").map_or(1, |q| q.as_array().map_or(0, Vec::len));
             let r = send("POST", &api(&format!("/{}/ask", id(&name))), json!({"spec": spec, "project": project(), "by": by}))?;
             let jelly = r["jelly"].as_str().unwrap_or(&name).to_string();
-            print(json!({"jelly": jelly, "round": r["state"]["round"], "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}))
+            let round = &r["state"]["round"];
+            if json {
+                return print(json!({"jelly": jelly, "round": round, "questions": questions, "next": format!("jelly inbox, or jelly wait {jelly}: the answers arrive as answer events")}));
+            }
+            println!("{}", ask_line(&jelly, round, questions));
+            Ok(())
         }
-        Cmd::Wait { name, timeout } => {
+        Cmd::Wait { name, timeout, json } => {
             let name = name.map(|n| id(&n));
             let filter = name.as_deref().map(|n| format!("?jelly={}", encode(n))).unwrap_or_default();
             let mut req = ureq::get(&format!("{}/api/events{filter}", cli.url));
@@ -497,12 +526,17 @@ fn run(cli: Cli) -> Result<(), String> {
                 let Some(data) = line.strip_prefix("data:") else { continue };
                 let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
                 if ev["by"] != by.as_str() && (name.is_some() || ev["jelly"] != store::PAGE) {
-                    return print(ev);
+                    if json {
+                        return print(ev);
+                    }
+                    println!("{}", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?));
+                    return Ok(());
                 }
             }
             Err("the event stream ended".into())
         }
-        Cmd::Comments { name, all } => {
+        Cmd::Comments { name, all, json } => {
+            let one = name.is_some();
             let names: Vec<String> = match name {
                 Some(n) => vec![id(&n)],
                 None => {
@@ -514,16 +548,29 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             };
             let mut list = Vec::new();
-            for n in names {
+            let mut lines = Vec::new();
+            for n in &names {
                 let j = get(&api(&format!("/{n}")))?;
-                for mut f in j["feedback"].as_array().cloned().unwrap_or_default() {
+                for mut f in j["comments"].as_array().cloned().unwrap_or_default() {
                     if all || f["resolved"] != true {
+                        lines.push(comment_line(n, &store::Comment::deserialize(&f).map_err(|e| e.to_string())?));
                         f["jelly"] = json!(n);
                         list.push(f);
                     }
                 }
             }
-            print(json!(list))
+            if json {
+                return print(json!(list));
+            }
+            if lines.is_empty() {
+                let p = project();
+                let place = if one { format!(" on {}", names[0]) } else if p.is_empty() { String::new() } else { format!(" in project {p}") };
+                println!("No {}comments{place}.", if all { "" } else { "open " });
+            }
+            for l in lines {
+                println!("{l}");
+            }
+            Ok(())
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name))), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name))), json!({"project": project, "by": by}))?),
@@ -846,6 +893,22 @@ fn report_line(ev: &Value) -> String {
     format!("{} v{}: {what}{changed}", s(&ev["jelly"]), ev["version"])
 }
 
+/// What `jelly ask --spec` did, in one line.
+fn ask_line(jelly: &str, round: &Value, questions: usize) -> String {
+    format!("{jelly} round {round}: asked {questions} question{}. Answers arrive in `jelly inbox`, or block on `jelly wait {jelly}`", if questions == 1 { "" } else { "s" })
+}
+
+/// One comment and its thread, for an agent's to-do list.
+fn comment_line(jelly: &str, c: &store::Comment) -> String {
+    let thread = c.replies.last().map(|last| format!(" · {} repl{}, last by {}: {:?}", c.replies.len(), if c.replies.len() == 1 { "y" } else { "ies" }, last.by, last.text)).unwrap_or_default();
+    format!("{jelly}  {} on {}: {:?}{thread}{}", c.id, c.anchor["selector"].as_str().unwrap_or("the page"), c.text, if c.resolved { " (resolved)" } else { "" })
+}
+
+/// The change that ended `jelly wait`, in one line.
+fn wait_line(e: &store::Event) -> String {
+    format!("{} v{}: {} {}", e.jelly, e.version, e.by, e.describe())
+}
+
 /// Where an ask or look shows on the page, as the daemon found it: `anchor`
 /// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
@@ -941,8 +1004,15 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_line, placement};
+    use super::{answer_line, placement, wait_line};
     use serde_json::json;
+
+    #[test]
+    fn wait_prints_the_change_in_one_line() {
+        let ev: crate::store::Event = serde_json::from_value(json!({"seq": 9, "at_ms": 1, "jelly": "p:x", "kind": "answer", "by": "person", "version": 4, "view_rev": 1,
+            "args": {"id": "a1", "title": "Which order?", "option": "b", "text": "keep it"}, "state": {"big": "state"}})).unwrap();
+        assert_eq!(wait_line(&ev), "p:x v4: person answered a1 \"Which order?\" → b: \"keep it\"");
+    }
 
     fn inbox_response(body: &str) -> (String, std::thread::JoinHandle<std::net::TcpListener>) {
         use std::io::{BufRead, Read, Write};
