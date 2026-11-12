@@ -49,8 +49,9 @@ jelly serve            # http://127.0.0.1:7878, data in ~/.jelly
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It prints nothing when there is nothing new or the daemon
-is unavailable. Daemon read failures appear in hook output as `jelly inbox failed: ...`;
-no progress is saved when the daemon cannot read the inbox. Claude's
+is unavailable. Reader identification, decoding and daemon read or progress-commit
+failures appear in hook output as `jelly inbox failed: ...`. Failed reads do not
+advance progress. Claude's
 `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader across
 commands and resumed conversations. JSON `session_id` identifies hook invocations
 only. To share that progress with ordinary commands, supply the same conversation
@@ -69,14 +70,23 @@ Progress is stored in the daemon's home (`inbox-readers.json`), per reader and
 project, and survives daemon restarts. A new reader sees the last hour; later
 reads use event positions. Upgrading leaves old client `inbox/` timestamps unused,
 so each new reader can replay the recent hour. Use a matching CLI and daemon.
-The consuming POST `/api/inbox` accepts `{ "project": "...", "reader": ... }`
+The non-consuming POST `/api/inbox` accepts `{ "project": "...", "reader": ... }`
 with reader forms `{ "kind": "named", "name": "..." }`,
 `{ "kind": "conversation", "id": "..." }`, or
 `{ "kind": "parent", "pid": 123, "start_time": 456 }` (Unix seconds).
-Omitting `project` or using an empty string reads all projects. The response is an
-array of events with `text`. GET `/api/inbox?project=...&since=...` remains a
-non-consuming timestamp query. A successful POST saves progress before responding;
-a lost response can leave progress advanced without displayed output.
+Omitting `project` or using an empty string reads all projects. The response is
+`{ "events": [...], "through": 123 }`; events include `text`. The first read
+registers a fixed one-hour starting window, so uncommitted events remain available
+on retry even after that hour passes. After decoding and successfully writing and
+flushing output, the CLI sends POST `/api/inbox/commit` with the same project and
+reader plus the returned `through` position. Commits only move that reader's
+progress forward and leave events newer than `through` unread. Lost or undecodable
+read responses do not consume events. Ambiguous output, failed acknowledgements
+or client crashes may replay events. GET `/api/inbox?project=...&since=...` remains
+a non-consuming timestamp query returning an array.
+
+The daemon refuses startup if an existing event log cannot be read, so new events
+cannot reuse positions already passed by inbox readers.
 
 ## How it works
 

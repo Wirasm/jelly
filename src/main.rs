@@ -8,7 +8,7 @@ mod verbs;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, IsTerminal, Read};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -690,39 +690,53 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id
         },
         parent_reader,
     );
-    let reader = match reader {
-        Ok(reader) => reader,
-        Err(_) if hook => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    let resp = ureq::post(&format!("{url}/api/inbox"))
-        .timeout(std::time::Duration::from_secs(1))
-        .send_json(store::InboxRequest { project: project.into(), reader });
-    let resp = match resp {
-        Err(ureq::Error::Transport(_)) if hook => return Ok(()),
+    deliver_inbox(url, project, hook, reader, &mut std::io::stdout().lock())
+}
+
+fn deliver_inbox(
+    url: &str,
+    project: &str,
+    hook: bool,
+    reader: Result<store::InboxReader, String>,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    let result = (|| {
+        let request = store::InboxRequest { project: project.into(), reader: reader? };
+        let response = ureq::post(&format!("{url}/api/inbox"))
+            .timeout(std::time::Duration::from_secs(1))
+            .send_json(&request);
+        let response = match response {
+            Err(ureq::Error::Transport(_)) if hook => return Ok(()),
+            result => result.map_err(describe)?,
+        };
+        let batch: store::InboxBatch = response.into_json().map_err(|e| e.to_string())?;
+        write_inbox(output, project, hook, &batch).map_err(|e| e.to_string())?;
+        ureq::post(&format!("{url}/api/inbox/commit"))
+            .timeout(std::time::Duration::from_secs(1))
+            .send_json(store::InboxCommit { inbox: request, through: batch.through })
+            .map_err(describe)?;
+        Ok(())
+    })();
+    match result {
+        Err(e) if hook => writeln!(output, "jelly inbox failed: {e}").map_err(|e| e.to_string()),
         result => result,
-    };
-    let items: Vec<Value> = match resp.map_err(describe).and_then(|r| r.into_json().map_err(|e| e.to_string())) {
-        Ok(v) => v,
-        Err(e) if hook => {
-            println!("jelly inbox failed: {e}");
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
-    if items.is_empty() {
+    }
+}
+
+fn write_inbox(output: &mut impl Write, project: &str, hook: bool, batch: &store::InboxBatch) -> std::io::Result<()> {
+    if batch.events.is_empty() {
         if !hook {
-            println!("Nothing new from the person.");
+            writeln!(output, "Nothing new from the person.")?;
         }
-        return Ok(());
+    } else {
+        let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
+        writeln!(output, "The person acted on your jellies{scope} since you last checked:")?;
+        for item in &batch.events {
+            writeln!(output, "- {}: {}", item.event.jelly, item.text)?;
+        }
+        writeln!(output, "Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.")?;
     }
-    let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
-    println!("The person acted on your jellies{scope} since you last checked:");
-    for e in &items {
-        println!("- {}: {}", e["jelly"].as_str().unwrap_or("?"), e["text"].as_str().unwrap_or(""));
-    }
-    println!("Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.");
-    Ok(())
+    output.flush()
 }
 
 /// The project from `--project`, else the git repo's folder name, made into a
@@ -848,6 +862,81 @@ fn encode(s: &str) -> String {
 mod tests {
     use super::placement;
     use serde_json::json;
+
+    fn inbox_response(body: &str) -> (String, std::thread::JoinHandle<std::net::TcpListener>) {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let body = body.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut input = std::io::BufReader::new(&stream);
+            let mut line = String::new();
+            input.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "POST /api/inbox HTTP/1.1");
+            let mut length = 0;
+            loop {
+                line.clear();
+                input.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse().unwrap(); }
+                }
+            }
+            input.read_exact(&mut vec![0; length]).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            listener
+        });
+        (url, server)
+    }
+
+    fn assert_no_inbox_commit(server: std::thread::JoinHandle<std::net::TcpListener>) {
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn inbox_reader_failures_are_visible_in_hooks() {
+        for error in ["could not find invoking parent process", "could not find parent process start time"] {
+            let mut output = Vec::new();
+            super::deliver_inbox("unused", "p", true, Err(error.into()), &mut output).unwrap();
+            assert_eq!(String::from_utf8(output).unwrap(), format!("jelly inbox failed: {error}\n"));
+            assert_eq!(super::deliver_inbox("unused", "p", false, Err(error.into()), &mut Vec::new()), Err(error.into()));
+        }
+    }
+
+    #[test]
+    fn inbox_undecodable_responses_do_not_commit() {
+        for body in ["broken", "", "[]", r#"{"events":[{"jelly":"p:sample"}],"through":4}"#] {
+            let (url, server) = inbox_response(body);
+            let reader = crate::store::InboxReader::Named { name: "a".into() };
+            assert!(super::deliver_inbox(&url, "p", false, Ok(reader), &mut Vec::new()).is_err());
+            assert_no_inbox_commit(server);
+        }
+    }
+
+    #[test]
+    fn inbox_output_failures_do_not_commit() {
+        use std::io::{self, Write};
+        struct FailingOutput { fail_write: bool }
+        impl Write for FailingOutput {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.fail_write { Err(io::Error::other("output failed")) } else { Ok(bytes.len()) }
+            }
+            fn flush(&mut self) -> io::Result<()> { Err(io::Error::other("flush failed")) }
+        }
+        for fail_write in [true, false] {
+            let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "call",
+                "by": "person", "version": 1, "view_rev": 1, "text": "click {}"}], "through": 4}).to_string();
+            let (url, server) = inbox_response(&body);
+            let reader = crate::store::InboxReader::Named { name: "a".into() };
+            let error = super::deliver_inbox(&url, "p", false, Ok(reader), &mut FailingOutput { fail_write }).unwrap_err();
+            assert_eq!(error, if fail_write { "output failed" } else { "flush failed" });
+            assert_no_inbox_commit(server);
+        }
+    }
 
     #[test]
     fn inbox_identity_precedence_and_namespaces() {

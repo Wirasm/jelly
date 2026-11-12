@@ -240,10 +240,45 @@ pub struct InboxRequest {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct InboxCommit {
+    #[serde(flatten)]
+    pub inbox: InboxRequest,
+    pub through: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxBatch {
+    pub events: Vec<InboxItem>,
+    pub through: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxItem {
+    #[serde(flatten)]
+    pub event: Event,
+    pub text: String,
+}
+
+impl From<Event> for InboxItem {
+    fn from(event: Event) -> Self {
+        let text = event.describe();
+        Self { event, text }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct InboxCursor {
     project: String,
     reader: InboxReader,
-    seq: u64,
+    #[serde(flatten)]
+    position: InboxPosition,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum InboxPosition {
+    After { seq: u64 },
+    Recent { since_ms: u64 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -392,9 +427,9 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let seq = fs::read_to_string(dir.join("events.jsonl")).ok()
-            .and_then(|t| t.lines().rev().find_map(|l| serde_json::from_str::<Value>(l).ok()?["seq"].as_u64()))
-            .unwrap_or(0);
+        let log = read_optional(&dir.join("events.jsonl"))?;
+        let seq = log.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()?["seq"].as_u64())
+            .max().unwrap_or(0);
         Ok(Store { dir: dir.to_path_buf(), jellies, seq, source: None })
     }
 
@@ -805,42 +840,59 @@ impl Store {
         self.dir.join("events.jsonl")
     }
 
-    pub fn read_inbox(&mut self, project: &str, reader: InboxReader) -> Result<Vec<Event>, Error> {
-        let read = |path: &Path| -> std::io::Result<String> {
-            match fs::read_to_string(path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-                result => result,
-            }
-        };
-        let consume = || -> std::io::Result<Vec<Event>> {
-            let path = self.dir.join("inbox-readers.json");
-            let mut cursors: Vec<InboxCursor> = match fs::read_to_string(&path) {
-                Ok(text) => serde_json::from_str(&text)?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(e) => return Err(e),
-            };
-            let cursor = cursors.iter_mut().find(|c| c.project == project && c.reader == reader);
-            let since = cursor.as_ref().map(|c| c.seq);
-            let first_since = now_ms().saturating_sub(3_600_000);
-            let mut seq = since.unwrap_or(0);
-            let mut items = Vec::new();
-            for line in read(&self.events_path())?.lines() {
+    fn inbox_cursors(&self) -> std::io::Result<Vec<InboxCursor>> {
+        match fs::read(self.dir.join("inbox-readers.json")) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn read_inbox(&self, project: &str, reader: &InboxReader) -> Result<InboxBatch, Error> {
+        let read = || -> std::io::Result<InboxBatch> {
+            let mut cursors = self.inbox_cursors()?;
+            let existing = cursors.iter().find(|c| c.project == project && &c.reader == reader);
+            let initial = InboxPosition::Recent { since_ms: now_ms().saturating_sub(3_600_000) };
+            let position = existing.map_or(&initial, |c| &c.position);
+            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => 0 };
+            let mut events = Vec::new();
+            for line in read_optional(&self.events_path())?.lines() {
                 let event: Event = serde_json::from_str(line)?;
-                seq = seq.max(event.seq);
-                let unread = since.map_or(event.at_ms > first_since, |s| event.seq > s);
+                through = through.max(event.seq);
+                let unread = match position {
+                    InboxPosition::After { seq } => event.seq > *seq,
+                    InboxPosition::Recent { since_ms } => event.at_ms > *since_ms,
+                };
                 if unread && event.is_inbox_item(project) {
-                    items.push(event);
+                    events.push(event.into());
                 }
             }
-            if let Some(cursor) = cursor {
-                cursor.seq = seq;
-            } else {
-                cursors.push(InboxCursor { project: project.into(), reader, seq });
+            if existing.is_none() {
+                // Fix the initial window so an unacknowledged response can be retried even an hour later.
+                cursors.push(InboxCursor { project: project.into(), reader: reader.clone(), position: initial });
+                write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)?;
             }
-            write_atomic(&path, &serde_json::to_vec(&cursors)?)?;
-            Ok(items)
+            Ok(InboxBatch { events, through })
         };
-        consume().map_err(|e| Error::Invalid(format!("could not read inbox: {e}")))
+        read().map_err(|e| Error::Invalid(format!("could not read inbox: {e}")))
+    }
+
+    pub fn commit_inbox(&mut self, req: InboxCommit) -> Result<(), Error> {
+        let commit = || -> std::io::Result<()> {
+            let mut cursors = self.inbox_cursors()?;
+            let InboxRequest { project, reader } = req.inbox;
+            if let Some(cursor) = cursors.iter_mut().find(|c| c.project == project && c.reader == reader) {
+                let seq = match cursor.position {
+                    InboxPosition::After { seq } => seq.max(req.through),
+                    InboxPosition::Recent { .. } => req.through,
+                };
+                cursor.position = InboxPosition::After { seq };
+            } else {
+                cursors.push(InboxCursor { project, reader, position: InboxPosition::After { seq: req.through } });
+            }
+            write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)
+        };
+        commit().map_err(|e| Error::Invalid(format!("could not commit inbox progress: {e}")))
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -983,6 +1035,13 @@ pub fn diff(a: &Value, b: &Value, path: &mut String, out: &mut Vec<String>) {
     }
 }
 
+fn read_optional(path: &Path) -> std::io::Result<String> {
+    match fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        result => result,
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, bytes)?;
@@ -1004,6 +1063,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::open(dir.path()).unwrap();
         (dir, s)
+    }
+
+    fn consume_inbox(s: &mut Store, project: &str, reader: InboxReader) -> Result<Vec<Event>, Error> {
+        let batch = s.read_inbox(project, &reader)?;
+        s.commit_inbox(InboxCommit { inbox: InboxRequest { project: project.into(), reader }, through: batch.through })?;
+        Ok(batch.events.into_iter().map(|item| item.event).collect())
+    }
+
+    #[test]
+    fn inbox_startup_refuses_unreadable_event_log() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("events.jsonl")).unwrap();
+        assert!(Store::open(dir.path()).is_err());
+        fs::remove_dir(dir.path().join("events.jsonl")).unwrap();
+        fs::write(dir.path().join("events.jsonl"), [0xff]).unwrap();
+        assert_eq!(Store::open(dir.path()).err().unwrap().kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -1038,21 +1113,37 @@ mod tests {
         event.kind = EventKind::Call;
         push(&event);
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
-        assert_eq!(s.read_inbox("p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
-        assert!(s.read_inbox("p", reader.clone()).unwrap().is_empty());
-        assert_eq!(s.read_inbox("", reader.clone()).unwrap().len(), 3);
-        assert_eq!(s.read_inbox("other", reader.clone()).unwrap().len(), 1);
-        assert!(s.read_inbox("missing", reader.clone()).unwrap().is_empty());
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
+        assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
+        assert_eq!(consume_inbox(&mut s, "", reader.clone()).unwrap().len(), 3);
+        assert_eq!(consume_inbox(&mut s, "other", reader.clone()).unwrap().len(), 1);
+        assert!(consume_inbox(&mut s, "missing", reader.clone()).unwrap().is_empty());
         let records: Vec<InboxCursor> = serde_json::from_slice(&fs::read(dir.path().join("inbox-readers.json")).unwrap()).unwrap();
-        assert!(records.iter().all(|c| c.seq == 7));
+        assert!(records.iter().all(|c| matches!(c.position, InboxPosition::After { seq: 7 })));
         event.seq = 8;
         event.jelly = "p:sample".into();
         event.at_ms = 1;
         let mut log = fs::OpenOptions::new().append(true).open(s.events_path()).unwrap();
         writeln!(log, "{}", serde_json::to_string(&event).unwrap()).unwrap();
         let mut s = Store::open(dir.path()).unwrap();
-        assert_eq!(s.read_inbox("p", reader.clone()).unwrap()[0].seq, 8);
-        assert!(s.read_inbox("p", reader).unwrap().is_empty());
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap()[0].seq, 8);
+        assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbox_initial_window_stays_fixed_until_commit() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let reader = InboxReader::Named { name: "retry".into() };
+        let mut old = event.clone();
+        old.at_ms -= 7_200_000;
+        fs::write(dir.path().join("inbox-readers.json"), serde_json::to_vec(&vec![InboxCursor {
+            project: "p".into(), reader: reader.clone(), position: InboxPosition::Recent { since_ms: old.at_ms - 1 },
+        }]).unwrap()).unwrap();
+        fs::write(s.events_path(), serde_json::to_string(&old).unwrap() + "\n").unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        for _ in 0..2 { assert_eq!(s.read_inbox("p", &reader).unwrap().events[0].event.seq, event.seq); }
     }
 
     #[test]
@@ -1062,7 +1153,7 @@ mod tests {
         let existing = InboxReader::Named { name: "existing".into() };
         let new = InboxReader::Named { name: "new".into() };
         for project in ["p", ""] {
-            s.read_inbox(project, existing.clone()).unwrap();
+            consume_inbox(&mut s, project, existing.clone()).unwrap();
         }
         s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
@@ -1074,7 +1165,7 @@ mod tests {
         fs::write(s.events_path(), lines.join("\n") + "\n").unwrap();
         for project in ["p", ""] {
             for reader in [&existing, &new] {
-                let error = s.read_inbox(project, reader.clone()).unwrap_err();
+                let error = consume_inbox(&mut s, project, reader.clone()).unwrap_err();
                 assert!(error.to_string().contains("could not read inbox"));
                 assert_eq!(fs::read(&path).unwrap(), saved);
             }
@@ -1082,8 +1173,8 @@ mod tests {
         fs::write(s.events_path(), log).unwrap();
         for project in ["p", ""] {
             for reader in [&existing, &new] {
-                assert_eq!(s.read_inbox(project, reader.clone()).unwrap().len(), 2);
-                assert!(s.read_inbox(project, reader.clone()).unwrap().is_empty());
+                assert_eq!(consume_inbox(&mut s, project, reader.clone()).unwrap().len(), 2);
+                assert!(consume_inbox(&mut s, project, reader.clone()).unwrap().is_empty());
             }
         }
     }
@@ -1093,31 +1184,31 @@ mod tests {
         let (dir, mut s) = store();
         s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
         let reader = InboxReader::Named { name: "a".into() };
-        s.read_inbox("p", reader.clone()).unwrap();
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
         s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         let path = dir.path().join("inbox-readers.json");
         let saved = fs::read(&path).unwrap();
         fs::write(&path, "broken").unwrap();
-        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
-        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
         fs::remove_dir(&path).unwrap();
         fs::write(&path, &saved).unwrap();
         let tmp = path.with_extension("json.tmp");
         fs::create_dir(&tmp).unwrap();
-        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
         assert_eq!(fs::read(&path).unwrap(), saved);
         fs::remove_dir(tmp).unwrap();
         let log = fs::read(s.events_path()).unwrap();
         fs::remove_file(s.events_path()).unwrap();
         fs::create_dir(s.events_path()).unwrap();
-        assert!(s.read_inbox("p", reader.clone()).is_err());
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
         assert_eq!(fs::read(&path).unwrap(), saved);
         fs::remove_dir(s.events_path()).unwrap();
         fs::write(s.events_path(), log).unwrap();
-        assert_eq!(s.read_inbox("p", reader).unwrap().len(), 1);
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().len(), 1);
     }
 
     #[test]

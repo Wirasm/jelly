@@ -188,7 +188,12 @@ Cursors live in the daemon's home, per reader and project, and survive restarts.
 New readers see the last hour, then receive events since their own last read by
 event position. Old client timestamp cursors are unused after upgrading, so the
 recent hour may replay once for each new reader. Event attribution still defaults
-to `agent`. Use matching CLI and daemon versions.
+to `agent`. Use matching CLI and daemon versions. Inbox progress advances only
+after decoded events are successfully written and flushed to output. Lost or
+undecodable read responses leave events available for retry; ambiguous output,
+failed progress commits or client crashes may replay events. Hook diagnostics
+report reader identification, decoding and daemon read or commit failures;
+an empty inbox or unreachable daemon stays quiet.
 
 ## Projects and names
 

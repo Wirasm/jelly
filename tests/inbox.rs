@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
@@ -18,12 +18,16 @@ impl Daemon {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let child = Command::new(BIN).args(["serve", "--port", &port.to_string(), "--home"])
-            .arg(home).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+            .arg(home).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
         let mut daemon = Self { child, url: format!("http://127.0.0.1:{port}") };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if ureq::get(&format!("{}/api/jellies", daemon.url)).call().is_ok() { break; }
-            assert!(daemon.child.try_wait().unwrap().is_none(), "daemon exited");
+            if let Some(status) = daemon.child.try_wait().unwrap() {
+                let mut errors = String::new();
+                daemon.child.stderr.take().unwrap().read_to_string(&mut errors).unwrap();
+                panic!("daemon exited ({status}): {errors}");
+            }
             assert!(Instant::now() < deadline, "daemon did not start");
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -84,6 +88,8 @@ fn inbox_readers_are_independent_and_daemon_owned() {
     assert_eq!(legacy().len(), 1);
     let filtered: Vec<Value> = ureq::get(&format!("{}/api/inbox?project=p&since={}", daemon.url, event["at_ms"])).call().unwrap().into_json().unwrap();
     assert!(filtered.is_empty());
+    daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    for name in ["reader-a", "reader-b"] { has_event(&read(name)); empty(&read(name)); }
     assert_eq!(std::fs::read_to_string(client.join("inbox/p")).unwrap(), "9999999999999");
     assert!(!client.join("inbox-readers.json").exists());
     assert!(home.join("inbox-readers.json").exists());
@@ -138,12 +144,12 @@ fn inbox_conversations_resume_across_commands_and_hooks() {
     let request = json!({"project": "p", "reader": {"kind": "conversation", "id": "concurrent"}});
     let url = format!("{}/api/inbox", daemon.url);
     let responses = std::thread::scope(|scope| {
-        let reads: Vec<_> = (0..2).map(|_| scope.spawn(|| -> Vec<Value> {
+        let reads: Vec<_> = (0..2).map(|_| scope.spawn(|| -> Value {
             ureq::post(&url).send_json(request.clone()).unwrap().into_json().unwrap()
         })).collect();
-        reads.into_iter().map(|t| t.join().unwrap().len()).sum::<usize>()
+        reads.into_iter().map(|t| t.join().unwrap()["events"].as_array().unwrap().len()).sum::<usize>()
     });
-    assert_eq!(responses, 1);
+    assert_eq!(responses, 2);
 }
 
 #[cfg(unix)]
@@ -224,4 +230,58 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
     let mut cmd = Command::new(BIN);
     configure(&mut cmd, &url, &client);
     assert_eq!(stdout(cmd.args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
+}
+
+#[test]
+fn inbox_uncommitted_reads_replay_and_commits_preserve_new_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(temp.path());
+    let event = daemon.person_event();
+    let request = json!({"project": "p", "reader": {"kind": "named", "name": "retry"}});
+    let first = daemon.post("/api/inbox", request.clone());
+    assert_eq!(first["events"][0]["seq"], event["seq"]);
+    assert_eq!(daemon.post("/api/inbox", request.clone()), first);
+    let cursors: Value = serde_json::from_slice(&std::fs::read(temp.path().join("inbox-readers.json")).unwrap()).unwrap();
+    assert!(cursors[0].get("seq").is_none());
+    let later = daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    let mut commit = request.clone();
+    commit["through"] = first["through"].clone();
+    daemon.post("/api/inbox/commit", commit.clone());
+    let next = daemon.post("/api/inbox", request.clone());
+    assert_eq!(next["events"].as_array().unwrap().len(), 1);
+    assert_eq!(next["events"][0]["seq"], later["seq"]);
+    let mut newer = commit.clone();
+    newer["through"] = next["through"].clone();
+    daemon.post("/api/inbox/commit", newer);
+    daemon.post("/api/inbox/commit", commit);
+    assert!(daemon.post("/api/inbox", request)["events"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn inbox_failed_progress_commit_reports_failure_and_replays() {
+    let temp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(temp.path());
+    daemon.person_event();
+    let read = |hook: bool| {
+        let mut cmd = daemon.command(temp.path());
+        cmd.args(["--as", "retry", "inbox"]);
+        if hook { cmd.arg("--hook"); }
+        cmd.output().unwrap()
+    };
+    has_event(&stdout(read(false)));
+    daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    let saved = std::fs::read(temp.path().join("inbox-readers.json")).unwrap();
+    let tmp = temp.path().join("inbox-readers.json.tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    let failed = read(false);
+    assert!(!failed.status.success());
+    has_event(std::str::from_utf8(&failed.stdout).unwrap());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("could not commit inbox progress"));
+    let hook = stdout(read(true));
+    has_event(&hook);
+    assert!(hook.contains("jelly inbox failed: could not commit inbox progress"));
+    assert_eq!(std::fs::read(temp.path().join("inbox-readers.json")).unwrap(), saved);
+    std::fs::remove_dir(tmp).unwrap();
+    has_event(&stdout(read(false)));
+    empty(&stdout(read(false)));
 }
