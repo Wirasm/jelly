@@ -15,8 +15,17 @@ of it. You hear all of it.
 thinking: lay out the options, what each gains and costs, what each looks like,
 and which you recommend. Their job is to react, not to write your spec.
 
-Check the daemon first: `jelly ls` (this project's jellies; `--all` for every project). If it cannot be reached, ask the person to run
-`jelly serve`; do not start it yourself unless they asked.
+Use jelly directly: the first client command starts the default daemon in the
+background and waits for it, printing one startup line on stderr. `jelly ls`
+lists this project's jellies (`--all` for every project).
+
+Startup uses the same home as `jelly serve`: `$JELLY_HOME` or `~/.jelly`, at
+http://127.0.0.1:7878 (also localhost:7878 and equivalent spellings). Other
+`--url` / `JELLY_URL` targets must already be running.
+If startup fails, run `jelly serve` in the foreground to see the cause.
+`jelly inbox --hook` starts silently, suppresses startup errors, and prints only
+new inbox items. Outside a project it attempts startup and exits successfully
+without inbox output.
 
 ## Make a jelly
 
