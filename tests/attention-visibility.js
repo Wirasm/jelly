@@ -145,7 +145,8 @@ async page => {
     }
     const inViewport = await frame.locator(`#jf-q-${item.args.id}`).evaluate(h => {
       const r = h.shadowRoot.activeElement.getBoundingClientRect();
-      return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+      // Chromium rounds scroll offsets to pixels; card edges retain subpixels.
+      return r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1;
     });
     assert(inViewport, `answer control in viewport ${selector}`);
     cases.push(selector);
