@@ -704,7 +704,7 @@
     if (rescued.some(Boolean)) {
       const visibleTails = new Map();
       items.forEach((a, i) => {
-        if (rescued[i]) placements[i] = { kind: "block", after: null, status: placements[i].status };
+        if (rescued[i]) placements[i] = { kind: "block", after: null, status: placements[i].status, reason: placements[i].reason };
         insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], visibleTails);
       });
     }

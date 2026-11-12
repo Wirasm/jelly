@@ -120,13 +120,14 @@ async page => {
   await frame.waitForFunction(id => document.getElementById(`jf-q-${id}`)?.shadowRoot.activeElement?.className === 'chg', id);
   // Visibility primitives and adjacent-card clipping, with a frame already loaded.
   const cases = [];
-  for (const selector of ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#short','#contents','#below','#missing','#floating','#svg']) {
+  for (const selector of ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#clipped-fallback','#short','#contents','#below','#missing','#floating','#svg']) {
     const item = await ask(selector);
     frame = await dock(name, item.args.id);
     await focused(frame, item.args.id);
-    const rescue = ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#short'].includes(selector);
+    const rescue = ['#attribute','#closed','#invisible','#transparent','#inert','#clipped','#clipped-fallback','#short'].includes(selector);
     await rescued(frame, item.args.id, rescue);
     assert(!!item.anchor_exposed === rescue, `exposure diagnostic ${selector}`);
+    if (selector === '#clipped-fallback') assert(item.anchor === 'fallback' && item.anchor_destination?.kind === 'top' && !!item.anchor_reason, 'clipped layout fallback retains its measured reason');
     if (selector === '#below') assert(item.anchor === 'below', 'offscreen anchors are scroll destinations');
     if (selector === '#attribute') {
       await frame.evaluate(() => { window.attributeHeight = document.body.getBoundingClientRect().height; document.querySelector('#attribute').parentElement.dataset.visible = 'true'; });
