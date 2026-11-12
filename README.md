@@ -110,7 +110,8 @@ keeps every event's position, and inbox reads go back only as far as the reader'
 position. `jelly see` uses the last change and last eight person events per jelly,
 kept in memory during startup validation and updated on append and trim; it does
 not scan the log on each request. Initial one-hour inbox windows and timestamp
-queries filter the retained log because wall-clock timestamps can move backwards.
+queries use an in-memory timestamp index to read only matching event byte ranges,
+then return them in sequence order, even when the wall clock moves backwards.
 
 Upgrading changes how a jelly's file stores undo: it now keeps each change's
 difference instead of a full copy of view, verbs and state. The new daemon reads

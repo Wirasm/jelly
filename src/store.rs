@@ -510,6 +510,7 @@ pub struct Store {
     jellies: BTreeMap<String, Entry>,
     seq: u64,
     recent: BTreeMap<String, RecentEvents>,
+    timestamps: TimestampIndex,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
 }
@@ -532,19 +533,25 @@ impl RecentEvents {
     }
 }
 
-fn read_event_history(path: &Path) -> std::io::Result<(u64, BTreeMap<String, RecentEvents>)> {
+type TimestampIndex = BTreeMap<(u64, u64), (u64, usize)>;
+
+fn read_event_history(path: &Path) -> std::io::Result<(u64, BTreeMap<String, RecentEvents>, TimestampIndex)> {
     let log = read_optional(path)?;
     if !log.is_empty() && !log.ends_with('\n') {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
     }
     let mut seq = 0;
     let mut recent = BTreeMap::<String, RecentEvents>::new();
-    for line in log.lines() {
+    let mut timestamps = BTreeMap::new();
+    let mut offset = 0;
+    for line in log.split_inclusive('\n') {
         let event: Event = serde_json::from_str(line)?;
+        timestamps.insert((event.at_ms, event.seq), (offset, line.len()));
+        offset += line.len() as u64;
         seq = seq.max(event.seq);
         recent.entry(event.jelly.clone()).or_default().push(event);
     }
-    Ok((seq, recent))
+    Ok((seq, recent, timestamps))
 }
 
 impl Store {
@@ -563,8 +570,8 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let (seq, recent) = read_event_history(&dir.join("events.jsonl"))?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, source: None })
+        let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, source: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -987,6 +994,8 @@ impl Store {
             .and_then(|mut f| { writeln!(f, "{line}")?; f.metadata() });
         match appended {
             Ok(m) => {
+                let length = line.len() + 1;
+                self.timestamps.insert((ev.at_ms, ev.seq), (m.len() - length as u64, length));
                 self.recent.entry(ev.jelly.clone()).or_default().push(ev.clone());
                 if m.len() > LOG_LIMIT {
                     if let Err(e) = self.trim_events(LOG_KEEP, PERSON_CARRY) {
@@ -1000,8 +1009,9 @@ impl Store {
 
     pub(crate) fn trim_events(&mut self, keep: usize, carry: usize) -> std::io::Result<()> {
         trim_log(&self.events_path(), keep, carry)?;
-        let (_, recent) = read_event_history(&self.events_path())?;
+        let (_, recent, timestamps) = read_event_history(&self.events_path())?;
         self.recent = recent;
+        self.timestamps = timestamps;
         Ok(())
     }
 
@@ -1010,6 +1020,25 @@ impl Store {
     /// see never searches through unrelated history.
     pub fn recent_events(&self, name: &str) -> (Option<Event>, Vec<Event>) {
         self.recent.get(name).map(|r| (r.last.clone(), r.person.clone())).unwrap_or_default()
+    }
+
+    /// Timestamp order can differ from append order after a clock step. Index byte
+    /// ranges so time windows read only matching records, then restore seq order.
+    pub fn events_since(&self, since: u64) -> std::io::Result<Vec<Event>> {
+        let mut file = match fs::File::open(self.events_path()) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut events = Vec::new();
+        for (_, &(offset, length)) in self.timestamps.range((std::ops::Bound::Excluded((since, u64::MAX)), std::ops::Bound::Unbounded)) {
+            file.seek(SeekFrom::Start(offset))?;
+            let mut bytes = vec![0; length];
+            file.read_exact(&mut bytes)?;
+            events.push(serde_json::from_slice::<Event>(&bytes)?);
+        }
+        events.sort_unstable_by_key(|e| e.seq);
+        Ok(events)
     }
 
     pub fn events_path(&self) -> PathBuf {
@@ -1069,22 +1098,23 @@ impl Store {
             let existing = cursors.iter().find(|c| c.project == project && &c.reader == reader);
             let initial = InboxPosition::Recent { since_ms: at_ms.saturating_sub(3_600_000) };
             let position = existing.map_or(&initial, |c| &c.position);
-            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => 0 };
-            let mut events = Vec::new();
-            // Sequence positions are ordered; wall-clock timestamps can move backwards.
-            self.events_back(|line| {
-                let event: Event = serde_json::from_str(line)?;
-                through = through.max(event.seq);
-                let unread = match position {
-                    InboxPosition::After { seq } => event.seq > *seq,
-                    InboxPosition::Recent { since_ms } => event.at_ms > *since_ms,
-                };
-                if unread && event.is_inbox_item(project) {
-                    events.push(event.into());
+            let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => self.seq };
+            let events = match position {
+                InboxPosition::Recent { since_ms } => self.events_since(*since_ms)?.into_iter()
+                    .filter(|event| event.is_inbox_item(project)).map(InboxItem::from).collect(),
+                InboxPosition::After { seq } => {
+                    let mut events = Vec::new();
+                    self.events_back(|line| {
+                        let event: Event = serde_json::from_str(line)?;
+                        through = through.max(event.seq);
+                        if event.seq <= *seq { return Ok(false); }
+                        if event.is_inbox_item(project) { events.push(event.into()); }
+                        Ok(true)
+                    })?;
+                    events.reverse();
+                    events
                 }
-                Ok(match position { InboxPosition::After { .. } => unread, InboxPosition::Recent { .. } => true })
-            })?;
-            events.reverse();
+            };
             if existing.is_none() {
                 // Fix the initial window so an unacknowledged response can be retried even an hour later.
                 cursors.push(InboxCursor { project: project.into(), reader: reader.clone(), position: initial });
@@ -1516,6 +1546,7 @@ mod tests {
         event.kind = EventKind::Call;
         push(&event);
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [2, 3]);
         assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
         assert_eq!(consume_inbox(&mut s, "", reader.clone()).unwrap().len(), 3);
@@ -1548,12 +1579,24 @@ mod tests {
             events.push(serde_json::to_string(&event).unwrap());
         }
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
+        let s = Store::open(dir.path()).unwrap();
         assert!(!dir.path().join("inbox-readers.json").exists());
+        let path = s.events_path();
+        let saved = fs::read(&path).unwrap();
+        // Poison excluded records without moving byte ranges: a full scan must fail.
+        let mut damaged = saved.clone();
+        damaged[0] = 0xff;
+        let last_start = saved[..saved.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
+        damaged[last_start] = 0xff;
+        fs::write(&path, damaged).unwrap();
         let first = s.read_inbox_at("p", &reader, first_read_at).unwrap();
         assert_eq!(first.events.iter().map(|item| item.event.seq).collect::<Vec<_>>(), [2, 3]);
         let retry_at = first_read_at + 3_600_001;
         let expected = serde_json::to_value(&first).unwrap();
         assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        let empty_reader = InboxReader::Named { name: "empty".into() };
+        assert!(s.read_inbox_at("p", &empty_reader, retry_at).unwrap().events.is_empty());
+        fs::write(&path, saved).unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);

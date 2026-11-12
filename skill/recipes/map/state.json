@@ -243,9 +243,9 @@
       "layer": "disk",
       "label": "events.jsonl",
       "kind": "file",
-      "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. `jelly inbox` and `jelly see` read it from the end.",
+      "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. Inbox reads use sequence cursors to read from the end, or indexed byte ranges for timestamp windows. `jelly see` uses recent history kept in memory during startup, append and trim.",
       "files": [
-        "src/store.rs: Store::log, trim_log, events_back",
+        "src/store.rs: Store::log, trim_events, events_back, events_since, recent_events",
         "src/server.rs: inbox"
       ],
       "risk": "An event's `state` goes to live listeners only, never into this file."

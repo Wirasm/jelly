@@ -548,21 +548,13 @@ struct InboxQ {
 
 /// What the person did since `since`, for jellies in `project`: the events an
 /// agent should hear about at the start of its next turn, each with a line of text.
-/// Timestamp queries filter the retained log without assuming wall-clock order.
+/// Timestamp queries use indexed byte ranges without assuming wall-clock order.
 async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
     let project = q.project.unwrap_or_default();
-    let mut items = Vec::new();
-    let read = app.store.lock().expect("store lock").events_back(|l| {
-        let Ok(e) = serde_json::from_str::<Event>(l) else { return Ok(true) };
-        if e.at_ms > since && e.is_inbox_item(&project) {
-            items.push(inbox_item(e));
-        }
-        Ok(true)
-    });
-    // A partial answer would move the reader's cursor past what it missed.
-    read.map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
-    items.reverse();
+    let events = app.store.lock().expect("store lock").events_since(since)
+        .map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
+    let items: Vec<_> = events.into_iter().filter(|e| e.is_inbox_item(&project)).map(inbox_item).collect();
     Ok(Json(json!(items)))
 }
 
@@ -1630,7 +1622,7 @@ mod tests {
 
     #[tokio::test]
     async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
-        let (_d, app) = app();
+        let (dir, app) = app();
         let recent = {
             let mut store = app.store.lock().unwrap();
             store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
@@ -1642,6 +1634,14 @@ mod tests {
             std::fs::write(store.events_path(), format!("{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
             recent
         };
+        *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
+        let path = app.store.lock().unwrap().events_path();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let old_start = bytes.iter().position(|&b| b == b'\n').unwrap() + 1;
+        bytes[old_start] = 0xff;
+        std::fs::write(&path, bytes).unwrap();
+        let empty = inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms) })).await.unwrap();
+        assert!(empty.0.as_array().unwrap().is_empty());
         let result = inbox(State(app), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 1) })).await.unwrap();
         assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq]);
     }
@@ -1708,7 +1708,11 @@ mod tests {
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };
         let header = |out: &str| out.lines().next().unwrap().to_string();
+        let path = app.store.lock().unwrap().events_path();
+        let saved = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
         let out = see_x().await;
+        std::fs::write(&path, saved).unwrap();
         assert!(header(&out).ends_with("last change just now by agent"), "{out}");
         assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
         app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
