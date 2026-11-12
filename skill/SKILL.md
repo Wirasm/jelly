@@ -186,16 +186,27 @@ jelly ask plan "Anything missing before I ship?"     # answered in words
 jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
 ```
 
-`--wait` is the default way to ask one question: it blocks until the person answers
+`--wait` is the recommended way to ask one question: it blocks until the person answers
 (or the ask is withdrawn) and prints only that, with `--json` for the whole item.
 `--timeout SECONDS` gives up with exit code 2. Without `--wait`, the answer arrives in
-`jelly inbox` or `jelly wait`.
+`jelly inbox` or `jelly wait`. To work between asking and waiting, keep the ask's token:
+
+```bash
+jelly ask plan "Anything missing before I ship?"
+# If that ask printed "since seq:42", copy its token into wait:
+jelly wait plan --since seq:42 --timeout 60 --json
+# Inspect kind and args.id; if this is not the answer, continue from its seq.
+```
 
 Several related questions, with options laid out side by side, make an ask page:
 
 ```bash
-jelly ask sharing --spec spec.json   # asking again starts a new round; open questions are withdrawn
+jelly ask sharing --spec spec.json --json   # asking again starts a new round; open questions are withdrawn
 ```
+
+Its JSON reply includes `jelly`, `round`, `since` (for example, `"seq:57"`) and
+`next`, with a concrete `jelly wait sharing --since seq:57 --json` command. Use the
+actual jelly name and token from that reply.
 
 ```json
 {
@@ -230,11 +241,44 @@ the start of your turn ("The person acted on your jellies…"). Act on it. Other
 jelly inbox                  # what they did in this project since you last asked
 jelly attention              # what still waits on them
 jelly see plan               # includes their answers and recent actions
-jelly wait [plan]            # block until someone other than you changes something
+jelly wait plan --since seq:42 --timeout 60 --json  # use the token from your ask
+jelly wait [plan]            # future events only; --json includes live state
 jelly events [plan]          # stream every event as JSON lines
 ```
 
 `attention`, `comments` and `wait` print one line per item; add `--json` for the full data.
+
+`ask`, `look`, `call` and `reshape` print `since seq:N` from their own change.
+Copy that token when you wait. `--since` returns the earliest recorded event
+strictly after N, by someone other than your `--as` / `JELLY_AS` identity. Leave NAME out to read across
+jellies, excluding the jelly page's own changes. Explicitly naming `surface`
+includes those changes.
+
+With `--json`, this mode prints one recorded event, without `state`. Other changes can arrive
+before the answer. Check for `kind: "answer"` and the attention item's `args.id`;
+read its `args.option` and `args.text`. For a spec round, also match `args.group`
+to `round-N` using the `round` returned by `ask --spec`.
+
+The spec question ID is an anchor, not the answer ID: `host` becomes `#q-host`.
+Run `jelly show sharing` and find the entry in `attention` whose
+`anchor.selector` is `#q-host` and whose `group` is the returned round, such as
+`round-1`. Copy that entry's `id`, such as `a1`, to match the answer's `args.id`.
+`jelly see sharing` also shows IDs and anchors for questions still waiting;
+`show` includes already answered items too. IDs advance across rounds, so obtain
+this mapping for each new round.
+
+An empty look answer means "seen". If an event is not the answer you need, handle it and
+wait again using its `seq`: after `"seq": 58`, use `--since seq:58 --json`. Continue
+until the relevant answer arrives (all required answers for a spec round) or your
+time budget expires. Each invocation's `--timeout` starts a new timeout, so use
+the remaining budget when continuing. An answer completed before connection is
+retained and reached this way even when other events precede it.
+
+For current state, run `jelly state NAME` separately. Tokens use this daemon's
+retained history, survive restarts and jelly replacement, and do not belong to another home.
+`seq:0` reads from the beginning; a token beyond the current sequence waits for
+a later event. Without `--since`, wait only hears future live events. A timeout
+exits 2 with no event on stdout; no timeout means wait indefinitely.
 
 Comments: the person can Option-click any element of any jelly and say what should
 change. Answer on the same thread, and change the jelly if they asked for it:
@@ -299,3 +343,7 @@ view can also fetch public APIs itself in the browser.
 
 A verb runs at most 1 second and has no file, network or process access. The view
 has the full browser. The daemon listens on 127.0.0.1 only and has no login.
+
+If deleting a saved jelly file fails during `jelly rm` or `jelly move`, the old
+jelly can reappear after a daemon restart. Saved files and recorded history
+can then disagree about which jelly identities exist.

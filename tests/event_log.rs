@@ -62,7 +62,7 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
             .into_json()
             .unwrap()
     };
-    post(
+    let created = post(
         "/api/jellies",
         json!({
             "name": "counter", "project": "test", "view": "<p>counter</p>",
@@ -70,23 +70,22 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
             "state": {"count": 0}, "by": "test"
         }),
     );
-    // Close only after startup: this exercises the event warning, not the startup diagnostic.
+    // Close only after startup: event-log failures must not depend on the startup diagnostic.
     if closed_stderr {
         drop(daemon.0.stderr.take().unwrap());
     }
     let log = home.path().join("events.jsonl");
-    let warning = match failure {
+    let history = std::fs::read(&log).unwrap();
+    match failure {
         Failure::Append => {
             std::fs::remove_file(&log).unwrap();
             std::fs::create_dir(&log).unwrap();
-            "could not log event: "
         }
         Failure::Trim => {
             let line = std::fs::read(&log).unwrap();
             let count = (8 << 20) / line.len() + 1;
             std::fs::write(&log, line.repeat(count)).unwrap();
             std::fs::create_dir(log.with_extension("json.tmp")).unwrap();
-            "could not trim the event log: "
         }
     };
     let stream = agent
@@ -95,6 +94,38 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
         .unwrap();
     let mut stream = BufReader::new(stream.into_reader());
 
+    if matches!(failure, Failure::Append) {
+        let error = agent
+            .post(&format!("{url}/api/jellies/test:counter/call"))
+            .send_json(json!({"verb": "increment", "args": {}, "by": "test"}))
+            .unwrap_err();
+        let ureq::Error::Status(status, response) = error else {
+            panic!("expected a store error, got {error}");
+        };
+        assert_eq!(status, 400);
+        let error: Value = response.into_json().unwrap();
+        assert!(error["error"]
+            .as_str()
+            .unwrap()
+            .contains("could not record event"));
+        let saved: Value = serde_json::from_slice(
+            &std::fs::read(home.path().join("jellies/test:counter.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["jelly"]["state"], created["state"]);
+        assert_eq!(saved["jelly"]["version"], created["version"]);
+        let current: Value = agent
+            .get(&format!("{url}/api/jellies/test:counter"))
+            .call()
+            .unwrap()
+            .into_json()
+            .unwrap();
+        assert_eq!(current["state"], created["state"]);
+        assert_eq!(current["version"], created["version"]);
+
+        std::fs::remove_dir(home.path().join("events.jsonl")).unwrap();
+        std::fs::write(home.path().join("events.jsonl"), history).unwrap();
+    }
     let event = post(
         "/api/jellies/test:counter/call",
         json!({"verb": "increment", "args": {}, "by": "test"}),
@@ -126,18 +157,20 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
     assert_eq!(listed[0]["name"], "test:counter");
     assert_eq!(listed[0]["version"], event["version"]);
     assert!(daemon.0.try_wait().unwrap().is_none());
-    if !closed_stderr {
-        assert!(std::fs::read_to_string(warnings).unwrap().contains(warning));
+    if !closed_stderr && matches!(failure, Failure::Trim) {
+        assert!(std::fs::read_to_string(warnings)
+            .unwrap()
+            .contains("could not trim the event log: "));
     }
 }
 
 #[test]
-fn event_log_failure_with_closed_stderr_preserves_mutation_and_store_access() {
+fn event_log_failure_with_closed_stderr_rejects_mutation_and_preserves_store_access() {
     event_log_failure(Failure::Append, true);
 }
 
 #[test]
-fn event_log_failure_with_writable_stderr_still_warns() {
+fn event_log_failure_with_writable_stderr_rejects_mutation_and_preserves_store_access() {
     event_log_failure(Failure::Append, false);
 }
 
