@@ -466,6 +466,14 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
     Ok(None)
 }
 
+fn open_history(store: &Store) -> Result<Option<BufReader<File>>, Error> {
+    match File::open(store.events_path()) {
+        Ok(file) => Ok(Some(BufReader::new(file))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(history_error(e)),
+    }
+}
+
 async fn wait_since(app: &App, q: &WaitQ) -> Result<Option<Event>, Error> {
     wait_since_at_handoff(app, q, |_| {}).await
 }
@@ -477,8 +485,8 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
         .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
     let mut reader = {
         let mut store = app.store.lock().expect("store lock");
-        let mut reader = BufReader::new(File::open(store.events_path()).map_err(history_error)?);
-        if let Some(preferred) = &q.project_jelly {
+        let mut reader = open_history(&store)?;
+        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut reader) {
             let (project, short) = preferred.split_once(':').unwrap_or(("", preferred));
             let mut identities = std::collections::BTreeSet::new();
             let mut line = String::new();
@@ -502,10 +510,10 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
             if !identities.is_empty() {
                 q.jelly = Some(crate::store::resolve_name(short, project, identities.iter().map(String::as_str)));
             }
-            std::io::Seek::rewind(&mut reader).map_err(history_error)?;
+            std::io::Seek::rewind(reader).map_err(history_error)?;
         }
-        if let Some(ev) = recorded_change(&mut reader, &q)? {
-            return Ok(Some(ev));
+        if let Some(reader) = &mut reader {
+            if let Some(ev) = recorded_change(reader, &q)? { return Ok(Some(ev)); }
         }
         if let Some(name) = &q.jelly { store.get(name)?; }
         after_scan(&mut store);
@@ -517,7 +525,7 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
 async fn wait_for_record(
     app: &App,
     q: &WaitQ,
-    reader: &mut BufReader<File>,
+    reader: &mut Option<BufReader<File>>,
     mut rx: broadcast::Receiver<Event>,
     deadline: Option<Instant>,
 ) -> Result<Option<Event>, Error> {
@@ -533,8 +541,11 @@ async fn wait_for_record(
         };
         // Commits are ordered under the store lock; broadcasts happen after it
         // is released, so notifications only wake the reader, never choose a result.
-        let _store = app.store.lock().expect("store lock");
-        if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
+        let store = app.store.lock().expect("store lock");
+        if reader.is_none() { *reader = open_history(&store)?; }
+        if let Some(reader) = reader {
+            if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
+        }
         if matches!(notification, Err(broadcast::error::RecvError::Closed)) {
             return Err(Error::Invalid("the event stream ended".into()));
         }
@@ -1302,6 +1313,35 @@ mod wait_tests {
     }
 
     #[tokio::test]
+    async fn fresh_history_waits_for_its_first_event_or_times_out() {
+        for first_event in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let path = store.events_path();
+            let (events, _) = broadcast::channel(1);
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default() };
+            let q = WaitQ { timeout: Some(1), ..query(None, 0) };
+            let waiting = wait_since(&app, &q);
+            tokio::pin!(waiting);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            }).await;
+            assert!(!path.exists(), "waiting must not create an event log");
+            if first_event {
+                let expected = app.change(|s| s.create("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap().0;
+                let actual = waiting.await.unwrap().unwrap();
+                assert_eq!(actual.seq, expected.seq);
+                assert_eq!(actual.jelly, "first");
+                assert!(actual.state.is_none());
+            } else {
+                assert!(waiting.await.unwrap().is_none());
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn history_is_exclusive_ordered_and_filtered_by_author_and_jelly() {
         let (_dir, app) = fixture(16);
         let start = note(&app, "j", "person");
@@ -1368,7 +1408,7 @@ mod wait_tests {
             (s.note("j", "first", "helper").unwrap(), s.note("j", "second", "person").unwrap())
         };
         app.events.send(second).unwrap();
-        let result = wait_for_record(&app, &q, &mut reader, rx, None).await.unwrap().unwrap();
+        let result = wait_for_record(&app, &q, &mut Some(reader), rx, None).await.unwrap().unwrap();
         assert_eq!(result.seq, first.seq);
     }
 
@@ -1561,8 +1601,9 @@ mod wait_tests {
         let path = app.store.lock().unwrap().events_path();
         std::fs::write(&path, "invalid json\n").unwrap();
         assert!(wait_since(&app, &query(None, 0)).await.unwrap_err().to_string().contains("event history"));
-        std::fs::remove_file(path).unwrap();
-        assert!(wait_since(&app, &query(None, 0)).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(wait_since(&app, &query(None, 0)).await.unwrap_err().to_string().contains("event history"));
     }
 }
 
