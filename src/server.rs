@@ -688,13 +688,13 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets, "rootMarker": marker})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
-    let document_url = url::Url::parse(if cfg!(windows) { "file:///C:/jelly-shared/" } else { "file:///jelly-shared/" }).expect("valid view URL");
     let mut base_href = None;
     lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
             lol_html::element!("template base", |element| { element.set_user_data(true); Ok(()) }),
             lol_html::element!("base[href]", |element| {
-                if base_href.is_none() && element.user_data().downcast_ref::<bool>() != Some(&true) {
+                if base_href.is_none() && element.namespace_uri() == "http://www.w3.org/1999/xhtml"
+                    && element.user_data().downcast_ref::<bool>() != Some(&true) {
                     base_href = element.get_attribute("href");
                 }
                 Ok(())
@@ -702,7 +702,6 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
         ],
         ..Default::default()
     }).map_err(|e| ApiError::Internal(format!("could not read shared view base: {e}")))?;
-    let base = base_href.and_then(|href| document_url.join(&href).ok()).unwrap_or_else(|| document_url.clone());
     let html = lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
             lol_html::element!("template object", |element| {
@@ -710,10 +709,13 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
                 Ok(())
             }),
             lol_html::element!("object[data]", |element| {
-                // Inert template markup must survive export unchanged.
-                if element.user_data().downcast_ref::<bool>() == Some(&true) { return Ok(()); }
                 let value = element.get_attribute("data").expect("matched data attribute");
-                if let Some(uri) = shared_static_asset(&value, &assets, &document_url, &base) {
+                if let Some(uri) = shared_static_asset(&value, &assets, base_href.as_deref()) {
+                    // Only the browser knows whether a declarative template becomes a root.
+                    // Its existing cleanup restores this attribute if the template stays inert.
+                    if element.user_data().downcast_ref::<bool>() == Some(&true) {
+                        element.set_attribute(&format!("data-{marker}-object"), &value)?;
+                    }
                     // Objects can commit their missing-file fallback before view scripts run.
                     element.set_attribute("data", &uri)?;
                 }
@@ -732,14 +734,31 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     Ok(Html(inject_head(&html, &inject)))
 }
 
-fn shared_static_asset(value: &str, assets: &[(String, String)], document: &url::Url, base: &url::Url) -> Option<String> {
-    let directory = document.join("assets/").ok()?;
-    let url = base.join(value).ok()?;
-    let directory = directory.to_file_path().ok()?;
-    let path = url.to_file_path().ok()?;
-    let file = path.strip_prefix(directory).ok()?.to_str()?;
-    let (_, uri) = assets.iter().find(|(name, _)| name == file)?;
-    Some(format!("{uri}{}", url.fragment().map(|hash| format!("#{hash}")).unwrap_or_default()))
+fn shared_static_asset(value: &str, assets: &[(String, String)], base_href: Option<&str>) -> Option<String> {
+    let mut embedded = None;
+    // The output directory is unknown. Requiring the same asset relative to two
+    // disjoint directories excludes absolute paths and traversal that escapes
+    // the document directory then happens to return to a synthetic location.
+    let locations = if cfg!(windows) {
+        ["file:///C:/jelly-shared/", "file:///C:/elsewhere/output/"]
+    } else {
+        ["file:///jelly-shared/", "file:///elsewhere/output/"]
+    };
+    for location in locations {
+        let document = url::Url::parse(location).expect("valid view URL");
+        let base = base_href.and_then(|href| document.join(href).ok())
+            .filter(|url| !matches!(url.scheme(), "data" | "javascript"))
+            .unwrap_or_else(|| document.clone());
+        let directory = document.join("assets/").ok()?.to_file_path().ok()?;
+        let url = base.join(value).ok()?;
+        let path = url.to_file_path().ok()?;
+        let file = path.strip_prefix(directory).ok()?.to_str()?;
+        let (_, uri) = assets.iter().find(|(name, _)| name == file)?;
+        let uri = format!("{uri}{}", url.fragment().map(|hash| format!("#{hash}")).unwrap_or_default());
+        if embedded.as_ref().is_some_and(|prior| prior != &uri) { return None; }
+        embedded = Some(uri);
+    }
+    embedded
 }
 
 #[derive(Deserialize)]
@@ -1425,7 +1444,8 @@ mod share_tests {
         app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
         let html = exported(app).await;
         assert!(html.contains("<object data=\"data:image/svg+xml;base64,c3Zn\"></object>"));
-        assert!(html.contains(&format!("<template>{inert}</template>")));
+        let marker = boot(&html)["rootMarker"].as_str().unwrap().to_owned();
+        assert!(html.contains(&format!("data-{marker}-object=\"assets/green.svg\"")));
         assert!(html.contains(&format!("const markup = \"{inert}\";")));
     }
 
@@ -1447,6 +1467,59 @@ mod share_tests {
             let fragment = if path.ends_with("#part") { "#part" } else { "" };
             assert!(html.contains(&format!("<object data=\"data:image/svg+xml;base64,c3Zn{fragment}\"></object>")), "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn share_static_objects_use_only_html_document_bases() {
+        let object = "<object data='assets/green.svg'></object>";
+        for base in [
+            "<svg><base href='https://example.com/'/></svg>",
+            "<math><base href='https://example.com/'/></math>",
+            "<base href='data:text/html,ignored'>",
+            "<base href='javascript:void(0)'>",
+            "<base href='data:text/html,ignored'><base href='https://example.com/'>",
+            "<base href='javascript:void(0)'><base href='https://example.com/'>",
+            "<base href=''><base href='https://example.com/'>",
+            "<base href='  '>",
+            "<template><base href='https://example.com/'></template>",
+            "<div><template shadowrootmode='open'><base href='https://example.com/'></template></div>",
+            "<noscript><base href='https://example.com/'></noscript>",
+            "<!-- <base href='https://example.com/'> -->",
+            "<script>const html = `<base href='https://example.com/'>`;</script>",
+        ] {
+            let (_dir, app) = fixture(&format!("<head></head>{base}{object}"));
+            app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+            assert!(exported(app).await.contains("<object data=\"data:image/svg+xml;base64,c3Zn\"></object>"), "{base}");
+        }
+        for base in [
+            "<svg><foreignObject><base href='https://example.com/'></foreignObject></svg>",
+            "<math><mtext><base href='https://example.com/'></mtext></math>",
+        ] {
+            let (_dir, app) = fixture(&format!("<head></head>{base}{object}"));
+            app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+            assert!(exported(app).await.contains(object), "{base}");
+        }
+    }
+
+    #[tokio::test]
+    async fn share_static_objects_do_not_depend_on_the_export_location() {
+        for (base, path) in [
+            ("/jelly-shared/", "assets/green.svg"),
+            ("../jelly-shared/", "assets/green.svg"),
+            ("file:///jelly-shared/", "assets/green.svg"),
+            ("/elsewhere/output/", "assets/green.svg"),
+            ("../output/", "assets/green.svg"),
+            ("./", "/jelly-shared/assets/green.svg"),
+            ("./", "../jelly-shared/assets/green.svg"),
+        ] {
+            let object = format!("<object data='{path}'></object>");
+            let (_dir, app) = fixture(&format!("<head><base href='{base}'></head>{object}"));
+            app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+            assert!(exported(app).await.contains(&object), "base {base}, data {path}");
+        }
+        let (_dir, app) = fixture("<head><base href='nested/'></head><object data='../assets/green.svg'></object>");
+        app.store.lock().unwrap().put_asset("test:share", "green.svg", b"svg", "agent").unwrap();
+        assert!(exported(app).await.contains("<object data=\"data:image/svg+xml;base64,c3Zn\"></object>"));
     }
 
     #[tokio::test]

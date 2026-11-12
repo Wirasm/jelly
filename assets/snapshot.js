@@ -233,12 +233,20 @@
   boot.finishTemplate = () => {
     // currentScript is null inside shadow trees, including closed declarative roots.
     const script = templateRoots.map(ref => ref.deref()?.querySelector(`script[data-${boot.rootMarker}]`)).find(Boolean);
+    const originalObjectData = `data-${boot.rootMarker}-object`;
     function clean(template) {
       template.content.querySelectorAll("template").forEach(clean);
+      template.content.querySelectorAll(`[${originalObjectData}]`).forEach(object => {
+        object.setAttribute("data", object.getAttribute(originalObjectData));
+        object.removeAttribute(originalObjectData);
+      });
       template.content.querySelectorAll(`${boot.rootMarker}, script[data-${boot.rootMarker}]`).forEach(node => node.remove());
     }
     if (script.previousElementSibling instanceof HTMLTemplateElement) clean(script.previousElementSibling);
     script.remove();
+    for (const ref of templateRoots) {
+      ref.deref()?.querySelectorAll(`[${originalObjectData}]`).forEach(object => object.removeAttribute(originalObjectData));
+    }
   };
   const attachShadow = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function(options) {

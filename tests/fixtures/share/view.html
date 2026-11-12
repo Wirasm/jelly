@@ -1,7 +1,7 @@
 <!doctype html><html><head><meta charset="utf-8">
 <script>const errors = []; addEventListener('error', e => errors.push(e.message || `resource: ${e.target.id}`), true); addEventListener('unhandledrejection', e => errors.push(String(e.reason)));</script>
-<template id="head-open" shadowrootmode="open"><p>head open</p></template>
-<template id="head-closed" shadowrootmode="closed"><p>head closed</p></template>
+<template id="head-open" shadowrootmode="open"><p>head open</p><object data="assets/green.svg"></object></template>
+<template id="head-closed" shadowrootmode="closed"><p>head closed</p><object data="assets/green.svg"></object></template>
 </head><body>
 <script>
 customElements.define('jelly-snapshot-root', class extends HTMLElement {});
@@ -14,16 +14,17 @@ customElements.define('share-root-probe', class extends HTMLElement {
   connectedCallback() { declarativeRoots.push(this.getRootNode()); }
 });
 </script>
-<div><template shadowrootmode="open"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
-<div><template shadowrootmode="closed"><share-root-probe></share-root-probe><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p></template></template></template></div>
-<template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"></template>
-<template id="outer"><template id="nested-open" shadowrootmode="open"><p>nested open</p></template><template id="nested-closed" shadowrootmode="closed"><p>nested closed</p></template></template>
-<div><template shadowrootmode="open"><p>root</p></template><template id="second-open" shadowrootmode="open"><p>second open</p></template><template id="second-closed" shadowrootmode="closed"><p>second closed</p></template></div>
+<div><template shadowrootmode="open"><share-root-probe></share-root-probe><object data="assets/green.svg">PICTURE MISSING</object><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p><object data="assets/green.svg"></object></template></template></template></div>
+<div><template shadowrootmode="closed"><share-root-probe></share-root-probe><object data="assets/green.svg">PICTURE MISSING</object><img src="assets/dot.png"><style>:host { background-image: url(assets/dot.png); }</style><template class="shadow-inert"><template shadowrootmode="open"><p>nested</p><object data="assets/green.svg"></object></template></template></template></div>
+<template id="inert-template" shadowrootmode="invalid"><img src="assets/dot.png"><object data="assets/green.svg"></object></template>
+<template id="plain-template"><object data="assets/green.svg"></object></template>
+<template id="outer"><template id="nested-open" shadowrootmode="open"><p>nested open</p><object data="assets/green.svg"></object></template><template id="nested-closed" shadowrootmode="closed"><p>nested closed</p><object data="assets/green.svg"></object></template></template>
+<div><template shadowrootmode="open"><p>root</p></template><template id="second-open" shadowrootmode="open"><p>second open</p><object data="assets/green.svg"></object></template><template id="second-closed" shadowrootmode="closed"><p>second closed</p><object data="assets/green.svg"></object></template></div>
 <script>
 for (const id of ['head-open', 'head-closed', 'nested-open', 'nested-closed', 'second-open', 'second-closed']) {
   const template = document.getElementById(id) || document.getElementById('outer').content.getElementById(id);
   const first = template.content.firstElementChild.cloneNode(true);
-  if (first.localName !== 'p' || template.content.children.length !== 1) throw Error(`inert content changed: ${template.id}`);
+  if (first.localName !== 'p' || template.content.children.length !== 2) throw Error(`inert content changed: ${template.id}`);
 }
 </script>
 <img id="literal" src="assets/dot.png"><div id="pictures"></div><div id="background"></div><span id="literal-label">assets/dot.png</span>
@@ -46,7 +47,12 @@ async function loaded(image) {
 }
 (async () => {
   assert('<template shadowrootmode="closed">'.indexOf('jelly-snapshot-root') === -1, 'template markup in script unchanged');
-  assert(document.getElementById('inert-template').innerHTML === '<img src="assets/dot.png">', 'invalid declarative mode remains inert');
+  assert(document.getElementById('inert-template').innerHTML === '<img src="assets/dot.png"><object data="assets/green.svg"></object>', 'invalid declarative mode remains inert');
+  for (const id of ['plain-template', 'head-open', 'head-closed', 'nested-open', 'nested-closed', 'second-open', 'second-closed']) {
+    const template = document.getElementById(id) || document.getElementById('outer').content.getElementById(id);
+    const picture = template.content.querySelector('object');
+    assert(picture.outerHTML === '<object data="assets/green.svg"></object>', `inert object unchanged: ${id}`);
+  }
   assert(jelly.state.picture === 'assets/dot.png', 'literal script value unchanged');
   assert(document.getElementById('literal-label').textContent === jelly.state.picture, 'ordinary text unchanged');
   assert('assets/dot.png.extra' === jelly.state.picture + '.extra', 'absent longer literal unchanged');
@@ -190,7 +196,19 @@ async function loaded(image) {
     assert(!root.querySelector(window.__JELLY__.rootMarker), 'observer marker removed');
     assert(!root.querySelector(`script[data-${window.__JELLY__.rootMarker}]`), 'shadow cleanup script removed');
     const inert = root.querySelector('.shadow-inert').content.firstElementChild;
-    assert(inert.content.firstElementChild.localName === 'p' && inert.content.children.length === 1, 'inert content inside declarative root preserved');
+    assert(inert.content.firstElementChild.localName === 'p' && inert.content.children.length === 2, 'inert content inside declarative root preserved');
+    assert(inert.content.querySelector('object').outerHTML === '<object data="assets/green.svg"></object>', 'nested inert object unchanged');
+    const picture = root.querySelector('object');
+    assert(picture.data === jelly.asset('green.svg'), `static object embedded in ${root.mode} root`);
+    const embedded = new Image();
+    embedded.src = picture.data;
+    await loaded(embedded);
+    await new Promise(resolve => {
+      if (document.readyState === 'complete') resolve();
+      else addEventListener('load', resolve, {once: true});
+    });
+    assert(picture.getBoundingClientRect().width === 4 && picture.getBoundingClientRect().height === 4, `object picture rendered in ${root.mode} root`);
+    assert(picture.attributes.length === 1, 'active object instrumentation removed');
     await loaded(root.querySelector('img'));
     await backgroundPixels(root.host, `declarative ${root.mode}`);
     root.querySelector('img').setAttribute('src', 'assets/unused.png');

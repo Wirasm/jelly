@@ -336,8 +336,10 @@ Answers and other mutations refuse changes and show the read-only note.
 For dynamic `<object>` resources, assign `object.data = jelly.asset(file)` (also
 when the filename comes from state). Shared files do not automatically rewrite
 object data assigned by scripts or inserted markup. Static `<object data="assets/file">`
-tags in the view HTML are embedded during export. Images named in state continue
-to resolve automatically.
+tags in the view HTML, including declarative shadow roots, are embedded during
+export when they resolve to the uploaded asset independently of the output file's
+location. External or location-dependent object URLs stay unchanged. Inert template
+content stays unchanged. Images named in state continue to resolve automatically.
 External dependencies and other jellies are not bundled.
 
 A repo's DESIGN.md (github.com/google-labs-code/design.md) becomes CSS variables at
