@@ -537,7 +537,7 @@ struct InboxQ {
 /// What the person did since `since`, for jellies in `project`: the events an
 /// agent should hear about at the start of its next turn, each with a line of text.
 /// Reads the log back only to `since`, so it costs what is new, not the log's size.
-async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value> {
+async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
     let prefix = q.project.filter(|p| !p.is_empty()).map(|p| format!("{p}:"));
     let mut items = Vec::new();
@@ -554,11 +554,10 @@ async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Json<Value
         }
         true
     });
-    if let Err(e) = read {
-        eprintln!("could not read the event log: {e}");
-    }
+    // A partial answer would move the reader's cursor past what it missed.
+    read.map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
     items.reverse();
-    Json(json!(items))
+    Ok(Json(json!(items)))
 }
 
 
@@ -958,7 +957,10 @@ where
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
     let (last, mine) = recent_events(&app, &name);
-    let last = last.map(|e| format!(" · last change {} by {}", ago(e.at_ms), e.by)).unwrap_or_default();
+    // A trim can drop the newest event while an older one of the person's stays:
+    // only the event that made this version says who made the last change.
+    let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
+    let last = format!(" · last change {}{by}", ago(j.updated_ms));
     line(&mut out, format!("{} · {} · v{} · made by {}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
         if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
@@ -1460,7 +1462,7 @@ mod tests {
         let (_d, app) = app();
         let verbs = "const verbs = { label(s, { id }) { s[id] = 1; } };";
         let ask = |since: u64| inbox(State(app.clone()), Query(InboxQ { project: Some("p".into()), since: Some(since) }));
-        let ids = |Json(v): Json<Value>| v.as_array().unwrap().iter().map(|e| e["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let ids = |r: Result<Json<Value>, ApiError>| r.unwrap().0.as_array().unwrap().iter().map(|e| e["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         let since = {
             let mut s = app.store.lock().unwrap();
             s.create("j", "".into(), verbs.into(), json!({}), "agent", false, "", "p").unwrap();
@@ -1479,5 +1481,39 @@ mod tests {
         let path = app.store.lock().unwrap().events_path();
         crate::store::trim_log(&path, 2_000, 1 << 20).unwrap();
         assert_eq!(ids(ask(0).await), ["first", "second"], "the person's events outlive a trim");
+    }
+
+    #[tokio::test]
+    async fn see_names_who_made_the_current_version_even_after_a_trim() {
+        let (_d, app) = app();
+        let verbs = "const verbs = { label(s, { id }) { s[id] = 1; } };";
+        {
+            let mut s = app.store.lock().unwrap();
+            for name in ["x", "y"] {
+                s.create(name, "".into(), verbs.into(), json!({}), "agent", false, "", "test").unwrap();
+            }
+            s.call("test:x", "label", json!({"id": "mine"}), PERSON).unwrap();
+            s.call("test:x", "label", json!({"id": "theirs"}), "agent").unwrap();
+            for i in 0..100 {
+                s.call("test:y", "label", json!({"id": format!("n{i}")}), "agent").unwrap();
+            }
+        }
+        let version = app.store.lock().unwrap().get("test:x").unwrap().version;
+        let current = owner(&app, "test:x").await;
+        post(&app, snapshot(&current, "PAGE", version)).await.unwrap();
+        let see_x = || async {
+            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false },
+                |_, _, _| async { Err("no browser".to_string()) }).await.unwrap();
+            String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+        };
+        let header = |out: &str| out.lines().next().unwrap().to_string();
+        let out = see_x().await;
+        assert!(header(&out).ends_with("last change just now by agent"), "{out}");
+        assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
+        let path = app.store.lock().unwrap().events_path();
+        crate::store::trim_log(&path, 2_000, 1 << 20).unwrap();
+        let out = see_x().await;
+        assert!(header(&out).ends_with("last change just now"), "the agent's change was trimmed, so no author: {out}");
+        assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
     }
 }

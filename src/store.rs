@@ -290,26 +290,22 @@ impl From<EntryOnDisk> for Entry {
         if d.undo.is_empty() {
             return Entry { jelly: d.jelly, steps: d.steps };
         }
-        // Newest first: each snapshot is what the change after it replaced.
-        let budget = undo_budget(&d.jelly.state);
-        let (mut steps, mut total) = (Vec::new(), 0);
-        let (mut view, mut verbs, mut state) = (&d.jelly.view, &d.jelly.verbs, &d.jelly.state);
-        for snap in d.undo.iter().rev().take(UNDO_DEPTH) {
+        // Oldest first: each snapshot is what the change after it replaced.
+        let mut entry = Entry { jelly: d.jelly, steps: Vec::new() };
+        for (i, snap) in d.undo.iter().enumerate() {
+            let (view, verbs, state) = match d.undo.get(i + 1) {
+                Some(next) => (&next.view, &next.verbs, &next.state),
+                None => (&entry.jelly.view, &entry.jelly.verbs, &entry.jelly.state),
+            };
             let step = Step {
                 state: state_step(state, &snap.state),
                 view: (snap.view != *view).then(|| snap.view.clone()),
                 verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
                 view_rev: snap.view_rev,
             };
-            total += step.bytes();
-            if !steps.is_empty() && total > budget {
-                break;
-            }
-            steps.push(step);
-            (view, verbs, state) = (&snap.view, &snap.verbs, &snap.state);
+            push_step(&mut entry, step);
         }
-        steps.reverse();
-        Entry { jelly: d.jelly, steps }
+        entry
     }
 }
 
@@ -996,10 +992,11 @@ pub fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
         _ => text[from - 1..].iter().position(|&b| b == b'\n').map(|i| from + i).filter(|&i| i < body.len())
             .unwrap_or_else(|| body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)),
     };
+    let needle = format!("\"by\":\"{PERSON}\"");
     let mut carried = Vec::new();
     let mut room = carry;
     for line in text[..split].split(|&b| b == b'\n').rev() {
-        let theirs = line.windows(13).any(|w| w == b"\"by\":\"person\"")
+        let theirs = line.windows(needle.len()).any(|w| w == needle.as_bytes())
             && serde_json::from_slice::<Event>(line).is_ok_and(|e| e.by == PERSON);
         if theirs {
             if line.len() + 1 > room {
@@ -1399,6 +1396,27 @@ mod tests {
         assert_eq!(s.get("run").unwrap().view, view);
         s.undo("run", "person").unwrap();
         assert_eq!(s.get("run").unwrap().state["done"], 298, "older pushes undo too, after a restart");
+    }
+
+    #[test]
+    fn whole_state_rewrites_stay_within_the_undo_budget_and_the_newest_always_undoes() {
+        let (dir, mut s) = store();
+        let big = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
+        s.create("j", "".into(), VERBS.into(), big(0), "agent", false, "", "").unwrap();
+        for i in 1..30 {
+            s.set_state("j", "", Some(big(i)), "agent").unwrap();
+        }
+        let path = dir.path().join("jellies").join("j.json");
+        let file = fs::metadata(&path).unwrap().len() as usize;
+        let state = serde_json::to_vec(&big(29)).unwrap().len();
+        assert!(file <= 4 * state, "{file} bytes of file for {state} of state");
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, big(28));
+
+        // One step bigger than the whole budget of the small state it leaves.
+        s.set_state("j", "", Some(json!({})), "agent").unwrap();
+        s.undo("j", "person").unwrap();
+        assert_eq!(s.get("j").unwrap().state, big(28), "the newest step stays, however big");
     }
 
     #[test]
