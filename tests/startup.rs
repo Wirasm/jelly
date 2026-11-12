@@ -21,6 +21,7 @@ impl Sandbox {
             .env("STARTUP_TEST_ROOT", self.0.path())
             .env("STARTUP_TEST_PORT", port.to_string())
             .env("STARTUP_TEST_SLOT", slot.to_string())
+            .env("TOKIO_WORKER_THREADS", "2")
             .env_remove("JELLY_URL")
             .env_remove("JELLY_PROJECT")
             .env_remove("JELLY_AS")
@@ -387,7 +388,7 @@ fn invalid_home_and_early_exit_do_not_report_success_and_hooks_suppress_errors()
         if quiet {
             assert!(stderr.is_empty());
         } else {
-            assert!(stderr.contains("startup process") && stderr.contains("jelly serve"));
+            assert!(stderr.contains("startup process") && stderr.contains("jelly serve"), "{stderr}");
         }
         assert!(!stderr.contains("daemon started"));
         assert!(!ready(p));
@@ -395,7 +396,7 @@ fn invalid_home_and_early_exit_do_not_report_success_and_hooks_suppress_errors()
 }
 
 #[test]
-fn waits_for_bound_server_and_cleans_up_never_ready_child() {
+fn waits_for_bound_server_and_leaves_timed_out_daemon_running() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let p = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
@@ -424,8 +425,12 @@ fn waits_for_bound_server_and_cleans_up_never_ready_child() {
     let pid = s.pid(0);
     assert_eq!(
         unsafe { libc::kill(pid, 0) },
-        -1,
-        "candidate must be killed and reaped"
+        0,
+        "a timed-out starter must not kill a potentially shared daemon"
     );
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
+    }
     std::fs::remove_file(pid_file).unwrap();
 }

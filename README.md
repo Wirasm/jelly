@@ -52,9 +52,12 @@ prints one startup line on stderr. Data lives in `$JELLY_HOME` or `~/.jelly`, ju
 as with `jelly serve`. No login service or extra install step is needed.
 
 `jelly serve` still runs in the foreground for manual use and startup diagnostics.
+Unreadable or malformed persisted jellies prevent startup rather than serving a
+partial store. Run `jelly serve` to see the affected file and error.
 For an isolated run: `jelly serve --port 7879 --home /tmp/jelly-test`, then use
 `jelly --url http://127.0.0.1:7879 ls`. On-demand startup applies only to the default
-URL; other `--url` / `JELLY_URL` targets must already be running.
+local endpoint, including `http://localhost:7878` and equivalent URL spellings;
+other `--url` / `JELLY_URL` targets must already be running.
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It starts the default daemon silently, suppresses startup

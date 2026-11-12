@@ -297,12 +297,13 @@ fn run(cli: Cli) -> Result<(), String> {
     run_with_start(cli, |url, quiet| startup::ensure_running(url, quiet, daemon_command()?))
 }
 
-fn run_with_start(cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), String> {
-    if !matches!(cli.cmd, Cmd::Serve { .. }) && cli.url == startup::DEFAULT_URL {
+fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), String> {
+    if !matches!(cli.cmd, Cmd::Serve { .. }) && startup::is_default_endpoint(&cli.url) {
         let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true });
         if let Err(e) = start(&cli.url, quiet) {
             return if quiet { Ok(()) } else { Err(e) };
         }
+        cli.url = cli.url.trim_end_matches('/').to_owned();
     }
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone();
@@ -798,6 +799,14 @@ mod tests {
             Err("startup failed before opening a browser".into())
         });
         assert_eq!(result, Err("startup failed before opening a browser".into()));
+        for alias in ["http://localhost:7878/", "HTTP://127.1:7878"] {
+            let cli = parse(&["jelly", "--url", alias, "open"]);
+            assert_eq!(run_with_start(cli, |url, quiet| {
+                assert_eq!(url, alias);
+                assert!(!quiet);
+                Err("alias startup".into())
+            }), Err("alias startup".into()));
+        }
         for project in ["", "test"] {
             let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "inbox", "--hook"]);
             assert_eq!(run_with_start(cli, |_, quiet| {

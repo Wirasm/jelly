@@ -20,7 +20,8 @@ background and waits for it, printing one startup line on stderr. `jelly ls`
 lists this project's jellies (`--all` for every project).
 
 Startup uses the same home as `jelly serve`: `$JELLY_HOME` or `~/.jelly`, at
-http://127.0.0.1:7878. Other `--url` / `JELLY_URL` targets must already be running.
+http://127.0.0.1:7878 (also localhost:7878 and equivalent spellings). Other
+`--url` / `JELLY_URL` targets must already be running.
 If startup fails, run `jelly serve` in the foreground to see the cause.
 `jelly inbox --hook` starts silently, suppresses startup errors, and prints only
 new inbox items. Outside a project it attempts startup and exits successfully

@@ -7,6 +7,26 @@ pub fn ensure_running(url: &str, quiet: bool, command: Command) -> Result<(), St
     ensure_with_timeout(url, quiet, command, Duration::from_secs(10))
 }
 
+pub fn is_default_endpoint(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    let local = match url.host() {
+        Some(url::Host::Domain("localhost" | "localhost.")) => true,
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip.to_ipv4_mapped() == Some(std::net::Ipv4Addr::LOCALHOST),
+        _ => false,
+    };
+    let default = url::Url::parse(DEFAULT_URL).expect("valid default URL");
+    local && url.scheme() == default.scheme()
+        && url.port_or_known_default() == default.port_or_known_default()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
 enum Probe {
     Ready,
     Waiting { refused: bool, error: String },
@@ -14,7 +34,7 @@ enum Probe {
 }
 
 fn probe(url: &str, timeout: Duration) -> Probe {
-    match ureq::get(&format!("{url}/api/jellies"))
+    match ureq::get(&format!("{}/api/jellies", url.trim_end_matches('/')))
         .timeout(timeout)
         .call()
     {
@@ -73,10 +93,6 @@ pub(super) fn ensure_with_timeout(
         // HTTP and malformed responses identify a different or broken service.
         let retry = matches!(&last, Probe::Waiting { .. });
         if !retry || Instant::now() >= deadline {
-            if let Some(mut candidate) = child {
-                let _ = candidate.kill();
-                let _ = candidate.wait();
-            }
             let problem = match last {
                 Probe::Waiting { error, .. } | Probe::Failed(error) => error,
                 Probe::Ready => unreachable!(),
@@ -123,4 +139,29 @@ pub fn spawn_detached(mut command: Command) -> std::io::Result<Child> {
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
     command.spawn()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_default_endpoint;
+
+    #[test]
+    fn default_endpoint_aliases_and_other_targets() {
+        for url in [
+            "http://127.0.0.1:7878", "http://127.0.0.1:7878/",
+            "HTTP://LOCALHOST:7878/", "http://localhost.:7878",
+            "http://127.1:7878", "http://2130706433:7878",
+            "http://[::ffff:127.0.0.1]:7878",
+        ] {
+            assert!(is_default_endpoint(url), "{url}");
+        }
+        for url in [
+            "http://127.0.0.1:7879", "https://localhost:7878", "http://localhost",
+            "http://127.0.0.2:7878", "http://[::1]:7878", "http://example.com:7878",
+            "http://localhost:7878/prefix", "http://localhost:7878?x=1",
+            "http://localhost:7878#fragment", "http://user@localhost:7878", "invalid",
+        ] {
+            assert!(!is_default_endpoint(url), "{url}");
+        }
+    }
 }
