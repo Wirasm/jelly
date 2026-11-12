@@ -120,6 +120,8 @@ async function loaded(image) {
   await backgroundPixels(cssomTarget, 'setProperty');
   rule.style.backgroundImage = `url("${jelly.state.picture}")`;
   await backgroundPixels(cssomTarget, 'backgroundImage');
+  rule.style['background-image'] = `url("${jelly.state.picture}")`;
+  await backgroundPixels(cssomTarget, 'hyphenated property');
   rule.style.cssText = `background-image: url("${jelly.state.picture}")`;
   await backgroundPixels(cssomTarget, 'cssText');
   rule.style = `background-image: url("${jelly.state.picture}")`;
@@ -134,6 +136,7 @@ async function loaded(image) {
   const keyframe = keyframes.cssRules[0];
   for (const write of [
     () => { keyframe.style.backgroundImage = `url("${jelly.state.picture}")`; },
+    () => { keyframe.style['background-image'] = `url("${jelly.state.picture}")`; },
     () => { keyframe.style.cssText = `background-image: url("${jelly.state.picture}")`; },
     () => { keyframe.style = `background-image: url("${jelly.state.picture}")`; },
     () => keyframe.style.setProperty('background-image', `url("${jelly.state.picture}")`),

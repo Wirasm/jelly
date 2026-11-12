@@ -120,11 +120,13 @@
           for (const name of Object.getOwnPropertyNames(style)) {
             if (!/^[a-zA-Z-]+$/.test(name)) continue;
             const property = name === "cssFloat" ? "float" : name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`).replace(/^webkit-/, "-webkit-");
-            Object.defineProperty(style, name, {
-              configurable: true, enumerable: true,
-              get() { return this.getPropertyValue(property); },
-              set(value) { this.setProperty(property, value); },
-            });
+            for (const alias of new Set([name, property])) {
+              Object.defineProperty(style, alias, {
+                configurable: true, enumerable: alias === name,
+                get() { return this.getPropertyValue(property); },
+                set(value) { this.setProperty(property, value); },
+              });
+            }
           }
         }
         return style;
