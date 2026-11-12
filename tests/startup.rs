@@ -122,7 +122,7 @@ fn driver() {
         startup::ensure_running(&endpoint, quiet, server)
     };
     if let Err(e) = result {
-        if quiet {
+        if quiet && std::env::var_os("STARTUP_TEST_FAIL").is_some() {
             return;
         }
         panic!("{e}");
