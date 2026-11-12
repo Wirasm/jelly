@@ -234,17 +234,22 @@ async page => {
     const a = jelly.items.find(a => a.id === id), target = document.getElementById(a.anchor.selector.slice(1));
     return target?.contains(document.activeElement) && document.activeElement.matches('[data-pick]');
   }, groupedId);
-  const groupedOpening = await frame.evaluate(() => {
-    const heading = document.querySelector('#q- h2').getBoundingClientRect();
+  const groupedOpening = await frame.evaluate(id => {
+    const item = jelly.items.find(a => a.id === id);
+    const question = document.getElementById(item.anchor.selector.slice(1));
+    const heading = question.querySelector('h2').getBoundingClientRect();
     const answer = document.activeElement.getBoundingClientRect();
     const bar = document.getElementById('bar').getBoundingClientRect();
     return {heading:heading.top >= bar.bottom && heading.bottom <= innerHeight,
       answer:answer.top >= bar.bottom && answer.bottom <= innerHeight};
-  });
+  }, groupedId);
   assert(groupedOpening.heading && groupedOpening.answer, 'grouped opening shows the question heading and focused answer below the sticky bar');
   const inlineItems = await frame.evaluate(() => jelly.items.map(a => ({id:a.id,selector:a.anchor.selector})));
-  for (const item of inlineItems) {
-    await page.locator(`#dock-list [data-goto="${groupedName}"][data-item="${item.id}"]`).waitFor({state:'attached'});
+  const unopened = new Map(inlineItems.map(item => [item.id, item]));
+  while (unopened.size) {
+    await page.waitForFunction(({name,ids}) => ids.includes(document.querySelector(`#dock-list [data-goto="${name}"]`)?.dataset.item), {name:groupedName,ids:[...unopened.keys()]});
+    const itemId = await page.locator(`#dock-list [data-goto="${groupedName}"]`).getAttribute('data-item');
+    const item = unopened.get(itemId);
     await frame.evaluate(selector => { location.hash = selector; document.activeElement.blur(); }, item.selector);
     frame = await dock(groupedName, item.id);
     await frame.waitForFunction(id => {
@@ -252,7 +257,8 @@ async page => {
       return document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
     }, item.id);
     groupedId = item.id;
-    if (item !== inlineItems.at(-1)) await frame.locator(`[data-pick="${item.id}|y"]`).click();
+    unopened.delete(item.id);
+    if (unopened.size) await frame.locator(`[data-pick="${item.id}|y"]`).click();
   }
   // Tall inline questions must not focus an unseen choice that Enter submits.
   for (const content of ['preview', 'context']) {
@@ -268,8 +274,9 @@ async page => {
         {id:'n',label:'Online',does:'Stream from the studio.'}]
     }]}});
     await page.locator(`#dock-list [data-goto="${tallName}"]`).waitFor({state:'attached'});
-    const firstId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
-    frame = await dock(tallName, firstId);
+    const initialId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
+    frame = await dock(tallName, initialId);
+    const firstId = await frame.evaluate(() => jelly.items.find(a => a.anchor.selector === '#q-first').id);
     await frame.locator(`[data-pick="${firstId}|y"]`).click();
     await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'y', firstId);
     await page.locator(`#dock-list [data-goto="${tallName}"]:not([data-item="${firstId}"])`).waitFor({state:'attached'});
@@ -281,7 +288,7 @@ async page => {
       const heading = question.querySelector('h2').getBoundingClientRect();
       const focus = document.activeElement.getBoundingClientRect();
       const bar = document.getElementById('bar').getBoundingClientRect();
-      return {heading:heading.top >= bar.bottom && heading.bottom <= innerHeight,
+      return {heading:item.anchor.selector === '#q-detail' && heading.top >= bar.bottom && heading.bottom <= innerHeight,
         focus:question.contains(document.activeElement) && focus.top >= bar.bottom && focus.bottom <= innerHeight};
     }, tallId);
     assert(opening.heading && opening.focus, `later tall ${content} opening shows heading and focus in the requested question: ${JSON.stringify(opening)}`);
