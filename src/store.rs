@@ -1000,11 +1000,11 @@ impl Store {
                 self.recent.entry(ev.jelly.clone()).or_default().push(ev.clone());
                 if m.len() > LOG_LIMIT {
                     if let Err(e) = self.trim_events(LOG_KEEP, PERSON_CARRY) {
-                        eprintln!("could not trim the event log: {e}");
+                        let _ = writeln!(std::io::stderr().lock(), "could not trim the event log: {e}");
                     }
                 }
             }
-            Err(e) => eprintln!("could not log event: {e}"),
+            Err(e) => { let _ = writeln!(std::io::stderr().lock(), "could not log event: {e}"); }
         }
     }
 
