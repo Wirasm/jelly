@@ -114,7 +114,10 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     let spec = spec.to_str().unwrap();
     let asked = jelly(&["ask", "s", "--spec", spec]);
     let since = asked.split("--since ").nth(1).unwrap().trim_end_matches("`\n");
-    assert!(since.strip_prefix("seq:").unwrap().parse::<u64>().is_ok());
+    let history = std::fs::read_to_string(temp.path().join("daemon/events.jsonl")).unwrap();
+    let event: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
+    assert_eq!(event["kind"], "attention");
+    assert_eq!(since, format!("seq:{}", event["seq"]));
     assert_eq!(asked, format!("p:s round 1: asked 2 questions. Answers arrive in `jelly inbox`, or block on `jelly wait p:s --since {since}`\n"));
     let full = parse(jelly(&["ask", "s", "--spec", spec, "--json"]));
     assert_eq!((full["jelly"].as_str(), full["round"].as_u64(), full["questions"].as_u64()), (Some("p:s"), Some(2), Some(2)));
