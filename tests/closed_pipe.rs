@@ -1,16 +1,27 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const LIMIT: Duration = Duration::from_secs(10);
 
+// On macOS `std::io::pipe` and `Command::spawn` create pipes without atomic close-on-exec.
+// A child spawned by a parallel test in that gap inherits the pipe: a "closed" stdout then
+// has a live reader, and a piped stdout never reaches EOF. Create and spawn under one lock.
+static SPAWN: Mutex<()> = Mutex::new(());
+
 fn closed_pipe() -> Stdio {
+    let _spawning = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
     writer.into()
+}
+
+fn spawn(cmd: &mut Command) -> Process {
+    let _spawning = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+    Process(cmd.spawn().unwrap())
 }
 
 struct Process(Child);
@@ -66,6 +77,8 @@ struct Request {
 }
 impl Request {
     fn read(stream: TcpStream) -> Self {
+        // macOS hands back accepted sockets in the listener's nonblocking mode.
+        stream.set_nonblocking(false).unwrap();
         stream.set_read_timeout(Some(LIMIT)).unwrap();
         stream.set_write_timeout(Some(LIMIT)).unwrap();
         let mut input = BufReader::new(stream);
@@ -144,7 +157,7 @@ fn list_and_json_and_help_exit_quietly_with_a_closed_reader() {
             if closed {
                 cmd.stdout(closed_pipe());
             }
-            let mut child = Process(cmd.spawn().unwrap());
+            let mut child = spawn(&mut cmd);
             let mut req = fixture.request();
             assert_eq!(req.path, "/api/jellies");
             req.reply(
@@ -170,13 +183,7 @@ fn list_and_json_and_help_exit_quietly_with_a_closed_reader() {
             }
         }
     }
-    Process(
-        command(&fixture.url, &["--help"])
-            .stdout(closed_pipe())
-            .spawn()
-            .unwrap(),
-    )
-    .quiet();
+    spawn(command(&fixture.url, &["--help"]).stdout(closed_pipe())).quiet();
 }
 
 #[test]
@@ -206,7 +213,7 @@ fn creation_and_asset_uploads_finish_before_output() {
             if closed {
                 cmd.stdout(closed_pipe());
             }
-            let mut child = Process(cmd.spawn().unwrap());
+            let mut child = spawn(&mut cmd);
             if new {
                 let mut req = fixture.request();
                 assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies"));
@@ -243,12 +250,7 @@ fn creation_and_asset_uploads_finish_before_output() {
 fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
     for cmd in ["events", "watch", "wait"] {
         let fixture = Fixture::new();
-        let mut child = Process(
-            command(&fixture.url, &[cmd])
-                .stdout(closed_pipe())
-                .spawn()
-                .unwrap(),
-        );
+        let mut child = spawn(command(&fixture.url, &[cmd]).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.path, "/api/events");
         write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"seq\":1,\"at_ms\":1,\"kind\":\"call\",\"version\":1,\"view_rev\":1,\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
@@ -265,15 +267,10 @@ fn dev_stops_before_watching_or_after_a_complete_reshape() {
     std::fs::write(&view, "before").unwrap();
     let mut cmd = command(&fixture.url, &["dev", "probe:x"]);
     cmd.arg(dir.path()).stdout(closed_pipe());
-    Process(cmd.spawn().unwrap()).quiet();
+    spawn(&mut cmd).quiet();
     fixture.no_request();
 
-    let mut child = Process(
-        command(&fixture.url, &["dev", "probe:x"])
-            .arg(dir.path())
-            .spawn()
-            .unwrap(),
-    );
+    let mut child = spawn(command(&fixture.url, &["dev", "probe:x"]).arg(dir.path()));
     let pipe = child.0.stdout.take().unwrap();
     let (sent, received) = mpsc::channel();
     let reading = thread::spawn(move || {
@@ -308,12 +305,7 @@ fn dev_stops_before_watching_or_after_a_complete_reshape() {
 #[test]
 fn domain_errors_stay_errors_with_closed_stdout() {
     let fixture = Fixture::new();
-    let mut child = Process(
-        command(&fixture.url, &["ls", "--all"])
-            .stdout(closed_pipe())
-            .spawn()
-            .unwrap(),
-    );
+    let mut child = spawn(command(&fixture.url, &["ls", "--all"]).stdout(closed_pipe()));
     let mut req = fixture.request();
     write!(req.stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{{\"error\":\"oops\"}}").unwrap();
     let out = child.finish();
@@ -324,22 +316,24 @@ fn domain_errors_stay_errors_with_closed_stdout() {
 #[test]
 fn serve_keeps_serving_with_closed_stdout() {
     let dir = tempfile::tempdir().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let mut child = Process(
-        command(
-            "http://unused",
-            &["serve", "--port", &port.to_string(), "--home"],
-        )
-        .arg(dir.path())
-        .stdout(closed_pipe())
-        .spawn()
-        .unwrap(),
+    // Port 0, not a freed probe port: a parallel test's fixture could take that port first.
+    let mut child = spawn(
+        command("http://unused", &["serve", "--port", "0", "--home"])
+            .arg(dir.path())
+            .stdout(closed_pipe()),
     );
+    let mut banner = String::new();
+    BufReader::new(child.0.stderr.take().unwrap())
+        .read_line(&mut banner)
+        .unwrap();
+    let url = banner
+        .trim()
+        .strip_prefix("jelly on ")
+        .expect(&banner)
+        .to_string();
     let until = Instant::now() + LIMIT;
     loop {
-        if let Ok(resp) = ureq::get(&format!("http://127.0.0.1:{port}/api/jellies"))
+        if let Ok(resp) = ureq::get(&format!("{url}/api/jellies"))
             .timeout(Duration::from_secs(1))
             .call()
         {
@@ -355,12 +349,7 @@ fn serve_keeps_serving_with_closed_stdout() {
 #[test]
 fn wait_retains_its_timeout_exit_with_closed_stdout() {
     let fixture = Fixture::new();
-    let mut child = Process(
-        command(&fixture.url, &["wait", "--timeout", "1"])
-            .stdout(closed_pipe())
-            .spawn()
-            .unwrap(),
-    );
+    let mut child = spawn(command(&fixture.url, &["wait", "--timeout", "1"]).stdout(closed_pipe()));
     let mut req = fixture.request();
     write!(
         req.stream,
@@ -382,12 +371,7 @@ fn non_broken_pipe_stdout_failure_exits_with_a_diagnostic() {
     let mut stdout = std::fs::File::from(fd);
     let error = stdout.write_all(b"probe").unwrap_err();
     assert_ne!(error.kind(), std::io::ErrorKind::BrokenPipe);
-    let mut child = Process(
-        command(&fixture.url, &["ls", "--all"])
-            .stdout(stdout)
-            .spawn()
-            .unwrap(),
-    );
+    let mut child = spawn(command(&fixture.url, &["ls", "--all"]).stdout(stdout));
     let mut req = fixture.request();
     assert_eq!(req.path, "/api/jellies");
     req.reply(r#"[{"name":"probe:first","version":1}]"#);
@@ -402,7 +386,7 @@ fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
         let fixture = Fixture::new();
         let mut args = vec!["wait", "probe:x", "--since", "seq:1"];
         if json { args.push("--json"); }
-        let mut child = Process(command(&fixture.url, &args).stdout(closed_pipe()).spawn().unwrap());
+        let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax");
@@ -413,7 +397,7 @@ fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
         std::fs::write(spec.path(), r#"{"question":"Which?","options":[{"id":"a","label":"A"}]}"#).unwrap();
         let mut args = vec!["ask", "probe:x", "--spec", spec.path().to_str().unwrap()];
         if json { args.push("--json"); }
-        let mut child = Process(command(&fixture.url, &args).stdout(closed_pipe()).spawn().unwrap());
+        let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies/probe:x/ask"));
         req.reply(r#"{"jelly":"probe:x","seq":3,"state":{"round":1}}"#);
