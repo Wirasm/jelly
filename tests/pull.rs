@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
@@ -17,11 +17,7 @@ impl Daemon {
         // Port 0, not a freed probe port: a parallel test's fixture could take that port first.
         let mut child = Command::new(BIN).args(["serve", "--port", "0", "--home"])
             .arg(home).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-        let mut errors = String::new();
-        BufReader::new(child.stderr.take().unwrap()).read_line(&mut errors).unwrap();
-        let Some(url) = errors.trim().strip_prefix("jelly on ").map(str::to_string) else {
-            panic!("daemon exited ({}): {errors}", child.wait().unwrap());
-        };
+        let url = served_url(&mut child, Duration::from_secs(10));
         Self { child, url }
     }
 
@@ -56,6 +52,29 @@ fn stdout(output: Output) -> String {
 
 const VIEW: &str = "<p>pull test</p>";
 const VERBS: &str = "const verbs = {};";
+
+/// Waits for the `jelly on <url>` line `serve` prints once it is listening.
+fn served_url(child: &mut Child, limit: Duration) -> String {
+    let stderr = child.stderr.take().unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stderr = BufReader::new(stderr);
+        let mut line = String::new();
+        let _ = stderr.read_line(&mut line);
+        if !line.starts_with("jelly on ") {
+            let _ = stderr.read_to_string(&mut line);
+        }
+        let _ = sent.send(line);
+    });
+    let Ok(line) = received.recv_timeout(limit) else {
+        let _ = child.kill();
+        panic!("daemon did not start");
+    };
+    match line.trim().strip_prefix("jelly on ") {
+        Some(url) => url.to_string(),
+        None => panic!("daemon exited ({}): {line}", child.wait().unwrap()),
+    }
+}
 
 #[test]
 fn pull_gets_assets_from_selected_daemon_with_separate_client_homes() {

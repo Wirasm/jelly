@@ -313,6 +313,26 @@ fn domain_errors_stay_errors_with_closed_stdout() {
     assert_eq!(out.stderr, b"jelly: oops\n");
 }
 
+/// Waits for the `jelly on <url>` line `serve` prints once it is listening.
+fn served_url(child: &mut Child) -> String {
+    let stderr = child.stderr.take().unwrap();
+    let (sent, received) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stderr = BufReader::new(stderr);
+        let mut line = String::new();
+        let _ = stderr.read_line(&mut line);
+        if !line.starts_with("jelly on ") {
+            let _ = stderr.read_to_string(&mut line);
+        }
+        let _ = sent.send(line);
+    });
+    let line = received.recv_timeout(LIMIT).expect("daemon did not start");
+    match line.trim().strip_prefix("jelly on ") {
+        Some(url) => url.to_string(),
+        None => panic!("daemon exited ({}): {line}", child.wait().unwrap()),
+    }
+}
+
 #[test]
 fn serve_keeps_serving_with_closed_stdout() {
     let dir = tempfile::tempdir().unwrap();
@@ -322,15 +342,7 @@ fn serve_keeps_serving_with_closed_stdout() {
             .arg(dir.path())
             .stdout(closed_pipe()),
     );
-    let mut banner = String::new();
-    BufReader::new(child.0.stderr.take().unwrap())
-        .read_line(&mut banner)
-        .unwrap();
-    let url = banner
-        .trim()
-        .strip_prefix("jelly on ")
-        .expect(&banner)
-        .to_string();
+    let url = served_url(&mut child.0);
     let until = Instant::now() + LIMIT;
     loop {
         if let Ok(resp) = ureq::get(&format!("{url}/api/jellies"))
