@@ -1,3 +1,6 @@
+mod common;
+
+use common::served_url;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Output, Stdio};
@@ -311,26 +314,6 @@ fn domain_errors_stay_errors_with_closed_stdout() {
     let out = child.finish();
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert_eq!(out.stderr, b"jelly: oops\n");
-}
-
-/// Waits for the `jelly on <url>` line `serve` prints once it is listening.
-fn served_url(child: &mut Child) -> String {
-    let stderr = child.stderr.take().unwrap();
-    let (sent, received) = mpsc::channel();
-    thread::spawn(move || {
-        let mut stderr = BufReader::new(stderr);
-        let mut line = String::new();
-        let _ = stderr.read_line(&mut line);
-        if !line.starts_with("jelly on ") {
-            let _ = stderr.read_to_string(&mut line);
-        }
-        let _ = sent.send(line);
-    });
-    let line = received.recv_timeout(LIMIT).expect("daemon did not start");
-    match line.trim().strip_prefix("jelly on ") {
-        Some(url) => url.to_string(),
-        None => panic!("daemon exited ({}): {line}", child.wait().unwrap()),
-    }
 }
 
 #[test]
