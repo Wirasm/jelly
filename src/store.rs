@@ -807,7 +807,7 @@ impl Store {
             .collect();
         stale.iter().filter_map(|n| match self.set_archived(n, true, "jelly") {
             Ok(ev) => Some(ev),
-            Err(e) => { eprintln!("could not archive {n}: {e}"); None }
+            Err(e) => { let _ = writeln!(std::io::stderr().lock(), "could not archive {n}: {e}"); None }
         }).collect()
     }
 

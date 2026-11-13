@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -145,7 +145,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
     });
 
     let port = listener.local_addr()?.port();
-    eprintln!("jelly on http://127.0.0.1:{port}");
+    let _ = writeln!(std::io::stderr().lock(), "jelly on http://127.0.0.1:{port}");
     axum::serve(listener, router(app)).await
 }
 
