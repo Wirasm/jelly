@@ -467,11 +467,30 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
     Ok(None)
 }
 
-fn open_history(store: &Store) -> Result<Option<BufReader<File>>, Error> {
-    match File::open(store.events_path()) {
-        Ok(file) => Ok(Some(BufReader::new(file))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && store.sequence() == 0 => Ok(None),
-        Err(e) => Err(history_error(e)),
+/// `events.jsonl` as an open wait reads it. A trim replaces the file, so the
+/// wait reopens it and reads from the start; that cannot report an event twice,
+/// because the wait returns on the first event that matches.
+struct History {
+    reader: Option<BufReader<File>>,
+    trims: u64,
+}
+
+impl History {
+    fn open(store: &Store) -> Result<History, Error> {
+        let reader = match File::open(store.events_path()) {
+            Ok(file) => Some(BufReader::new(file)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && store.sequence() == 0 => None,
+            Err(e) => return Err(history_error(e)),
+        };
+        Ok(History { reader, trims: store.trims() })
+    }
+
+    fn next_change(&mut self, store: &Store, q: &WaitQ) -> Result<Option<Event>, Error> {
+        if self.reader.is_none() || self.trims != store.trims() { *self = History::open(store)?; }
+        match &mut self.reader {
+            Some(reader) => recorded_change(reader, q),
+            None => Ok(None),
+        }
     }
 }
 
@@ -484,10 +503,10 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
     let rx = app.events.subscribe();
     let deadline = q.timeout.map(|t| Instant::now().checked_add(Duration::from_secs(t))
         .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
-    let mut reader = {
+    let history = {
         let mut store = app.store.lock().expect("store lock");
-        let mut reader = open_history(&store)?;
-        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut reader) {
+        let mut history = History::open(&store)?;
+        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut history.reader) {
             let (project, short) = preferred.split_once(':').unwrap_or(("", preferred));
             let mut identities = std::collections::BTreeSet::new();
             let mut line = String::new();
@@ -513,20 +532,18 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
             }
             std::io::Seek::rewind(reader).map_err(history_error)?;
         }
-        if let Some(reader) = &mut reader {
-            if let Some(ev) = recorded_change(reader, &q)? { return Ok(Some(ev)); }
-        }
+        if let Some(ev) = history.next_change(&store, &q)? { return Ok(Some(ev)); }
         if let Some(name) = &q.jelly { store.get(name)?; }
         after_scan(&mut store);
-        reader
+        history
     };
-    wait_for_record(app, &q, &mut reader, rx, deadline).await
+    wait_for_record(app, &q, history, rx, deadline).await
 }
 
 async fn wait_for_record(
     app: &App,
     q: &WaitQ,
-    reader: &mut Option<BufReader<File>>,
+    mut history: History,
     mut rx: broadcast::Receiver<Event>,
     deadline: Option<Instant>,
 ) -> Result<Option<Event>, Error> {
@@ -543,10 +560,7 @@ async fn wait_for_record(
         // Commits are ordered under the store lock; broadcasts happen after it
         // is released, so notifications only wake the reader, never choose a result.
         let store = app.store.lock().expect("store lock");
-        if reader.is_none() { *reader = open_history(&store)?; }
-        if let Some(reader) = reader {
-            if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
-        }
+        if let Some(ev) = history.next_change(&store, q)? { return Ok(Some(ev)); }
         if matches!(notification, Err(broadcast::error::RecvError::Closed)) {
             return Err(Error::Invalid("the event stream ended".into()));
         }
@@ -1735,14 +1749,14 @@ mod wait_tests {
         let (_dir, app) = fixture(4);
         let rx = app.events.subscribe();
         let q = query(Some("j"), 0);
-        let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
-        assert!(recorded_change(&mut reader, &q).unwrap().is_none());
+        let mut history = History::open(&app.store.lock().unwrap()).unwrap();
+        assert!(history.next_change(&app.store.lock().unwrap(), &q).unwrap().is_none());
         let (first, second) = {
             let mut s = app.store.lock().unwrap();
             (s.note("j", "first", "helper").unwrap(), s.note("j", "second", "person").unwrap())
         };
         app.events.send(second).unwrap();
-        let result = wait_for_record(&app, &q, &mut Some(reader), rx, None).await.unwrap().unwrap();
+        let result = wait_for_record(&app, &q, history, rx, None).await.unwrap().unwrap();
         assert_eq!(result.seq, first.seq);
     }
 
@@ -1757,6 +1771,20 @@ mod wait_tests {
         note(&app, "j", "agent");
         note(&app, "other", "person");
         assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        let expected = note(&app, "j", "helper");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
+    }
+
+    #[tokio::test]
+    async fn an_open_wait_hears_events_after_the_log_is_trimmed() {
+        let (_dir, app) = fixture(8);
+        let start = note(&app, "j", "person");
+        let q = WaitQ { timeout: Some(5), ..query(Some("j"), start.seq) };
+        let future = wait_since(&app, &q);
+        tokio::pin!(future);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        note(&app, "j", "agent");
+        app.store.lock().unwrap().trim_events(1, 1 << 20).unwrap();
         let expected = note(&app, "j", "helper");
         assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
     }
