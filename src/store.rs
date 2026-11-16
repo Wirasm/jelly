@@ -1080,7 +1080,9 @@ impl Store {
 
     fn log(&mut self, ev: &Event) -> Result<(), Error> {
         let append = || -> std::io::Result<(u64, usize)> {
-            let mut file = fs::OpenOptions::new().create(true).read(true).append(true).open(self.events_path())?;
+            // Recreating a log this store has indexed would hide its unread history.
+            let mut file = fs::OpenOptions::new().create(self.timestamps.is_empty()).read(true).append(true).open(self.events_path())
+                .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { missing_history() } else { e })?;
             let len = file.metadata()?.len();
             if len > 0 {
                 file.seek(SeekFrom::End(-1))?;
@@ -1146,6 +1148,7 @@ impl Store {
         let mut file = match fs::File::open(self.events_path()) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.timestamps.is_empty() => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(missing_history()),
             Err(e) => return Err(e),
         };
         if !file.metadata()?.is_file() {
@@ -1171,11 +1174,13 @@ impl Store {
     }
 
     /// Hands the lines of `events.jsonl` to `visit`, newest first, until it
-    /// returns false or fails. Reads only as far back as `visit` asks for.
+    /// returns false or fails. Reads only as far back as `visit` asks for. A
+    /// missing log is empty only while the store has indexed no history.
     pub fn events_back(&self, mut visit: impl FnMut(&str) -> std::io::Result<bool>) -> std::io::Result<()> {
         let mut file = match fs::File::open(self.events_path()) {
             Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.timestamps.is_empty() => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(missing_history()),
             Err(e) => return Err(e),
         };
         // The start of a line whose beginning is in an earlier chunk.
@@ -1501,6 +1506,10 @@ pub fn diff(a: &Value, b: &Value, path: &mut String, out: &mut Vec<String>) {
     }
 }
 
+fn missing_history() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::NotFound, "events.jsonl is missing history this daemon recorded; restore it before retrying")
+}
+
 fn read_optional(path: &Path) -> std::io::Result<String> {
     match fs::read_to_string(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -1640,6 +1649,41 @@ mod tests {
         let batch = s.read_inbox(project, &reader)?;
         s.commit_inbox(InboxCommit { inbox: InboxRequest { project: project.into(), reader }, through: batch.through })?;
         Ok(batch.events.into_iter().map(|item| item.event).collect())
+    }
+
+    #[test]
+    fn a_missing_log_is_not_recreated_past_unread_events() {
+        let (dir, mut s) = store();
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "r".into() };
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        let unread = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let cursors = dir.path().join("inbox-readers.json");
+        let saved = fs::read(&cursors).unwrap();
+        let aside = dir.path().join("aside.jsonl");
+        fs::rename(s.events_path(), &aside).unwrap();
+        assert!(s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).is_err());
+        assert!(!s.events_path().exists());
+        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
+        assert_eq!(fs::read(&cursors).unwrap(), saved);
+        fs::rename(&aside, s.events_path()).unwrap();
+        let events = consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), [unread.seq]);
+        let next = s.call("p:sample", "label", json!({"id": "c", "value": "z"}), PERSON).unwrap();
+        assert!(next.seq > unread.seq + 1);
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [next.seq]);
+        assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_fresh_home_creates_its_log_and_delivers() {
+        let (dir, mut s) = store();
+        assert!(!dir.path().join("events.jsonl").exists());
+        let reader = InboxReader::Named { name: "r".into() };
+        assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
+        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [event.seq]);
     }
 
     #[test]
