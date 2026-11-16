@@ -468,8 +468,9 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
 }
 
 /// `events.jsonl` as an open wait reads it. A trim replaces the file, so the
-/// wait reopens it and reads from the start; that cannot report an event twice,
-/// because the wait returns on the first event that matches.
+/// wait first reads the rest of the old file, whose tail the trim may have
+/// dropped, then reopens and reads the new one from the start. That cannot
+/// report an event twice, because the wait returns on the first event that matches.
 struct History {
     reader: Option<BufReader<File>>,
     trims: u64,
@@ -486,7 +487,14 @@ impl History {
     }
 
     fn next_change(&mut self, store: &Store, q: &WaitQ) -> Result<Option<Event>, Error> {
-        if self.reader.is_none() || self.trims != store.trims() { *self = History::open(store)?; }
+        if self.trims != store.trims() {
+            if let Some(reader) = &mut self.reader {
+                if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
+            }
+            *self = History::open(store)?;
+        } else if self.reader.is_none() {
+            *self = History::open(store)?;
+        }
         match &mut self.reader {
             Some(reader) => recorded_change(reader, q),
             None => Ok(None),
@@ -1786,6 +1794,20 @@ mod wait_tests {
         note(&app, "j", "agent");
         app.store.lock().unwrap().trim_events(1, 1 << 20).unwrap();
         let expected = note(&app, "j", "helper");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
+    }
+
+    #[tokio::test]
+    async fn an_open_wait_hears_an_unread_event_the_trim_dropped() {
+        let (_dir, app) = fixture(8);
+        let start = note(&app, "j", "person");
+        let q = WaitQ { timeout: Some(5), ..query(Some("j"), start.seq) };
+        let future = wait_since(&app, &q);
+        tokio::pin!(future);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        let expected = note(&app, "j", "helper");
+        note(&app, "j", "agent");
+        app.store.lock().unwrap().trim_events(1, 0).unwrap();
         assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
     }
 
