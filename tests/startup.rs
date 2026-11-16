@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod common;
+
 #[path = "../src/startup.rs"]
 #[allow(dead_code)]
 mod startup;
@@ -63,12 +65,9 @@ impl Drop for Sandbox {
         }
     }
 }
+/// A port for a daemon that `ensure_running` starts on its own.
 fn port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    common::unassigned_port()
 }
 fn url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
@@ -286,8 +285,8 @@ fn quiet_hooks_start_inside_and_outside_projects_and_keep_new_items() {
 #[test]
 fn manual_bind_failure_does_not_touch_home_and_custom_url_stays_selected() {
     let s = Sandbox::new();
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let p = listener.local_addr().unwrap().port();
+    let p = port();
+    let listener = TcpListener::bind(("127.0.0.1", p)).unwrap();
     let home = s.0.path().join("rejected-home");
     let result = Command::new(env!("CARGO_BIN_EXE_jelly"))
         .args(["serve", "--port", &p.to_string(), "--home"])
@@ -349,7 +348,7 @@ fn manual_bind_failure_does_not_touch_home_and_custom_url_stays_selected() {
 #[test]
 fn startup_failures_and_readiness_are_bounded() {
     let missing = || Command::new("/no/such/jelly-executable");
-    let p = port();
+    let (_refused, p) = common::refused_port();
     let error = startup::ensure_running(&url(p), true, missing()).unwrap_err();
     assert!(error.contains("cannot start daemon") && error.contains("jelly serve"));
 
@@ -449,7 +448,7 @@ fn waits_for_bound_server_and_leaves_timed_out_daemon_running() {
     server.join().unwrap();
 
     let s = Sandbox::new();
-    let p = port();
+    let (_refused, p) = common::refused_port();
     let pid_file = s.0.path().join("pid-0");
     let mut child = Command::new("/bin/sh");
     child

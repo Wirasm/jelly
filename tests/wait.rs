@@ -1,5 +1,6 @@
+mod common;
+
 use serde_json::{json, Value};
-use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -19,20 +20,11 @@ impl Drop for Daemon {
 impl Daemon {
     fn start() -> Self {
         let home = tempfile::tempdir().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let child = Command::new(env!("CARGO_BIN_EXE_jelly"))
-            .args(["serve", "--port", &port.to_string(), "--home"])
-            .arg(home.path()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
-        let mut daemon = Self { child, home, url: format!("http://127.0.0.1:{port}") };
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            if ureq::get(&format!("{}/api/jellies", daemon.url)).timeout(Duration::from_millis(100)).call().is_ok() { break; }
-            assert!(daemon.child.try_wait().unwrap().is_none(), "daemon exited");
-            assert!(Instant::now() < end, "daemon did not start");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        let mut child = Command::new(env!("CARGO_BIN_EXE_jelly"))
+            .args(["serve", "--port", "0", "--home"])
+            .arg(home.path()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let url = common::served_url(&mut child);
+        let daemon = Self { child, home, url };
         daemon.post("/api/jellies", json!({"name": "plan", "project": "test", "view": "<p>Choose</p>", "verbs": "const verbs = { tick(s) { s.n = (s.n || 0) + 1; } };", "state": {}, "by": "agent"}));
         daemon
     }

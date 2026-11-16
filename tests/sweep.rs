@@ -1,5 +1,6 @@
+mod common;
+
 use serde_json::{json, Value};
-use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -21,36 +22,55 @@ fn closed_pipe() -> Stdio {
     writer.into()
 }
 
-fn start(home: &Path, stderr: Stdio) -> (Daemon, String, ureq::Agent) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let mut daemon = Daemon(
-        Command::new(env!("CARGO_BIN_EXE_jelly"))
-            .args(["serve", "--port", &port.to_string(), "--home"])
-            .arg(home)
-            .stdout(Stdio::null())
-            .stderr(stderr)
-            .spawn()
-            .unwrap(),
-    );
-    let url = format!("http://127.0.0.1:{port}");
+enum Stderr<'a> {
+    /// Read only for the banner, then closed.
+    Banner,
+    File(&'a Path),
+    /// Closed from the start, so the startup sweep's warning cannot be written.
+    Closed,
+}
+
+fn start(home: &Path, stderr: Stderr) -> (Daemon, String, ureq::Agent) {
+    let serve = |port: &str, stderr: Stdio| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jelly"));
+        command.args(["serve", "--port", port, "--home"]).arg(home);
+        Daemon(command.stdout(Stdio::null()).stderr(stderr).spawn().unwrap())
+    };
     let agent = ureq::AgentBuilder::new().timeout(LIMIT).build();
-    let deadline = Instant::now() + LIMIT;
-    while agent.get(&format!("{url}/api/jellies")).call().is_err() {
-        assert!(
-            daemon.0.try_wait().unwrap().is_none(),
-            "daemon exited during startup"
-        );
-        assert!(Instant::now() < deadline, "daemon did not start");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let (daemon, url) = match stderr {
+        Stderr::Banner => {
+            let mut daemon = serve("0", Stdio::piped());
+            let url = common::served_url(&mut daemon.0);
+            (daemon, url)
+        }
+        Stderr::File(path) => {
+            let mut daemon = serve("0", std::fs::File::create(path).unwrap().into());
+            let url = common::served_url_in(&mut daemon.0, path);
+            (daemon, url)
+        }
+        // The daemon cannot print its banner, so it gets a port chosen beforehand.
+        Stderr::Closed => {
+            let port = common::unassigned_port();
+            let mut daemon = serve(&port.to_string(), closed_pipe());
+            let url = format!("http://127.0.0.1:{port}");
+            let deadline = Instant::now() + LIMIT;
+            while agent.get(&format!("{url}/api/jellies")).call().is_err() {
+                assert!(
+                    daemon.0.try_wait().unwrap().is_none(),
+                    "daemon exited during startup"
+                );
+                assert!(Instant::now() < deadline, "daemon did not start");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            (daemon, url)
+        }
+    };
     (daemon, url, agent)
 }
 
 /// Two week-idle jellies: archiving `test:a` fails, `test:b` archives after it.
 fn idle_jellies(home: &Path) {
-    let (daemon, url, agent) = start(home, Stdio::null());
+    let (daemon, url, agent) = start(home, Stderr::Banner);
     for name in ["a", "b"] {
         agent
             .post(&format!("{url}/api/jellies"))
@@ -74,11 +94,7 @@ fn archive_failure(closed_stderr: bool) {
     let home = tempfile::tempdir().unwrap();
     idle_jellies(home.path());
     let warnings = home.path().join("stderr.txt");
-    let stderr = if closed_stderr {
-        closed_pipe()
-    } else {
-        std::fs::File::create(&warnings).unwrap().into()
-    };
+    let stderr = if closed_stderr { Stderr::Closed } else { Stderr::File(&warnings) };
     let (mut daemon, url, agent) = start(home.path(), stderr);
     let deadline = Instant::now() + LIMIT;
     loop {

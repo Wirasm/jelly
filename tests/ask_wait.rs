@@ -1,12 +1,14 @@
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Output};
 use std::time::Duration;
 
-/// A daemon on a free port and a throwaway home, killed on drop.
+/// A daemon on a port it picked itself and a throwaway home, killed on drop.
 struct Daemon {
     url: String,
     child: Child,
@@ -27,25 +29,20 @@ fn daemon() -> Daemon {
     let browser = home.path().join("browser");
     std::fs::write(&browser, "#!/bin/sh\nsleep 1\n").unwrap();
     std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let child = Command::new(env!("CARGO_BIN_EXE_jelly"))
-        .args(["serve", "--port", &port.to_string(), "--home"])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["serve", "--port", "0", "--home"])
         .arg(home.path().join("jelly"))
         .env("JELLY_CHROME", &browser)
         .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let d = Daemon { url: format!("http://127.0.0.1:{port}"), child, _home: home };
-    for _ in 0..100 {
-        if ureq::get(&format!("{}/api/jellies", d.url)).call().is_ok() {
-            ureq::post(&format!("{}/api/jellies", d.url))
-                .send_json(json!({"name": "t:q", "view": "<p id=x>x</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}))
-                .unwrap();
-            return d;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("the daemon did not start");
+    let url = common::served_url(&mut child);
+    let d = Daemon { url, child, _home: home };
+    ureq::post(&format!("{}/api/jellies", d.url))
+        .send_json(json!({"name": "t:q", "view": "<p id=x>x</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}))
+        .unwrap();
+    d
 }
 
 /// On the first attention event, waits `after`, then posts `action` to that
