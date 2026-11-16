@@ -530,6 +530,8 @@ pub struct Store {
     seq: u64,
     recent: BTreeMap<String, RecentEvents>,
     timestamps: TimestampIndex,
+    /// How many times `events.jsonl` has been trimmed (replaced) since open.
+    trims: u64,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
     #[cfg(test)]
@@ -597,7 +599,7 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, source: None, #[cfg(test)] log_failure: None })
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, #[cfg(test)] log_failure: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -1118,8 +1120,13 @@ impl Store {
         self.seq
     }
 
+    pub fn trims(&self) -> u64 {
+        self.trims
+    }
+
     pub(crate) fn trim_events(&mut self, keep: usize, carry: usize) -> std::io::Result<()> {
         trim_log(&self.events_path(), keep, carry)?;
+        self.trims += 1;
         let (_, recent, timestamps) = read_event_history(&self.events_path())?;
         self.recent = recent;
         self.timestamps = timestamps;
