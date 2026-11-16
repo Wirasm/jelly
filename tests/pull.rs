@@ -1,5 +1,8 @@
+mod common;
+
+use common::served_url;
 use serde_json::{json, Value};
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
@@ -14,24 +17,11 @@ struct Daemon {
 
 impl Daemon {
     fn start(home: &Path) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let child = Command::new(BIN).args(["serve", "--port", &port.to_string(), "--home"])
+        // Port 0, not a freed probe port: a parallel test's fixture could take that port first.
+        let mut child = Command::new(BIN).args(["serve", "--port", "0", "--home"])
             .arg(home).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-        let mut daemon = Self { child, url: format!("http://127.0.0.1:{port}") };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if ureq::get(&format!("{}/api/jellies", daemon.url)).call().is_ok() { break; }
-            if let Some(status) = daemon.child.try_wait().unwrap() {
-                let mut errors = String::new();
-                daemon.child.stderr.take().unwrap().read_to_string(&mut errors).unwrap();
-                panic!("daemon exited ({status}): {errors}");
-            }
-            assert!(Instant::now() < deadline, "daemon did not start");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        daemon
+        let url = served_url(&mut child);
+        Self { child, url }
     }
 
     fn post(&self, path: &str, body: Value) -> Value {
@@ -131,7 +121,7 @@ fn pull_without_assets_writes_core_and_reports_zero() {
 
 #[test]
 fn pull_reports_inventory_and_download_failures() {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::Write;
 
     for (inventory_status, inventory, download, diagnostic) in [
         ("200 OK", json!({"assets": []}), false, "asset inventory"),
@@ -161,6 +151,8 @@ fn pull_reports_inventory_and_download_failures() {
                         Err(e) => panic!("accept: {e}"),
                     }
                 };
+                // macOS hands back accepted sockets in the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                 stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
                 let mut input = BufReader::new(&stream);
