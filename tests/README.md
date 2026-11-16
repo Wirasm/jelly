@@ -136,5 +136,5 @@ It returns measurements and saves `stream-390.png`, `stream-390-expanded.png` an
 Run `full-view-header.js` against the same daemon to check full-view behavior.
 Stop the daemon afterward with Ctrl-C. Existing homes retain their stored jelly
 page; use a fresh home to test the newly built bundled view. To explicitly update
-a stored page, use `jelly --url http://127.0.0.1:17850 reshape surface --view assets/surface.html`
+a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 reshape surface --view assets/surface.html`
 from the checkout, merging these changes into any customized view first.
