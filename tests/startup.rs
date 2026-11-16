@@ -285,8 +285,8 @@ fn quiet_hooks_start_inside_and_outside_projects_and_keep_new_items() {
 #[test]
 fn manual_bind_failure_does_not_touch_home_and_custom_url_stays_selected() {
     let s = Sandbox::new();
-    let p = port();
-    let listener = TcpListener::bind(("127.0.0.1", p)).unwrap();
+    let listener = common::unassigned_listener();
+    let p = listener.local_addr().unwrap().port();
     let home = s.0.path().join("rejected-home");
     let result = Command::new(env!("CARGO_BIN_EXE_jelly"))
         .args(["serve", "--port", &p.to_string(), "--home"])

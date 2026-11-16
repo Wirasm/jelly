@@ -76,14 +76,19 @@ pub fn refused_port() -> ([TcpStream; 2], u16) {
 /// it after the probe releases it. Each process starts at a different point, so parallel
 /// test processes do not try the same ports.
 pub fn unassigned_port() -> u16 {
+    unassigned_listener().local_addr().unwrap().port()
+}
+
+/// The probe behind `unassigned_port`, kept open for a test that needs the port taken.
+pub fn unassigned_listener() -> TcpListener {
     const FIRST: u16 = 20_000;
     const COUNT: u16 = 12_000;
     static NEXT: AtomicU16 = AtomicU16::new(0);
     let start = (std::process::id().wrapping_mul(97) % u32::from(COUNT)) as u16;
     loop {
         let port = FIRST + (start + NEXT.fetch_add(1, Ordering::Relaxed) % COUNT) % COUNT;
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            return listener;
         }
     }
 }
