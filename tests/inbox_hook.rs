@@ -1,3 +1,5 @@
+mod common;
+
 use std::net::TcpListener;
 use std::process::Command;
 
@@ -19,7 +21,7 @@ fn the_inbox_hook_says_so_when_the_daemon_does_not_answer() {
     assert!(ok);
     assert!(out.starts_with("jelly inbox failed: "), "{out:?}");
 
-    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (_refused, port) = common::refused_port();
     let (ok, out) = hook(port, home.path());
     assert!(ok);
     assert_eq!(out, "", "no daemon running is not worth a word");

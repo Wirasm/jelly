@@ -1,10 +1,11 @@
 #![cfg(unix)]
 
+mod common;
+
 use serde_json::{json, Value};
 use std::process::{Child, Command};
-use std::time::Duration;
 
-/// A daemon on a free port and a throwaway home, killed on drop.
+/// A daemon on a port it picked itself and a throwaway home, killed on drop.
 struct Daemon {
     url: String,
     child: Child,
@@ -20,21 +21,15 @@ impl Drop for Daemon {
 
 fn daemon() -> Daemon {
     let home = tempfile::tempdir().unwrap();
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let child = Command::new(env!("CARGO_BIN_EXE_jelly"))
-        .args(["serve", "--port", &port.to_string(), "--home"])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["serve", "--port", "0", "--home"])
         .arg(home.path().join("jelly"))
         .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let d = Daemon { url: format!("http://127.0.0.1:{port}"), child, _home: home };
-    for _ in 0..100 {
-        if ureq::get(&format!("{}/api/jellies", d.url)).call().is_ok() {
-            return d;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("the daemon did not start");
+    let url = common::served_url(&mut child);
+    Daemon { url, child, _home: home }
 }
 
 fn post(d: &Daemon, path: &str, body: Value) {

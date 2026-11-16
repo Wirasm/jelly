@@ -1,8 +1,8 @@
 //! What agents read: commands print one line per item, and --json the full data.
 
+mod common;
+
 use serde_json::{json, Value};
-use std::io::Read;
-use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -16,24 +16,10 @@ struct Daemon {
 
 impl Daemon {
     fn start(home: &Path) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let child = Command::new(BIN).args(["serve", "--port", &port.to_string(), "--home"])
+        let mut child = Command::new(BIN).args(["serve", "--port", "0", "--home"])
             .arg(home).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-        let mut daemon = Self { child, url: format!("http://127.0.0.1:{port}") };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if ureq::get(&format!("{}/api/jellies", daemon.url)).call().is_ok() { break; }
-            if let Some(status) = daemon.child.try_wait().unwrap() {
-                let mut errors = String::new();
-                daemon.child.stderr.take().unwrap().read_to_string(&mut errors).unwrap();
-                panic!("daemon exited ({status}): {errors}");
-            }
-            assert!(Instant::now() < deadline, "daemon did not start");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        daemon
+        let url = common::served_url(&mut child);
+        Self { child, url }
     }
 
     fn post(&self, path: &str, body: Value) -> Value {
