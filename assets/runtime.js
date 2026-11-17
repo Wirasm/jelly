@@ -895,6 +895,13 @@
   });
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
+  // Esc that ends comment mode is spent: the view never sees it, so it does not also
+  // close what the person was commenting on. Window capture runs before any view listener.
+  addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !commenting || e.target.closest?.(".jf-pop")) return;
+    e.stopPropagation();
+    setMode(false);
+  }, true);
   addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     // Esc inside a jelly closes the comment mode first, then reaches the jelly page.
