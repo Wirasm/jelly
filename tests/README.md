@@ -163,5 +163,7 @@ playwright-cli -s=escape close
 For the map standalone and full size on the jelly page, it walks a trace to step 3,
 then checks that Escape ending comment mode and Escape cancelling the comment
 editor keep that step, and that the next Escape closes the trace (and, embedded,
-the full view). Both Escape-keeps-step checks fail on the runtime before the fix.
+the full view). The Escape-ends-commenting check fails on the runtime before the fix;
+the editor check passes either way (the map ignores keys in the editor) and guards
+that editor cancellation keeps working.
 Stop the daemon afterward.
