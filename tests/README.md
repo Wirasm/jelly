@@ -138,3 +138,30 @@ Stop the daemon afterward with Ctrl-C. Existing homes retain their stored jelly
 page; use a fresh home to test the newly built bundled view. To explicitly update
 a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 reshape surface --view assets/surface.html`
 from the checkout, merging these changes into any customized view first.
+
+# Comment Escape browser check
+
+Requires Cargo, Chrome and `playwright-cli`. Build from the checkout, start a fresh
+throwaway daemon and make the map recipe jelly the check expects (substitute your
+scratch paths and port):
+
+```sh
+cargo build --locked --target-dir /tmp/jelly-escape-target
+/tmp/jelly-escape-target/debug/jelly serve --port 17893 --home /tmp/jelly-escape-home
+# In another terminal, from the checkout:
+/tmp/jelly-escape-target/debug/jelly --url http://127.0.0.1:17893 new escape:map --from skill/recipes/map
+```
+
+From a scratch directory, run with an absolute path to the script:
+
+```sh
+playwright-cli -s=escape open http://127.0.0.1:17893/
+playwright-cli -s=escape run-code --filename=/path/to/jelly/tests/comment-escape.js
+playwright-cli -s=escape close
+```
+
+For the map standalone and full size on the jelly page, it walks a trace to step 3,
+then checks that Escape ending comment mode and Escape cancelling the comment
+editor keep that step, and that the next Escape closes the trace (and, embedded,
+the full view). Both Escape-keeps-step checks fail on the runtime before the fix.
+Stop the daemon afterward.
