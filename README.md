@@ -28,7 +28,8 @@ prose, and whenever you need them to choose.
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
-jelly ls                                         # list jellies; starts the daemon on first use
+jelly ls                                         # this project's jellies; starts the daemon on first use
+jelly ls --all                                   # every project's jellies, archived ones included
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
