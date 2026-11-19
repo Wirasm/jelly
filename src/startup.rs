@@ -63,17 +63,22 @@ pub(super) fn ensure_with_timeout(
     if matches!(first, Probe::Ready) {
         return Ok(());
     }
-    let should_spawn = matches!(&first, Probe::Waiting { refused: true, .. });
-    let mut child = if should_spawn {
-        Some(spawn_detached(command).map_err(|e| {
-            format!("cannot start daemon at {url}: {e}; run `jelly serve` for details")
-        })?)
-    } else {
-        None
-    };
+    let mut command = Some(command);
+    let mut spawned = false;
+    let mut child = None;
     let mut exit = None;
     let mut last = first;
     loop {
+        // Start the daemon the first time nothing listens. Not only on the first
+        // probe: a port closed a moment ago can reset that one instead of refusing it.
+        if matches!(&last, Probe::Waiting { refused: true, .. }) {
+            if let Some(command) = command.take() {
+                child = Some(spawn_detached(command).map_err(|e| {
+                    format!("cannot start daemon at {url}: {e}; run `jelly serve` for details")
+                })?);
+                spawned = true;
+            }
+        }
         if let Some(candidate) = child.as_mut() {
             if let Ok(Some(status)) = candidate.try_wait() {
                 exit = Some(status);
@@ -81,7 +86,7 @@ pub(super) fn ensure_with_timeout(
             }
         }
         if matches!(last, Probe::Ready) {
-            if should_spawn && !quiet {
+            if spawned && !quiet {
                 eprintln!("jelly: daemon started at {url}");
             }
             return Ok(());

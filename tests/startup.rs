@@ -469,3 +469,26 @@ fn waits_for_bound_server_and_leaves_timed_out_daemon_running() {
     }
     std::fs::remove_file(pid_file).unwrap();
 }
+
+/// A port closed a moment ago can reset the first readiness probe instead of
+/// refusing it (#71). The starter must still start the daemon once a later
+/// probe is refused, not wait out its timeout on a port nobody will bind.
+#[test]
+fn first_probe_reset_still_starts_the_daemon() {
+    let s = Sandbox::new();
+    let p = port();
+    // A listener nobody accepts on: the first probe waits in its backlog and is
+    // reset when the listener closes. Every later probe is refused.
+    let blip = TcpListener::bind(("127.0.0.1", p)).unwrap();
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(blip);
+    });
+    // The server driver records its pid, so the sandbox stops the daemon.
+    let mut serve = s.command(p, 0);
+    serve.env("STARTUP_TEST_MODE", "server");
+    let result = startup::ensure_with_timeout(&url(p), true, serve, Duration::from_secs(5));
+    closer.join().unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    assert!(ready(p));
+}
