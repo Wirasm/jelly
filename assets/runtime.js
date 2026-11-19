@@ -15,7 +15,9 @@
 // Agents answer on the pin (`jelly reply`); the thread shows when you click it.
 //
 // A reshape or an undo that changes the view reloads the page. State lives in
-// the daemon, so nothing is lost.
+// the daemon, so nothing is lost; scroll and the focused field (by id) carry
+// over. On the jelly page the new version loads unseen and replaces the old
+// one once it has drawn.
 (() => {
   const boot = window.__JELLY__;
   // Errors the page hits, so `jelly see` can tell the agent its page is broken.
@@ -83,15 +85,66 @@
     return j;
   }
 
+  // What a reload keeps. Views are arbitrary pages, so only what can be found
+  // again in the new version carries over: the page's scroll, scrolled boxes
+  // with an id, and the focused element by id, with its text and selection.
+  const TEXT = ["text", "search", "url", "email", "tel", "password", "number"];
+  const carry = {
+    take() {
+      const f = document.hasFocus() && document.activeElement?.id ? document.activeElement : null;
+      const typed = f && (f.localName === "textarea" || (f.localName === "input" && TEXT.includes(f.type)));
+      return {
+        x: scrollX, y: scrollY,
+        boxes: [...document.querySelectorAll("[id]")].filter((el) => el.scrollTop || el.scrollLeft).map((el) => [el.id, el.scrollTop, el.scrollLeft]),
+        focus: f && { id: f.id, type: f.type, value: typed ? f.value : null, sel: typed ? [f.selectionStart, f.selectionEnd, f.selectionDirection] : null },
+      };
+    },
+    put(kept) {
+      if (!kept) return;
+      for (const [id, top, left] of kept.boxes) { const el = document.getElementById(id); if (el) { el.scrollTop = top; el.scrollLeft = left; } }
+      const f = kept.focus && document.getElementById(kept.focus.id);
+      if (f) {
+        f.focus({ preventScroll: true });
+        if (kept.focus.value !== null && f.type === kept.focus.type && f.value !== kept.focus.value) f.value = kept.focus.value;
+        try { if (kept.focus.sel) f.setSelectionRange(...kept.focus.sel); } catch {} // number and email fields have no selection
+      }
+      scrollTo(kept.x, kept.y);
+    },
+  };
+  // The jelly page reads and writes this on the frames it swaps.
+  window.__jellyCarry = carry;
+  const carryKey = `jelly:carry:${boot.name}`;
+  let swapAsked = false;
+  function reload() {
+    try {
+      // The jelly page swaps in a fresh copy of this frame once that has drawn.
+      // Asked once: later events must not restart a swap that is loading.
+      if (frameElement?.hasAttribute("data-jelly-swap")) {
+        if (!swapAsked) parent.postMessage({ type: "jelly:reload" }, location.origin);
+        swapAsked = true;
+        return;
+      }
+      // A page of its own carries scroll and focus through the reload. The browser
+      // keeps the old page on screen until the new one paints.
+      if (window === top) sessionStorage.setItem(carryKey, JSON.stringify(carry.take()));
+    } catch {}
+    location.reload();
+  }
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(carryKey));
+    sessionStorage.removeItem(carryKey);
+    if (kept) addEventListener("load", () => carry.put(kept));
+  } catch {}
+
   // One WebSocket per page carries every event; handlers filter by jelly.
   const listeners = new Set();
   let dropped = false;
   (function connect() {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
-    ws.onopen = () => { if (dropped) location.reload(); };
+    ws.onopen = () => { if (dropped) reload(); };
     ws.onmessage = (m) => {
       const ev = JSON.parse(m.data);
-      if (ev.kind === "resync") return location.reload();
+      if (ev.kind === "resync") return reload();
       for (const fn of listeners) {
         try { fn(ev); } catch (e) { console.error(e); }
       }
@@ -105,7 +158,7 @@
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
     }
-    if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { location.reload(); return; }
+    if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { reload(); return; }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads().catch(console.error);
 
@@ -860,7 +913,7 @@
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
           inline: inline(), page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
-          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) location.reload(); }).catch(() => {});
+          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
   function anchorsThat(kind) {
