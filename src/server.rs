@@ -1140,7 +1140,9 @@ async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, 
     let width = width.max(500);
     let profile = std::env::temp_dir().join("jelly-chrome");
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.args(["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
+    // SwiftShader is Chrome's software GPU: WebGL views render without a real GPU.
+    // `--disable-gpu` would leave them with no WebGL context at all.
+    cmd.args(["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(format!("--window-size={width},{height}"))
         .arg("--virtual-time-budget=2500")
