@@ -10,10 +10,10 @@
   /* Berry by day, Night jelly by night: the blob logo's own colours. The --dark-*
      names are the pinned panel and chrome, whichever theme is on. */
   :root {
-    --page: #fff8f3; --card: #ffffff; --ink: #2a1620; --muted: #8a6b78; --line: #f0dfe5; --line-2: #e2c6d1;
-    --bar: #ffffff; --bar-ink: #2a1620; --bar-muted: #9b7b88; --bar-line: #f3e3e8; --chip-on: #2a1620; --chip-on-ink: #ffffff;
+    --page: #fff8f3; --card: #ffffff; --ink: #2a1620; --muted: #7d606c; --line: #f0dfe5; --line-2: #e2c6d1;
+    --bar: #ffffff; --bar-ink: #2a1620; --bar-muted: #80626f; --bar-line: #f3e3e8; --chip-on: #2a1620; --chip-on-ink: #ffffff;
     --dark: #fdf0f4; --dark-2: #ffffff; --dark-3: #f8e6ec; --dark-line: #f0dfe5;
-    --dark-ink: #2a1620; --dark-muted: #8a6b78; --dark-faint: #b39aa5;
+    --dark-ink: #2a1620; --dark-muted: #7d606c; --dark-faint: #80626f;
     --brand: #e8336f; --brand-ink: #ffffff; --brand-soft: #ffe1ec; --brand-soft-ink: #a3134c; --brand-glow: rgba(232,51,111,.16);
     --sun: #ffcf3f; --sun-ink: #5a3d00; --sun-soft: #fff1c7;
     --accent: var(--brand); --accent-ink: var(--brand-soft-ink); --warm: var(--sun);
@@ -26,7 +26,7 @@
     --page: #14111c; --card: #1d1928; --ink: #f1ecf7; --muted: #a79dbb; --line: #2e2740; --line-2: #3d3454;
     --bar: #0e0c14; --bar-ink: #f1ecf7; --bar-muted: #8a809e; --bar-line: #262033; --chip-on: #2c2540; --chip-on-ink: #ffffff;
     --dark: #0e0c14; --dark-2: #1d1928; --dark-3: #2a2438; --dark-line: #2e2740;
-    --dark-ink: #f1ecf7; --dark-muted: #a79dbb; --dark-faint: #6f6585;
+    --dark-ink: #f1ecf7; --dark-muted: #a79dbb; --dark-faint: #9087a3;
     --brand: #ff4f8b; --brand-ink: #ffffff; --brand-soft: #3a1e2e; --brand-soft-ink: #ffb3cf; --brand-glow: rgba(255,79,139,.2);
     --sun: #ffcf3f; --sun-ink: #2a1d00; --sun-soft: #3a3014;
     --panel: rgba(29,25,40,.84); --panel-ink: #ffffff;
@@ -49,7 +49,7 @@
   .projects a { color: var(--bar-muted); text-decoration: none; font-size: 12.5px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
   .projects a:hover { color: var(--bar-ink); background: var(--brand-soft); }
   .projects a.on { color: var(--chip-on-ink); background: var(--chip-on); }
-  .projects a span { opacity: .6; color: inherit; margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .projects a span { color: inherit; margin-left: 5px; font-variant-numeric: tabular-nums; }
   .top .me { margin-left: auto; border: 1px solid var(--bar-line); background: none; color: var(--bar-muted); border-radius: 7px; padding: 3px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
   .top .me:hover { color: var(--bar-ink); background: var(--brand-soft); }
   .top .keys { margin-left: 10px; color: var(--dark-faint); font-size: 11px; display: flex; gap: 10px; }
@@ -150,7 +150,7 @@
   .word { font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
   .entry.arrive { animation: drop .9s cubic-bezier(.3,1.5,.5,1); transform-origin: 50% 0; }
   @keyframes drop { 0% { opacity: 0; transform: translateY(-28px) scale(.96,1.06); } 55% { opacity: 1; transform: translateY(0) scale(1.01,.98); } 80% { transform: scale(.998,1.004); } }
-  .badge-new { font: 700 10.5px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; background: #ff4f8b; color: #fff; animation: jig .8s cubic-bezier(.3,1.6,.5,1) both; }
+  .badge-new { font: 700 10.5px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; background: #d81b60; color: #fff; animation: jig .8s cubic-bezier(.3,1.6,.5,1) both; }
   .badge-upd { font: 700 10.5px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; background: #ffe1ec; color: #b0124f; }
   .entry.unseen .frame { border-color: #ffb3cf; box-shadow: 0 0 0 3px var(--brand-glow), 0 12px 32px -18px var(--shadow); }
 

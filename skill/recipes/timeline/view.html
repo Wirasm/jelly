@@ -7,9 +7,10 @@
 <style>
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
-    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
-    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
-    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --bad-soft: #fde7e4; --idle: #b9b0b5;
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #6e656a; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --accent-ink: var(--accent); --r: var(--rounded-md, 14px);
+    --good: #237a3d; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --bad-soft: #fde7e4; --idle: #b9b0b5;
+    --on: #fff;
     --term: #17141c; --term-ink: #e9e4ee;
     color-scheme: light;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -17,6 +18,7 @@
   @media (prefers-color-scheme: dark) { :root {
     --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
     --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --bad-soft: #3d1f1d; --idle: #5a5266;
+    --accent-ink: var(--color-primary, #ff5c95); --on: #15131a;
     --term: #0d0b11;
     color-scheme: dark;
   } }
@@ -59,7 +61,7 @@
   .mark.k-ok .glyph { fill: var(--ink-2); }
   .mark.person .body { stroke-dasharray: 3 2; stroke: var(--accent); }
   .mark .lbl { fill: var(--ink-2); } .mark.k-bad .lbl { fill: var(--ink); font-weight: 600; }
-  .mark .star { fill: var(--accent); font-size: 12px; text-anchor: middle; }
+  .mark .star { fill: var(--accent-ink); font-size: 12px; text-anchor: middle; }
   .mark .ring { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0; }
   .mark.sel .ring, .mark:focus-visible .ring { opacity: 1; }
   .mark.sel .lbl { fill: var(--ink); font-weight: 700; }
@@ -85,8 +87,8 @@
   .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); }
   .pane.after { border-color: var(--ink-2); }
   .hero:not(.one) .pane.after { border-color: var(--good); }
-  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; background: var(--idle); color: #fff; }
-  .hero.one .pane > b { display: none; } .hero:not(.one) .pane.after > b { background: var(--good); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; background: var(--idle); color: var(--ink); }
+  .hero.one .pane > b { display: none; } .hero:not(.one) .pane.after > b { background: var(--good); color: var(--on); }
   .pane pre { margin: 0; padding: 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, Menlo, monospace; max-height: 340px; overflow-y: auto; }
   .pane pre .p { opacity: .55; }
   .pane iframe { display: block; width: 100%; height: 260px; border: 0; background: #fff; } .pane img { display: block; width: 100%; }
@@ -94,7 +96,7 @@
   .links { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; align-items: center; font-size: 12.5px; color: var(--muted); }
   .act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
   .act button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
-  .act button.on { border-color: var(--accent); color: var(--accent); }
+  .act button.on { border-color: var(--accent); color: var(--accent-ink); }
   .act .undo { border: 0; background: none; color: var(--muted); font-weight: 500; padding: 8px 4px; text-decoration: underline; }
 
   /* ---- the explanations ---- */
@@ -107,16 +109,16 @@
   .conf { height: 8px; border-radius: 4px; background: var(--soft); margin-top: 9px; overflow: hidden; } .conf i { display: block; height: 100%; background: var(--ink-2); border-radius: 4px; transition: width .5s; }
   .hyp .meta { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
   .hyp .meta .for { color: var(--good); font-weight: 600; } .hyp .meta .against { color: var(--bad); font-weight: 600; }
-  .badge { font: 700 11.5px -apple-system, sans-serif; padding: 2px 9px; border-radius: 99px; color: #fff; background: var(--idle); }
-  .badge.confirmed { background: var(--good); } .badge.ruled_out { background: var(--bad); } .badge.next { background: var(--warn); color: #1f1a1d; }
+  .badge { font: 700 11.5px -apple-system, sans-serif; padding: 2px 9px; border-radius: 99px; color: var(--ink); background: var(--idle); }
+  .badge.confirmed, .badge.ruled_out { color: var(--on); } .badge.confirmed { background: var(--good); } .badge.ruled_out { background: var(--bad); } .badge.next { background: var(--warn); color: #1f1a1d; }
   .hyp .q { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 12px -apple-system, sans-serif; display: inline-grid; place-items: center; }
   .hyp .more { padding: 0 14px 14px; }
   .hyp .more p { margin: 0 0 8px; color: var(--ink-2); font-size: 14px; }
   .hyp .more p b { display: block; font: 600 10.5px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   .hyp .said { padding: 7px 11px; border-radius: 12px 12px 12px 2px; background: var(--warn-soft); margin-bottom: 8px; font-size: 14px; }
   .hyp .act { margin-top: 10px; gap: 6px; } .hyp .act button { padding: 7px 11px; font-size: 13.5px; }
-  .hyp .act button.confirmed.on { background: var(--good); border-color: var(--good); color: #fff; }
-  .hyp .act button.ruled_out.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .hyp .act button.confirmed.on { background: var(--good); border-color: var(--good); color: var(--on); }
+  .hyp .act button.ruled_out.on { background: var(--bad); border-color: var(--bad); color: var(--on); }
   .hyp .act button.next.on { background: var(--warn); border-color: var(--warn); color: #1f1a1d; }
   .compose { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
   textarea { flex: 1; width: 100%; min-height: 44px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 10px; resize: vertical; }
