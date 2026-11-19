@@ -8,8 +8,10 @@ description = "Jellyware: small live apps that agents and people shape while the
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
 getrandom = "0.3"
 lol_html = "2"
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 rquickjs = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
@@ -17,6 +19,7 @@ similar = "2"
 sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "fs", "process"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-tungstenite = "0.26"
 ureq = { version = "2", features = ["json"] }
 url = "2"
 

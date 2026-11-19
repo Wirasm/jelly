@@ -150,6 +150,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
 
 fn router(app: Shared) -> Router {
     Router::new()
+        .route("/api/wrap", post(wrap))
         // The jelly page: every project at /, one project at /p/<project>.
         .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into()), Query(ViewQ::default())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
@@ -614,11 +615,18 @@ struct ViewQ {
 /// Serves a jelly's view with the runtime injected, so `window.jelly` exists
 /// before any of the view's own scripts run.
 async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ViewQ>) -> Result<Html<String>, ApiError> {
+    let view = app.store.lock().expect("store lock").get(&name)?.view.clone();
+    Ok(Html(inject_head(&view, &boot_script(&app, &name, q.trial, "")?)))
+}
+
+/// The scripts that turn a page into a jelly: its boot data, then the runtime.
+/// `base` is where jelly's routes live on the page's origin ("" on the daemon).
+fn boot_script(app: &App, name: &str, trial: Option<String>, base: &str) -> Result<String, ApiError> {
     let store = app.store.lock().expect("store lock");
-    let j = store.get(&name)?;
-    let owner = app.snapshot_owner(&name, j.view_rev)?;
-    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
-    if let Some(token) = q.trial {
+    let j = store.get(name)?;
+    let owner = app.snapshot_owner(name, j.view_rev)?;
+    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working, "base": base});
+    if let Some(token) = trial {
         if let Some(t) = app.trials.lock().expect("trials lock").get(&token).filter(|t| t.name == j.name) {
             boot["state"] = t.state.clone();
             boot["version"] = json!(t.version);
@@ -627,8 +635,7 @@ async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
     }
     // `</` cannot appear inside the script, or state text could close the tag.
     let boot = boot.to_string().replace("</", "<\\/");
-    let inject = format!("<script>window.__JELLY__={boot};</script><script src=\"/runtime.js\"></script>");
-    Ok(Html(inject_head(&j.view, &inject)))
+    Ok(format!("<script>window.__JELLY__={boot};</script><script src=\"{base}/runtime.js\"></script>"))
 }
 
 /// Puts `inject` first thing in `<head>`, so it runs before the view's scripts.
@@ -1166,7 +1173,10 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
     let trial = trial.map(|t| format!("&try={t}")).unwrap_or_default();
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
-    let url = if width < 500 {
+    let wrapped = wraps().lock().expect("wraps lock").get(name).copied();
+    let url = if let Some(p) = wrapped {
+        format!("http://localhost:{p}/?agent=1{trial}")
+    } else if width < 500 {
         format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}{trial}")
     } else {
         format!("http://127.0.0.1:{port}/j/{name}/?agent=1{trial}")
@@ -2900,4 +2910,153 @@ mod tests {
         assert!(header(&out).ends_with("last change just now"), "the agent's change was trimmed, so no author: {out}");
         assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
     }
+}
+
+// ---- wrap: jelly on top of a running app (spike) ------------------------------
+
+/// Wrapped jellies and the port each one's proxy listens on.
+fn wraps() -> &'static Mutex<std::collections::HashMap<String, u16>> {
+    static WRAPS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, u16>>> = std::sync::OnceLock::new();
+    WRAPS.get_or_init(Default::default)
+}
+
+#[derive(Deserialize)]
+struct WrapReq {
+    name: String,
+    upstream: String,
+    #[serde(default)]
+    port: u16,
+    by: Option<String>,
+}
+
+struct Wrap {
+    app: Shared,
+    name: String,
+    upstream: String,
+    port: u16,
+    client: reqwest::Client,
+}
+
+/// Serves a running app on its own port with jelly on top: jelly's routes under
+/// `/__jelly`, everything else passed through to the app, and HTML pages given
+/// the jelly runtime so comments, questions and `see` work on the real thing.
+async fn wrap(State(app): State<Shared>, Json(r): Json<WrapReq>) -> Result<Json<Value>, ApiError> {
+    let upstream = r.upstream.trim_end_matches('/').to_string();
+    let by = by(r.by)?;
+    if app.store.lock().expect("store lock").get(&r.name).is_err() {
+        let view = format!("<!doctype html><p>This jelly wraps {upstream}.</p>");
+        let _ = app.change(|s| s.create(&r.name, view, "const verbs = {};".into(), json!({}), &by, false, &format!("Wrapped app at {upstream}"), ""))?;
+    }
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", r.port)).await.map_err(|e| ApiError::Internal(format!("could not listen on {}: {e}", r.port)))?;
+    let port = listener.local_addr().map_err(|e| ApiError::Internal(e.to_string()))?.port();
+    wraps().lock().expect("wraps lock").insert(r.name.clone(), port);
+    let w = Arc::new(Wrap { app: app.clone(), name: r.name.clone(), upstream, port, client: reqwest::Client::new() });
+    let routes = Router::new().nest("/__jelly", router(app.clone())).fallback(move |req: axum::extract::Request| proxy(w.clone(), req));
+    tokio::spawn(async move { let _ = axum::serve(listener, routes).await; });
+    Ok(Json(json!({"name": r.name, "url": format!("http://localhost:{port}/")})))
+}
+
+async fn proxy(w: Arc<Wrap>, req: axum::extract::Request) -> Response {
+    use axum::extract::FromRequestParts;
+    let (mut parts, body) = req.into_parts();
+    let pq = parts.uri.path_and_query().map_or("/".to_string(), |p| p.as_str().to_string());
+    // Dev servers reload the page over a WebSocket (Vite's `vite-hmr`): pass it through.
+    if parts.headers.get(header::UPGRADE).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket")) {
+        let protocols: Vec<String> = parts.headers.get(header::SEC_WEBSOCKET_PROTOCOL).and_then(|v| v.to_str().ok())
+            .map(|v| v.split(',').map(|p| p.trim().to_string()).collect()).unwrap_or_default();
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
+            Ok(ws) => ws,
+            Err(e) => return e.into_response(),
+        };
+        let target = format!("{}{pq}", w.upstream.replacen("http", "ws", 1));
+        return ws.protocols(protocols.clone()).on_upgrade(move |socket| pipe_ws(socket, target, protocols));
+    }
+    let bytes = match axum::body::to_bytes(body, 64 << 20).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let mut rb = w.client.request(parts.method.clone(), format!("{}{pq}", w.upstream));
+    for (k, v) in &parts.headers {
+        if [header::HOST, header::ACCEPT_ENCODING, header::CONTENT_LENGTH, header::CONNECTION].contains(k) { continue; }
+        rb = rb.header(k, v);
+    }
+    // Uncompressed, so HTML can be given the runtime on its way through.
+    let resp = match rb.header(header::ACCEPT_ENCODING, "identity").body(bytes).send().await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("jelly could not reach {}: {e}", w.upstream)).into_response(),
+    };
+    let status = resp.status();
+    let mut headers = resp.headers().clone();
+    // The app's CSP would block the injected runtime.
+    for h in [header::CONTENT_LENGTH, header::TRANSFER_ENCODING, header::CONNECTION, header::CONTENT_SECURITY_POLICY] { headers.remove(h); }
+    if let Some(rest) = headers.get(header::LOCATION).and_then(|v| v.to_str().ok()).and_then(|l| l.strip_prefix(&w.upstream)).map(str::to_string) {
+        if let Ok(v) = format!("http://localhost:{}{rest}", w.port).parse() { headers.insert(header::LOCATION, v); }
+    }
+    let html = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("text/html"));
+    let mut out = if html {
+        let text = resp.text().await.unwrap_or_default();
+        let page = match boot_script(&w.app, &w.name, None, "/__jelly") {
+            // Last in <body>, so frameworks that hydrate <head> (SvelteKit) find it unchanged.
+            // The runtime starts after the app hydrates: cards placed inside a framework's
+            // DOM before that make it throw the server-rendered page away.
+            // The wrapped jelly's own view is an overlay the agent writes: variants,
+            // highlights, a panel. It runs once the runtime is there.
+            Ok(inject) => match (inject.replacen("<script src=\"/__jelly/runtime.js\"></script>", &format!(
+                "<script>addEventListener(\"load\",()=>setTimeout(()=>document.body.append(Object.assign(document.createElement(\"script\"),{{src:\"/__jelly/runtime.js\",onload:()=>document.body.append(document.createRange().createContextualFragment(window.__JELLY_OVERLAY__||\"\"))}})),300))</script><script>window.__JELLY_OVERLAY__={};</script>",
+                serde_json::to_string(&w.app.store.lock().expect("store lock").get(&w.name).map(|j| if j.view.contains("This jelly wraps") { String::new() } else { j.view.clone() }).unwrap_or_default()).unwrap_or_default().replace("</", "<\\/")), 1), text.to_ascii_lowercase().rfind("</body>")) {
+                (inject, Some(i)) => format!("{}{inject}{}", &text[..i], &text[i..]),
+                (inject, None) => format!("{text}{inject}"),
+            },
+            #[allow(unreachable_patterns)]
+            Ok(inject) => match text.to_ascii_lowercase().rfind("</body>") {
+                Some(i) => format!("{}{inject}{}", &text[..i], &text[i..]),
+                None => format!("{text}{inject}"),
+            },
+            Err(_) => text,
+        };
+        Response::new(axum::body::Body::from(page))
+    } else {
+        Response::new(axum::body::Body::from_stream(resp.bytes_stream()))
+    };
+    *out.status_mut() = status;
+    *out.headers_mut() = headers;
+    out
+}
+
+async fn pipe_ws(socket: WebSocket, target: String, protocols: Vec<String>) {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as Up};
+    let Ok(mut req) = target.into_client_request() else { return };
+    if let Ok(v) = protocols.join(", ").parse() {
+        if !protocols.is_empty() { req.headers_mut().insert(header::SEC_WEBSOCKET_PROTOCOL, v); }
+    }
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async(req).await else { return };
+    let (mut up_tx, mut up_rx) = futures_util::StreamExt::split(upstream);
+    let (mut down_tx, mut down_rx) = futures_util::StreamExt::split(socket);
+    let to_app = async {
+        while let Some(Ok(m)) = futures_util::StreamExt::next(&mut down_rx).await {
+            let m = match m {
+                Message::Text(t) => Up::Text(t.as_str().into()),
+                Message::Binary(b) => Up::Binary(b),
+                Message::Ping(p) => Up::Ping(p),
+                Message::Pong(p) => Up::Pong(p),
+                Message::Close(_) => break,
+            };
+            if up_tx.send(m).await.is_err() { break; }
+        }
+    };
+    let to_page = async {
+        while let Some(Ok(m)) = futures_util::StreamExt::next(&mut up_rx).await {
+            let m = match m {
+                Up::Text(t) => Message::Text(t.as_str().into()),
+                Up::Binary(b) => Message::Binary(b),
+                Up::Ping(p) => Message::Ping(p),
+                Up::Pong(p) => Message::Pong(p),
+                Up::Close(_) => break,
+                Up::Frame(_) => continue,
+            };
+            if down_tx.send(m).await.is_err() { break; }
+        }
+    };
+    tokio::select! { _ = to_app => {}, _ = to_page => {} }
 }

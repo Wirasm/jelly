@@ -250,6 +250,16 @@ enum Cmd {
         #[arg(skip)]
         steps: Vec<Value>,
     },
+    /// Put jelly on top of a running app (spike): comments, questions and `see`
+    /// on the real thing. Prints the address to open.
+    Wrap {
+        name: String,
+        /// The app, e.g. http://localhost:5173 (not `url`: that is the daemon's address).
+        app: String,
+        /// Port for the wrapped app (default: any free one).
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
     /// Write a jelly's view, verbs, state and assets into a folder to edit.
@@ -569,6 +579,12 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             for line in added {
                 output(format_args!("{line}\n"))?;
             }
+            Ok(())
+        }
+        Cmd::Wrap { name, app: url, port } => {
+            let name = if name.contains(':') { name } else { match project().as_str() { "" => name, p => format!("{p}:{name}") } };
+            let v = send("POST", &format!("{}/api/wrap", cli.url), json!({"name": name, "upstream": url, "port": port, "by": by}))?;
+            output(format_args!("{} wraps {url} at {}\n", v["name"].as_str().unwrap_or(""), v["url"].as_str().unwrap_or("")))?;
             Ok(())
         }
         Cmd::Recipes { name: None, .. } => {

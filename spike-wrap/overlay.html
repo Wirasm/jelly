@@ -1,0 +1,22 @@
+<style>
+#jv{position:fixed;left:16px;bottom:16px;z-index:2147483000;background:#1f1830;color:#fff;font:13px system-ui;border-radius:12px;padding:10px 12px;box-shadow:0 8px 30px #0005;width:260px}
+#jv b{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#f9a8d4;margin-bottom:6px}
+#jv button{display:block;width:100%;text-align:left;margin:4px 0;padding:7px 9px;border-radius:8px;border:1px solid #ffffff22;background:transparent;color:#fff;font:inherit;cursor:pointer}
+#jv button.on{background:#ec4899;border-color:#ec4899}
+</style>
+<div id="jv"><b>Hero headline · live variants</b><div id="jv-list"></div></div>
+<script>
+// Agent-written overlay: previews headline variants on the real page. Nothing in the app's code changes.
+(() => {
+  const hero = () => document.querySelector("#hero-title");
+  let original;
+  jelly.onState(s => {
+    const h = hero(); if (!h) return;
+    if (original === undefined) original = h.innerHTML;
+    const v = s.variants.find(v => v.id === s.pick);
+    h.innerHTML = !v || v.id === "keep" ? original : v.text;
+    document.getElementById("jv-list").innerHTML = s.variants.map(v => `<button data-v="${v.id}" class="${v.id === s.pick ? "on" : ""}">${v.text}</button>`).join("");
+  });
+  document.getElementById("jv-list").onclick = e => { const b = e.target.closest("button[data-v]"); if (b) jelly.call("pick", { id: b.dataset.v }); };
+})();
+</script>

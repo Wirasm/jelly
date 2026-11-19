@@ -48,7 +48,9 @@
   let working = boot.working || null;
   const subs = [];
   const enc = encodeURIComponent;
-  const api = `/api/jellies/${enc(boot.name)}`;
+  // A wrapped app owns "/", so jelly lives under a prefix there (`/__jelly`).
+  const base = boot.base || "";
+  const api = `${base}/api/jellies/${enc(boot.name)}`;
   // Names are unique per project: a short name means a jelly in this one.
   const project = boot.name.includes(":") ? boot.name.split(":")[0] : "";
   const full = (name) => (name.includes(":") || name === "surface" || !project ? name : `${project}:${name}`);
@@ -155,7 +157,7 @@
   const listeners = new Set();
   let dropped = false;
   (function connect() {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/api/ws`);
     ws.onopen = () => { if (dropped) reload(); };
     ws.onmessage = (m) => {
       const ev = JSON.parse(m.data);
@@ -206,7 +208,7 @@
       return ev;
     },
     async read(name) {
-      const r = await fetch(`/api/jellies/${enc(full(name))}/state`);
+      const r = await fetch(`${base}/api/jellies/${enc(full(name))}/state`);
       if (!r.ok) throw new Error((await r.json()).error);
       return r.json();
     },
@@ -223,7 +225,7 @@
     focus(name) {
       name = full(name);
       if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
-      else location.href = `/j/${enc(name)}/`;
+      else location.href = `${base}/j/${enc(name)}/`;
     },
     show(name) { return this.focus(name); }, // old name
     resolve: (id) => post(`${api}/resolve`, { id }),
@@ -238,7 +240,7 @@
     onAttend(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
     /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
     answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
-    asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
+    asset: (file) => `${base}/j/${enc(boot.name)}/assets/${enc(file)}`,
     reply: (id, text) => post(`${api}/reply`, { id, text }),
   };
 
@@ -888,6 +890,7 @@
   }
 
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
+  // `display: contents` boxes (SvelteKit's root) have no size of their own; their children do.
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   const ACTIVE = "button, a, input, textarea, select, [role=button], img, canvas, svg, video, iframe";
@@ -899,7 +902,7 @@
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
     (function walk(el, depth) {
       for (const c of el.children) {
-        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || !shown(c)) continue;
+        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
         else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
@@ -942,7 +945,8 @@
   function anchorsThat(kind) {
     return attention.filter((a) => isOpen(a) && typeof a.anchor?.selector === "string" && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
   }
-  addEventListener("load", postSnapshot);
+  // A wrapped app loads the runtime after its own load event.
+  if (document.readyState === "complete") postSnapshot(); else addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
 
   // ---- jelly try: do the steps, then report what the page shows ----
@@ -950,7 +954,7 @@
   async function trialCall(verb, args) {
     trialCalls++;
     try {
-      const r = await fetch(`/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args, by: me() }) });
+      const r = await fetch(`${base}/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args, by: me() }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText);
       return j;
@@ -999,7 +1003,7 @@
       do { await pause(30); } while (trialCalls);
     }
     await pause(30);
-    await fetch(`/api/tries/${trial.token}`, { method: "POST", headers: { "content-type": "application/json" },
+    await fetch(`${base}/api/tries/${trial.token}`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, errors, failed }) }).catch(() => {});
   }
   if (trial) addEventListener("load", () => setTimeout(runTrial, 300));
@@ -1031,7 +1035,9 @@
     return refresh;
   }
 
-  addEventListener("DOMContentLoaded", () => {
+  // A wrapped app loads the runtime after the page is ready, so run setup now then.
+  const onReady = (fn) => (["interactive", "complete"].includes(document.readyState) ? fn() : addEventListener("DOMContentLoaded", fn));
+  onReady(() => {
     const style = document.createElement("style");
     style.textContent = css;
     document.head.appendChild(style);
