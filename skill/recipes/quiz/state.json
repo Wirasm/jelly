@@ -1,0 +1,7 @@
+{"title":"Nordic table quiz","phase":"lobby","round":-1,"ends_at_ms":0,
+ "rounds":[
+  {"q":"What is sild?","options":["Herring","Cheese","Rye bread","Dill"],"correct":0,"seconds":15},
+  {"q":"Surströmming is herring that has been…","options":["Smoked","Fermented","Dried","Frozen"],"correct":1,"seconds":15},
+  {"q":"Smørrebrød literally means…","options":["Sandwich cake","Butter and bread","Little table","Rye loaf"],"correct":1,"seconds":15}
+ ],
+ "players":{},"votes":[]}
