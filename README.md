@@ -26,6 +26,7 @@ prose, and whenever you need them to choose.
   waiting on them, what they did lately, and problems the browser measured, such as
   text unreadable in dark mode. `--png` when layout matters. `jelly look NAME`
   does desktop and phone width in one call, with one side-by-side screenshot.
+  `jelly see NAME --compare v12` shows what a change did since version 12.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write

@@ -249,6 +249,14 @@ pub struct Reply {
     pub at_ms: u64,
 }
 
+/// A jelly's view and state at an earlier version, for `jelly see --compare`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Past {
+    pub view: String,
+    pub state: Value,
+    pub version: u64,
+}
+
 /// What it takes to go back one change. `state` turns the pretty-printed
 /// state after the change back into the one before; `view` and `verbs` hold
 /// what a reshape replaced, and are absent when it kept them.
@@ -264,6 +272,10 @@ struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verbs: Option<String>,
     view_rev: u64,
+    /// The jelly's version before the change, which this step goes back to.
+    /// 0 in steps saved before versions were kept.
+    #[serde(default)]
+    version: u64,
 }
 
 /// Replace `remove` lines of the pretty-printed state, starting at line `at`, with `lines`.
@@ -275,8 +287,9 @@ struct Hunk {
 }
 
 impl Step {
-    fn for_rev(view_rev: u64) -> Step {
-        Step { view_rev, ..Step::default() }
+    /// A step back to the jelly as it is now, before the change being made.
+    fn before(j: &Jelly) -> Step {
+        Step { view_rev: j.view_rev, version: j.version, ..Step::default() }
     }
 
     fn budget_bytes(&self) -> usize {
@@ -293,6 +306,9 @@ impl Step {
 struct Entry {
     jelly: Jelly,
     steps: Vec<Step>,
+    /// The oldest version whose view, verbs and state `steps` can rebuild. Undo
+    /// and dropped steps move it up: an undone change cannot be rebuilt.
+    history_from: u64,
 }
 
 /// Reads jellies saved when undo kept a full copy of view, verbs and state per change.
@@ -303,6 +319,9 @@ struct EntryOnDisk {
     undo: Vec<Snapshot>,
     #[serde(default)]
     steps: Vec<Step>,
+    /// Missing in jellies saved before versions were kept: only the current
+    /// version can be rebuilt.
+    history_from: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -315,11 +334,12 @@ struct Snapshot {
 
 impl From<EntryOnDisk> for Entry {
     fn from(d: EntryOnDisk) -> Self {
+        let history_from = d.history_from.unwrap_or(d.jelly.version);
         if d.undo.is_empty() {
-            return Entry { jelly: d.jelly, steps: d.steps };
+            return Entry { jelly: d.jelly, steps: d.steps, history_from };
         }
         // Oldest first: each snapshot is what the change after it replaced.
-        let mut entry = Entry { jelly: d.jelly, steps: Vec::new() };
+        let mut entry = Entry { jelly: d.jelly, steps: Vec::new(), history_from };
         for (i, snap) in d.undo.iter().enumerate() {
             let (view, verbs, state) = match d.undo.get(i + 1) {
                 Some(next) => (&next.view, &next.verbs, &next.state),
@@ -331,6 +351,7 @@ impl From<EntryOnDisk> for Entry {
                 view: (snap.view != *view).then(|| snap.view.clone()),
                 verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
                 view_rev: snap.view_rev,
+                version: 0,
             };
             entry.steps.push(step);
         }
@@ -685,7 +706,7 @@ impl Store {
             working: None,
             notes: Vec::new(),
         };
-        let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new() });
+        let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new(), history_from: 1 });
         self.commit(name, EventKind::New, by, None, None, vec![String::new()], previous_entry)
     }
 
@@ -700,7 +721,7 @@ impl Store {
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::before(&entry.jelly) };
         entry.jelly.state = next;
         push_step(entry, step);
         self.source = source;
@@ -725,7 +746,7 @@ impl Store {
         if view.is_some() || verbs_src.is_some() {
             let j = &mut entry.jelly;
             let replaced = |old: &mut String, new: Option<String>| new.filter(|n| n != old).map(|n| std::mem::replace(old, n));
-            let step = Step { view: replaced(&mut j.view, view), verbs: replaced(&mut j.verbs, verbs_src), ..Step::for_rev(j.view_rev) };
+            let step = Step { view: replaced(&mut j.view, view), verbs: replaced(&mut j.verbs, verbs_src), ..Step::before(j) };
             j.view_rev += 1;
             push_step(entry, step);
         }
@@ -742,7 +763,7 @@ impl Store {
         set_at(&mut next, pointer, value).map_err(Error::Invalid)?;
         let mut changed = Vec::new();
         diff(&entry.jelly.state, &next, &mut String::new(), &mut changed);
-        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::for_rev(entry.jelly.view_rev) };
+        let step = Step { state: state_step(&next, &entry.jelly.state), ..Step::before(&entry.jelly) };
         entry.jelly.state = next;
         push_step(entry, step);
         self.commit(name, EventKind::Set, by, None, Some(serde_json::json!({"pointer": pointer})), changed, previous_entry)
@@ -768,7 +789,30 @@ impl Store {
             // version must notice and reload.
             entry.jelly.view_rev += 1;
         }
+        // The undone change is gone, so versions from before this undo cannot
+        // be told apart from it; history starts at the version the undo makes.
+        entry.history_from = entry.jelly.version + 1;
         self.commit(name, EventKind::Undo, by, None, None, changed, previous_entry)
+    }
+
+    /// The view and state as they were at `version`, rebuilt from the undo
+    /// steps. Only versions since the oldest kept step, and since the last undo,
+    /// can be rebuilt.
+    pub fn at_version(&self, name: &str, version: u64) -> Result<Past, Error> {
+        let entry = self.jellies.get(name).ok_or_else(|| Error::NotFound(name.into()))?;
+        let j = &entry.jelly;
+        if version > j.version || version == 0 {
+            return Err(Error::Invalid(format!("{name} is at v{}; there is no v{version}", j.version)));
+        }
+        if version < entry.history_from {
+            return Err(Error::Invalid(format!("v{version} of {name} is older than its kept history, which starts at v{}; to compare with a version later, keep it with jelly see {name} --save NAME", entry.history_from)));
+        }
+        let mut past = Past { view: j.view.clone(), state: j.state.clone(), version };
+        for step in entry.steps.iter().rev().take_while(|s| s.version >= version) {
+            past.state = restore(&past.state, &step.state).map_err(|e| Error::Invalid(format!("the undo history of {name} is damaged: {e}")))?;
+            if let Some(v) = &step.view { past.view = v.clone(); }
+        }
+        Ok(past)
     }
 
     /// Pins a comment to part of the view.
@@ -1349,6 +1393,9 @@ fn push_step(entry: &mut Entry, step: Step) {
     while drop + 1 < steps.len() && total > budget {
         total -= steps[drop].budget_bytes();
         drop += 1;
+    }
+    if drop > 0 {
+        entry.history_from = entry.history_from.max(steps[drop - 1].version + 1);
     }
     steps.drain(..drop);
 }
@@ -2120,6 +2167,52 @@ mod tests {
             &mut out,
         );
         assert_eq!(out, vec!["/a/x", "/gone", "/k~1v", "/list", "/new"]);
+    }
+
+    /// `see --compare vN` renders the jelly as it was. Versions that changed
+    /// nothing (a comment) show what came before them; an undone change, history
+    /// older than the kept steps and jellies saved before steps had versions
+    /// cannot be rebuilt, and say so.
+    #[test]
+    fn earlier_versions_rebuild_from_undo_steps() {
+        let (dir, mut s) = store();
+        s.create("j", "<p>one</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.call("j", "label", json!({"id": "a", "value": "x"}), "agent").unwrap(); // v2
+        s.comment("j", json!({"selector": "p"}), "hm", "person").unwrap(); // v3
+        s.reshape("j", Some("<p>two</p>".into()), None, None, "agent").unwrap(); // v4
+        let at = |s: &Store, v| s.at_version("j", v).map(|p| (p.view, p.state));
+        assert_eq!(at(&s, 1).unwrap(), ("<p>one</p>".into(), json!({"labels": {}})));
+        assert_eq!(at(&s, 2).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
+        assert_eq!(at(&s, 3).unwrap(), at(&s, 2).unwrap());
+        assert_eq!(at(&s, 4).unwrap(), ("<p>two</p>".into(), json!({"labels": {"a": "x"}})));
+        assert!(at(&s, 5).is_err());
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(at(&s, 1).unwrap().1, json!({"labels": {}}), "history survives a restart");
+        s.undo("j", "agent").unwrap(); // v5, the same as v3
+        assert_eq!(at(&s, 5).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
+        assert!(at(&s, 4).unwrap_err().to_string().contains("starts at v5"), "v4 was undone");
+        assert!(at(&s, 1).is_err(), "before an undo, versions are ambiguous");
+
+        // Saved before steps had versions: only the current version.
+        let path = s.path("j");
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved.as_object_mut().unwrap().remove("history_from");
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        drop(s);
+        let s = Store::open(dir.path()).unwrap();
+        assert!(at(&s, 5).is_ok() && at(&s, 2).is_err());
+    }
+
+    #[test]
+    fn dropped_undo_steps_end_the_rebuildable_history() {
+        let (_d, mut s) = store();
+        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        for i in 0..=UNDO_DEPTH {
+            s.call("j", "label", json!({"id": "n", "value": i}), "agent").unwrap();
+        }
+        assert!(s.at_version("j", 1).is_err());
+        assert_eq!(s.at_version("j", 2).unwrap().state, json!({"labels": {"n": 0}}));
     }
 
     #[test]

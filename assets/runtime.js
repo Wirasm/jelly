@@ -174,8 +174,9 @@
   })();
 
   listeners.add((ev) => {
-    // A trial shows its own copy of the state; real changes meanwhile do not reach it.
-    if (ev.jelly !== boot.name || trial) return;
+    // A trial shows its own copy of the state, and `see --compare` an earlier
+    // version; real changes meanwhile do not reach either.
+    if (ev.jelly !== boot.name || trial || boot.past) return;
     if (ev.kind === "remove") {
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
