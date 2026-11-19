@@ -170,6 +170,7 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
 
 ```bash
 jelly ls                         # this project's jellies; --all for every project
+jelly serve --temp               # a throwaway daemon (free port, fresh home); use its URL as JELLY_URL
 jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into a folder
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png

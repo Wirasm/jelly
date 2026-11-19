@@ -36,11 +36,16 @@ struct Cli {
 enum Cmd {
     /// Run the daemon and the jelly page.
     Serve {
-        #[arg(long, default_value_t = 7878)]
-        port: u16,
+        /// Default: 7878, or a free port with --temp.
+        #[arg(long)]
+        port: Option<u16>,
         /// Where jellies are kept. Defaults to $JELLY_HOME or ~/.jelly.
         #[arg(long)]
         home: Option<PathBuf>,
+        /// A throwaway daemon: a free port and a fresh home in the temp dir, removed
+        /// when it stops (Ctrl-C or SIGTERM). The URL is on the first line.
+        #[arg(long, conflicts_with = "home")]
+        temp: bool,
     },
     /// List this project's jellies, one per line (all projects outside a repo).
     Ls {
@@ -494,11 +499,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             .filter_map(|j| j["name"].as_str())))
     };
     match cli.cmd {
-        Cmd::Serve { port, home } => {
-            let home = home
-                .or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
-                .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
-                .ok_or("could not find your home directory: set --home or JELLY_HOME")?;
+        Cmd::Serve { port, home, temp } => {
+            let port = port.unwrap_or(if temp { 0 } else { 7878 });
+            let home = if temp {
+                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+                std::env::temp_dir().join(format!("jelly-temp-{}-{nanos}", std::process::id()))
+            } else {
+                home.or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
+                    .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
+                    .ok_or("could not find your home directory: set --home or JELLY_HOME")?
+            };
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
             rt.block_on(async {
                 // Reserve the endpoint before store initialization can write anything.
@@ -507,7 +517,17 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 // loses the other's changes. The lock lives as long as this daemon.
                 let _lock = lock_home(&home, listener.local_addr().map_err(|e| e.to_string())?.port())?;
                 let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-                server::serve(store, listener).await.map_err(|e| e.to_string().into())
+                let note = temp.then(|| {
+                    // A clean stop removes the home; a crash leaves it as evidence.
+                    let dir = home.clone();
+                    tokio::spawn(async move {
+                        stopped().await;
+                        let _ = std::fs::remove_dir_all(&dir);
+                        std::process::exit(0);
+                    });
+                    format!("jelly: temporary home {}; removed when this stops", home.display())
+                });
+                server::serve(store, listener, note).await.map_err(|e| e.to_string().into())
             })
         }
         Cmd::Ls { all, json } => {
@@ -1236,6 +1256,20 @@ fn read(p: &PathBuf) -> Result<String, String> {
 }
 
 /// Adds files beside a jelly; `jelly` is its API address.
+/// Resolves on Ctrl-C, or SIGTERM on Unix.
+async fn stopped() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => { tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} } }
+            Err(_) => { let _ = tokio::signal::ctrl_c().await; }
+        }
+    }
+    #[cfg(not(unix))]
+    { let _ = tokio::signal::ctrl_c().await; }
+}
+
 /// Holds `<home>/daemon.lock` exclusively, or says which daemon already does.
 fn lock_home(home: &Path, port: u16) -> Result<std::fs::File, String> {
     std::fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;

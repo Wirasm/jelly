@@ -119,7 +119,8 @@ impl App {
     }
 }
 
-pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::Result<()> {
+/// `note` is printed after the `jelly on URL` line, which stays first for scripts.
+pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option<String>) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
         store
@@ -145,6 +146,9 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
 
     let port = listener.local_addr()?.port();
     let _ = writeln!(std::io::stderr().lock(), "jelly on http://127.0.0.1:{port}");
+    if let Some(note) = note {
+        let _ = writeln!(std::io::stderr().lock(), "{note}");
+    }
     axum::serve(listener, router(app)).await
 }
 
