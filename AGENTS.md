@@ -34,6 +34,6 @@ cargo test
 cargo clippy
 ```
 
-For a manual run, use a throwaway home and port so your real jellies are untouched:
-`jelly serve --port 7879 --home /tmp/jelly-test` (PowerShell:
-`jelly serve --port 7879 --home $env:TEMP\jelly-test`), then pass `--url http://127.0.0.1:7879`.
+For a manual run, use a throwaway daemon so your real jellies are untouched:
+`jelly serve --temp` picks a free port and a fresh home, prints `jelly on URL` first,
+and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.

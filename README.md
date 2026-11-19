@@ -73,9 +73,9 @@ service or extra install step is needed.
 `jelly serve` still runs in the foreground for manual use and startup diagnostics.
 Unreadable or malformed persisted jellies prevent startup rather than serving a
 partial store. Run `jelly serve` to see the affected file and error.
-For an isolated run: `jelly serve --port 7879 --home /tmp/jelly-test` (PowerShell:
-`--home $env:TEMP\jelly-test`), then use
-`jelly --url http://127.0.0.1:7879 ls`. On-demand startup applies only to the default
+For an isolated run: `jelly serve --temp` starts a throwaway daemon on a free port
+with a fresh home, prints `jelly on URL` first, and removes the home when stopped;
+then use `jelly --url URL ls`. On-demand startup applies only to the default
 local endpoint, including `http://localhost:7878` and equivalent URL spellings;
 other `--url` / `JELLY_URL` targets must already be running.
 
