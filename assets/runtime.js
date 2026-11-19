@@ -829,16 +829,17 @@
         else if (tag === "select") add(depth, `select = "${c.options[c.selectedIndex]?.text || ""}"`, c);
         else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
         else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
-        else if (LEAF.has(tag) || ownText(c)) {
-          // One line of text keeps its parts together, so `<span>p50 <b>6.5</b></span>`
-          // keeps its label. Text around controls or blocks (`<p>Then <button>Go</button></p>`)
-          // gives its own words, then what is inside.
-          const active = c.querySelector(ACTIVE);
-          if (!active && (LEAF.has(tag) || !c.innerText.trim().includes("\n"))) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
-          else { const t = ownText(c); if (t) add(depth, `text "${t}"`, c); walk(c, depth + (t ? 1 : 0)); }
+        else if (LEAF.has(tag) || (ownText(c) && !GROUP.has(tag) && !role)) {
+          // One line of text stays whole, so `<span>p50 <b>6.5</b></span>` keeps its label.
+          // When a control or an id sits inside (`<p>Then <button>Go</button></p>`), or the
+          // text spans lines, the outline also walks inside.
+          const one = LEAF.has(tag) || !c.innerText.trim().includes("\n"), inside = c.querySelector(`${ACTIVE}, [id]`);
+          const t = inside && !ownText(c) ? "" : one ? label(c) : ownText(c);
+          if (t) add(depth, `text "${t}"`, c);
+          if (!one || inside) walk(c, depth + (t ? 1 : 0));
         }
         else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
-        else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); walk(c, depth + 1); continue; }
+        else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); const own = ownText(c); if (own) add(depth + 1, `text "${own}"`, {}); walk(c, depth + 1); continue; }
         else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else walk(c, depth);
       }
