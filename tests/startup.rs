@@ -476,10 +476,11 @@ fn waits_for_bound_server_and_leaves_timed_out_daemon_running() {
 #[test]
 fn first_probe_reset_still_starts_the_daemon() {
     let s = Sandbox::new();
-    let p = port();
     // A listener nobody accepts on: the first probe waits in its backlog and is
-    // reset when the listener closes. Every later probe is refused.
-    let blip = TcpListener::bind(("127.0.0.1", p)).unwrap();
+    // reset when the listener closes. Every later probe is refused. Binding port
+    // 0 takes a port no parallel test can claim first.
+    let blip = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let p = blip.local_addr().unwrap().port();
     let closer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
         drop(blip);
