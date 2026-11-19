@@ -163,6 +163,8 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
   competing explanations, and they say which they believe.
 - `monitor`: something that runs for minutes or hours. Live charts fed by
   `jelly call`, with pause, stop and limits your loop obeys.
+- `quiz`: several people answer in rounds against a clock while you run it.
+  Join by name, vote, reveal, scores; you write later rounds from the answers.
 
 ## More
 

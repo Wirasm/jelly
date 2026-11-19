@@ -1,0 +1,62 @@
+<!doctype html><meta charset="utf-8"><title>Quiz</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#1e1033;--fg:#fff;--mute:#c4b5fd;--card:#2e1a4f;--o0:#e11d48;--o1:#2563eb;--o2:#d97706;--o3:#16a34a}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui;min-height:100vh;padding:18px}
+main{max-width:900px;margin:auto;text-align:center} h1{font-size:28px;margin:6px 0} .mute{color:var(--mute)}
+.q{font-size:clamp(22px,4vw,34px);font-weight:800;margin:18px 0}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.opt{border:0;border-radius:14px;padding:22px 14px;font:700 20px system-ui;color:#fff;cursor:pointer;min-height:84px;position:relative}
+.opt[disabled]{opacity:.45;cursor:default} .opt.mine{outline:4px solid #fff;opacity:1}
+.bar{position:absolute;left:0;bottom:0;height:6px;background:#fff9;border-radius:0 0 0 14px}
+.timer{height:10px;background:#ffffff22;border-radius:6px;overflow:hidden;margin-top:6px}.timer i{display:block;height:100%;background:#facc15}
+.board{background:var(--card);border-radius:14px;padding:12px 16px;margin-top:18px;text-align:left}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #ffffff14}.row.me{color:#facc15;font-weight:700}
+.join{margin-top:24px} .join input{font:18px system-ui;padding:10px;border-radius:10px;border:0;width:220px} .join button{font:700 18px system-ui;padding:10px 18px;border-radius:10px;border:0;background:#facc15;margin-left:6px;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}.chip{background:var(--card);border-radius:20px;padding:6px 12px}
+.right{outline:4px solid #4ade80} .bonus{display:inline-block;background:#facc15;color:#1e1033;font-weight:800;border-radius:20px;padding:4px 12px;margin-top:6px;animation:pop .5s ease} @keyframes pop{from{transform:scale(.6)}} .note{min-height:24px;margin-top:10px;color:#fde68a}
+@media(max-width:520px){.opts{grid-template-columns:1fr}}
+</style>
+<main id="app"></main>
+<script>
+const C = ["var(--o0)", "var(--o1)", "var(--o2)", "var(--o3)"], S = ["▲", "◆", "●", "■"];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let st, note = "", timer;
+const name = by => by.slice(7);
+function board(s) {
+  const rows = Object.entries(s.players).sort((a, b) => b[1].score - a[1].score);
+  return `<div class="board" id="board">${rows.map(([w, p], i) => `<div class="row ${w === jelly.by ? "me" : ""}"><span>${i + 1}. ${esc(name(w))}</span><b>${p.score}</b></div>`).join("") || '<span class="mute">Nobody yet</span>'}</div>`;
+}
+function render() {
+  const s = st, me = jelly.by, joined = !!s.players[me];
+  if (!joined) {
+    app.innerHTML = `<h1>${esc(s.title)}</h1><p class="mute">Join with your name, then wait for the first question.</p>
+      <div class="join"><input id="who" placeholder="Your name" value="${esc(jelly.viewer || "")}"><button id="go">Join</button></div>
+      <div class="chips" id="players">${Object.keys(s.players).map(w => `<span class="chip">${esc(name(w))}</span>`).join("")}</div><div class="note">${esc(note)}</div>`;
+    go.onclick = async () => { const n = who.value.trim(); if (!n) return; jelly.viewer = n; try { await jelly.call("join"); note = ""; } catch (e) { note = e.message; render(); } };
+    return;
+  }
+  const r = s.rounds[s.round];
+  if (s.phase === "lobby") {
+    app.innerHTML = `<h1>${esc(s.title)}</h1><p class="mute">You're in as <b>${esc(name(me))}</b>. Waiting for the quizmaster…</p><div class="chips" id="players">${Object.keys(s.players).map(w => `<span class="chip">${esc(name(w))}</span>`).join("")}</div>`;
+  } else if (s.phase === "question") {
+    const mine = s.votes[s.round]?.[me];
+    const n = Object.keys(s.votes[s.round] || {}).length;
+    app.innerHTML = `${s.round >= 3 ? '<div class="bonus" id="bonus">Bonus round · written from your answers</div>' : ""}<p class="mute">Question ${s.round + 1} of ${s.rounds.length} · ${n} of ${Object.keys(s.players).length} answered</p>
+      <div class="timer"><i id="t"></i></div><div class="q" id="question">${esc(r.q)}</div>
+      <div class="opts" id="options">${r.options.map((o, i) => `<button class="opt ${mine && mine.option === i ? "mine" : ""}" data-i="${i}" style="background:${C[i]}" ${mine ? "disabled" : ""}>${S[i]} ${esc(o)}</button>`).join("")}</div><div class="note">${esc(note)}</div>`;
+    options.onclick = async e => { const b = e.target.closest("button[data-i]"); if (!b) return; try { await jelly.call("vote", { option: +b.dataset.i }); note = ""; } catch (err) { note = err.message; render(); } };
+  } else if (s.phase === "reveal") {
+    const votes = Object.values(s.votes[s.round] || {}), mine = s.votes[s.round]?.[me];
+    const count = r.options.map((_, i) => votes.filter(v => v.option === i).length), max = Math.max(1, ...count);
+    app.innerHTML = `<p class="mute">Question ${s.round + 1}</p><div class="q" id="question">${esc(r.q)}</div>
+      <div class="opts" id="options">${r.options.map((o, i) => `<button class="opt ${i === r.correct ? "right" : ""}" style="background:${C[i]};opacity:${i === r.correct ? 1 : .5}" disabled>${S[i]} ${esc(o)} · ${count[i]}<span class="bar" style="width:${100 * count[i] / max}%"></span></button>`).join("")}</div>
+      <p class="note" id="result">${!mine ? "No answer this round" : mine.option === r.correct ? "Right!" : "Not this time"}</p>${board(s)}`;
+  } else {
+    app.innerHTML = `<h1>Final scores</h1>${board(s)}`;
+  }
+}
+function tick() { const t = document.getElementById("t"); if (t && st.phase === "question") { const left = Math.max(0, st.ends_at_ms - Date.now()); t.style.width = `${100 * left / (1000 * st.rounds[st.round].seconds)}%`; } }
+setInterval(tick, 100);
+jelly.onState(s => { st = s; render(); tick(); });
+</script>
