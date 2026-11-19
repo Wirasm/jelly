@@ -36,6 +36,7 @@ jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
 jelly see plan                                   # what is on screen, as text
+jelly events plan                                # stream its events as JSON lines; no name streams every jelly's
 jelly undo plan                                  # undo the last change to its view, verbs or state
 jelly pin plan                                   # keep it: a week untouched no longer archives it
 jelly rm plan                                    # remove it with its undo history and assets; cannot be undone
