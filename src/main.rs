@@ -2,6 +2,7 @@
 
 mod design;
 mod disk;
+mod recipes;
 mod server;
 mod store;
 mod startup;
@@ -53,14 +54,19 @@ enum Cmd {
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
     New {
         name: String,
-        /// Start from a folder with view.html, verbs.js, state.json and assets/:
-        /// a recipe, or what `jelly pull` wrote. --view, --verbs and --state
-        /// replace the folder's own.
-        #[arg(long)]
+        /// Start from a folder with view.html, verbs.js, state.json and assets/,
+        /// such as what `jelly pull` or `jelly recipes NAME --out` wrote.
+        /// --view, --verbs and --state replace the folder's own.
+        #[arg(long, conflicts_with = "recipe")]
         from: Option<PathBuf>,
-        #[arg(long, required_unless_present = "from")]
+        /// Start from a built-in recipe (see `jelly recipes`). --view, --verbs and
+        /// --state replace the recipe's own; its example assets come only with
+        /// its example state.
+        #[arg(long)]
+        recipe: Option<String>,
+        #[arg(long, required_unless_present_any = ["from", "recipe"])]
         view: Option<PathBuf>,
-        #[arg(long, required_unless_present = "from")]
+        #[arg(long, required_unless_present_any = ["from", "recipe"])]
         verbs: Option<PathBuf>,
         /// Starting state as a JSON file.
         #[arg(long)]
@@ -71,6 +77,14 @@ enum Cmd {
         /// One line on what this jelly is for, shown above it on the jelly page.
         #[arg(long, default_value = "")]
         about: String,
+    },
+    /// List the built-in recipes: starting points for jellies that are easy to
+    /// get wrong. With a NAME, print its RECIPE.md; with --out, write its files.
+    Recipes {
+        name: Option<String>,
+        /// Write the recipe's files into this folder to edit, then `jelly new NAME --from DIR`.
+        #[arg(long, requires = "name")]
+        out: Option<PathBuf>,
     },
     /// Call a verb, exactly as a button in the view would.
     Call {
@@ -379,7 +393,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. }) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. }) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -437,28 +451,59 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::New { name, from, view, verbs, state, replace, about } => {
+        Cmd::New { name, from, recipe, view, verbs, state, replace, about } => {
+            let recipe = recipe.map(|r| recipes::get(&r)).transpose()?;
             sync_design(&cli.url, &project());
             let in_from = |file: &str| from.as_ref().map(|d| d.join(file));
-            let view = view.or_else(|| in_from("view.html")).ok_or("give --view or --from")?;
-            let verbs = verbs.or_else(|| in_from("verbs.js")).ok_or("give --verbs or --from")?;
-            let state: Value = match state.or_else(|| in_from("state.json").filter(|p| p.exists())) {
-                Some(p) => serde_json::from_str(&read(&p)?).map_err(|e| format!("{}: {e}", p.display()))?,
+            // A flag wins, then the folder, then the recipe. Only state.json is optional.
+            let text = |flag: Option<PathBuf>, file: &str| -> Result<Option<String>, String> {
+                match flag.or_else(|| in_from(file).filter(|p| file != "state.json" || p.exists())) {
+                    Some(p) => read(&p).map(Some),
+                    None => Ok(recipe.and_then(|r| r.text(file)).map(String::from)),
+                }
+            };
+            let view = text(view, "view.html")?.ok_or("give --view, --from or --recipe")?;
+            let verbs = text(verbs, "verbs.js")?.ok_or("give --verbs, --from or --recipe")?;
+            // A recipe's assets belong to its example state: the review recipe's
+            // full.diff would otherwise show beside your own review.
+            let recipe_assets = recipe.filter(|_| state.is_none()).into_iter().flat_map(|r| r.assets());
+            let state: Value = match text(state, "state.json")? {
+                Some(s) => serde_json::from_str(&s).map_err(|e| format!("state is not JSON: {e}"))?,
                 None => json!({}),
             };
-            let body = json!({"name": name, "view": read(&view)?, "verbs": read(&verbs)?, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
+            let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
             let ev = send("POST", &api(""), body)?;
-            // The folder's assets come along, as `jelly asset` would add them.
+            // The folder's or recipe's assets come along, as `jelly asset` would add them.
             let made = ev["jelly"].as_str().unwrap_or(&name).to_string();
+            let jelly = api(&format!("/{made}"));
             let mut assets: Vec<PathBuf> = in_from("assets").and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten()
                 .map(|f| f.path()).filter(|p| p.is_file()).collect();
             assets.sort();
-            let added = add_assets(&api(&format!("/{made}")), &assets, &by)?;
+            let mut added = add_assets(&jelly, &assets, &by)?;
+            for (file, bytes) in recipe_assets {
+                added.push(upload_asset(&jelly, file, bytes, &by)?);
+            }
             report(ev)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
             }
             Ok(())
+        }
+        Cmd::Recipes { name: None, .. } => {
+            for r in recipes::RECIPES {
+                output(format_args!("{:<9} {}\n", r.name, r.use_when()))?;
+            }
+            output(format_args!("\nRead one: jelly recipes plan. Make a jelly from it: jelly new NAME --recipe plan.\n"))
+        }
+        Cmd::Recipes { name: Some(name), out: None } => {
+            output(format_args!("{}", recipes::get(&name)?.text("RECIPE.md").unwrap_or("")))
+        }
+        Cmd::Recipes { name: Some(name), out: Some(dir) } => {
+            let r = recipes::get(&name)?;
+            r.write(&dir)?;
+            let files: Vec<&str> = r.files.iter().map(|(p, _)| *p).filter(|p| !p.starts_with("assets/")).collect();
+            output(format_args!("{}/  {}  assets/ ({})\nEdit, then: jelly new {name} --from {}\n",
+                dir.display(), files.join("  "), r.assets().count(), dir.display()))
         }
         Cmd::Call { name, verb, args } => {
             let args = json_arg(&args, "args")?;
@@ -1064,17 +1109,19 @@ fn read(p: &PathBuf) -> Result<String, String> {
 
 /// Adds files beside a jelly; `jelly` is its API address.
 fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<Vec<String>, String> {
-    let mut added = Vec::new();
-    for f in files {
-        let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
+    files.iter().map(|f| {
+        let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?;
         let bytes = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
-        ureq::post(&format!("{jelly}/assets/{}?by={}", encode(&file), encode(by)))
-            .set("content-type", "application/octet-stream")
-            .send_bytes(&bytes)
-            .map_err(describe)?;
-        added.push(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)));
-    }
-    Ok(added)
+        upload_asset(jelly, file, &bytes, by)
+    }).collect()
+}
+
+fn upload_asset(jelly: &str, file: &str, bytes: &[u8], by: &str) -> Result<String, String> {
+    ureq::post(&format!("{jelly}/assets/{}?by={}", encode(file), encode(by)))
+        .set("content-type", "application/octet-stream")
+        .send_bytes(bytes)
+        .map_err(describe)?;
+    Ok(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)))
 }
 
 fn get(url: &str) -> Result<Value, String> {

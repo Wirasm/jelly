@@ -31,6 +31,7 @@ prose, and whenever you need them to choose.
 jelly ls                                         # this project's jellies; starts the daemon on first use
 jelly ls --all                                   # every project's jellies, archived ones included
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
+jelly recipes                                    # built-in starting points; jelly new plan --recipe plan
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"

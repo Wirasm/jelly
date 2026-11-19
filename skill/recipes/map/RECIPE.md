@@ -6,8 +6,8 @@ there, what talks to what, and what happens when…?" The person walks a path
 through the picture instead of reading a description of it.
 
 ```bash
-cp -r <skill>/recipes/map /tmp/map            # then write your own state.json there
-jelly new map --from /tmp/map --about "How <the system> works"
+# Write your own state.json. To change the view or verbs: jelly recipes map --out DIR
+jelly new map --recipe map --state state.json --about "How <the system> works"
 jelly see map                                 # fix every `!` and `error` line first
 jelly focus map
 ```

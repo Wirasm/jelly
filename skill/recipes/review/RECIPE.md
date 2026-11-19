@@ -5,9 +5,9 @@ asked for. It answers "did I get what I asked for, and what needs my eyes?" The
 diff is the backup, not the page.
 
 ```bash
-cp -r <skill>/recipes/review /tmp/review      # then write your own state.json there
-git diff main...HEAD > /tmp/review/assets/full.diff
-jelly new review --from /tmp/review --about "Review: <what they asked for>"
+# Write your own state.json. To change the view or verbs: jelly recipes review --out DIR
+jelly new review --recipe review --state state.json --about "Review: <what they asked for>"
+git diff main...HEAD > /tmp/full.diff && jelly asset review /tmp/full.diff
 jelly see review                              # fix every `!` and `error` line first
 jelly focus review
 ```
