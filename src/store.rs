@@ -1559,6 +1559,23 @@ mod tests {
         (dir, s)
     }
 
+    /// Agents write objects in an order that means something (Mon to Fri) and
+    /// read them back expecting it. Keys keep their order through create, a
+    /// verb, undo and a reopen of the store.
+    #[test]
+    fn state_keeps_key_order() {
+        let (dir, mut s) = store();
+        let verbs = "const verbs = { add(state, { day }) { state.week[day] = 'soup'; } };";
+        s.create("j", "".into(), verbs.into(), json!({"week": {"Mon": "pasta", "Tue": "fish", "Wed": "curry"}}), "agent", false, "", "").unwrap();
+        s.call("j", "add", json!({"day": "Thu"}), "agent").unwrap();
+        s.call("j", "add", json!({"day": "Fri"}), "agent").unwrap();
+        s.undo("j", "agent").unwrap();
+        let keys = |s: &Store| s.get("j").unwrap().state["week"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys(&s), ["Mon", "Tue", "Wed", "Thu"]);
+        drop(s);
+        assert_eq!(keys(&Store::open(dir.path()).unwrap()), ["Mon", "Tue", "Wed", "Thu"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_saved_entries_can_commit_and_roll_back() {
