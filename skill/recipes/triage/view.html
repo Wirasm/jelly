@@ -8,15 +8,17 @@
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
     --jelly-comment-inset: auto 10px calc(var(--foot, 68px) + 10px) auto;
-    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
-    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
-    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #6e656a; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --accent-ink: var(--accent); --r: var(--rounded-md, 14px);
+    --good: #237a3d; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --on: #fff;
     color-scheme: light;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) { :root {
     --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
     --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    --accent-ink: var(--color-primary, #ff5c95); --on: #15131a;
     color-scheme: dark;
   } }
   * { box-sizing: border-box; }
@@ -34,9 +36,9 @@
   #mix .grp { min-width: 0; }
   #mix .grp > b { font-size: 13px; } #mix .grp > span { font-size: 13px; color: var(--muted); margin-left: 5px; }
   #mix .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
-  .chip { all: unset; box-sizing: border-box; cursor: pointer; min-width: 30px; height: 24px; padding: 0 5px; border-radius: 7px; background: var(--c); color: #fff; font: 700 11px/24px ui-monospace, Menlo, monospace; text-align: center; border: 1.5px solid var(--c); }
+  .chip { all: unset; box-sizing: border-box; cursor: pointer; min-width: 30px; height: 24px; padding: 0 5px; border-radius: 7px; background: var(--c); color: var(--c-on, var(--on)); font: 700 11px/24px ui-monospace, Menlo, monospace; text-align: center; border: 1.5px solid var(--c); }
   .chip.unsure { background: color-mix(in srgb, var(--c) 16%, var(--card)); color: var(--ink); border-style: dashed; }
-  .chip.done { opacity: .4; } .chip.on { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .chip.done { background: var(--soft); border-color: var(--line); color: var(--muted); } .chip.on { outline: 2px solid var(--ink); outline-offset: 1px; }
   #mix.many .chip { min-width: 12px; width: 12px; height: 12px; padding: 0; border-radius: 3px; font-size: 0; }
 
   /* ---- what the agent was unsure about, first ---- */
@@ -62,7 +64,7 @@
   .pick button { border: 1.5px solid var(--line); background: var(--card); border-radius: 99px; padding: 6px 12px; font-size: 13.5px; font-weight: 600; display: inline-flex; gap: 6px; align-items: center; }
   .pick button::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
   .pick button.cur { border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, var(--card)); }
-  .pick button.yes { background: var(--good); border-color: var(--good); color: #fff; } .pick button.yes::before { content: "✓"; background: none; width: auto; height: auto; }
+  .pick button.yes { background: var(--good); border-color: var(--good); color: var(--on); } .pick button.yes::before { content: "✓"; background: none; width: auto; height: auto; }
   .pick button.plain::before { display: none; }
 
   /* ---- board and scatter: two pictures of the same items ---- */
@@ -89,7 +91,7 @@
   .item.before::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 3px; border-radius: 2px; background: var(--c); }
   .cards.end::after { content: ""; display: block; height: 3px; border-radius: 2px; background: var(--c); }
   .item .top { display: flex; gap: 8px; align-items: baseline; }
-  .item .num { font: 700 12px ui-monospace, monospace; color: var(--c); }
+  .item .num { font: 700 12px ui-monospace, monospace; color: var(--c-ink, var(--c)); }
   .item .t { flex: 1; font-weight: 600; line-height: 1.3; font-size: 14.5px; }
   .item .why { color: var(--ink-2); font-size: 13px; margin-top: 3px; }
   .lane.accepted .item:not(.on) .why { display: none; }
@@ -131,10 +133,10 @@
   #whybar .compose { display: flex; gap: 8px; flex: 1 1 100%; }
   #whybar textarea { flex: 1; min-height: 40px; font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 8px 10px; resize: vertical; }
   #whybar textarea:focus { outline: none; border-color: var(--accent); }
-  #whybar .compose button { border: 0; border-radius: 12px; padding: 9px 16px; font-weight: 600; background: var(--good); color: #fff; }
+  #whybar .compose button { border: 0; border-radius: 12px; padding: 9px 16px; font-weight: 600; background: var(--good); color: var(--on); }
   #go svg { flex: none; } #go circle { fill: none; stroke-width: 5; } #go .bg { stroke: var(--line); } #go .fg { stroke: var(--good); stroke-linecap: round; transition: stroke-dasharray .4s; }
   #go .txt { flex: 1; min-width: 0; line-height: 1.3; } #go .txt b { display: block; } #go .txt span { color: var(--muted); font-size: 13px; }
-  #go button { border: 0; border-radius: 12px; padding: 11px 26px; font-weight: 700; font-size: 16px; background: var(--good); color: #fff; }
+  #go button { border: 0; border-radius: 12px; padding: 11px 26px; font-weight: 700; font-size: 16px; background: var(--good); color: var(--on); }
   #go button[disabled] { background: var(--idle); cursor: default; }
   @media (max-width: 720px) {
     #whybar .pick { flex-wrap: nowrap; overflow-x: auto; flex: 1 1 100%; order: 3; padding-bottom: 2px; } #whybar .pick button { white-space: nowrap; flex: none; }
@@ -160,6 +162,10 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const TONES = { accent: "var(--accent)", warn: "var(--warn)", idle: "var(--idle)", good: "var(--good)", bad: "var(--bad)" };
+// Text on a tone: white on the accent, dark ink on amber and gray, --on on the rest.
+const ON = { accent: "#fff", warn: "#1f1a1d", idle: "var(--ink)" };
+// A tone as text on the card.
+const INK = { accent: "var(--accent-ink)", warn: "color-mix(in srgb, var(--warn) 70%, var(--ink))", idle: "var(--muted)" };
 const ORDER = ["accent", "warn", "idle", "good", "bad"];
 const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const short = (it) => String(it.ref || it.id).replace(/^#/, "");
@@ -172,7 +178,8 @@ let asked = null;     // the item whose "why did you move it" bar is showing
 let writing = false;  // that bar's text field is open
 let drag = null;      // { item } while a card is being dragged
 
-const lanesOf = (s) => (s.lanes || []).map((l, i) => ({ ...l, c: TONES[l.tone] || TONES[ORDER[i % ORDER.length]] }));
+const tone = (l, i) => (TONES[l.tone] ? l.tone : ORDER[i % ORDER.length]);
+const lanesOf = (s) => (s.lanes || []).map((l, i) => ({ ...l, c: TONES[tone(l, i)], on: ON[tone(l, i)] || "var(--on)", ink: INK[tone(l, i)] || TONES[tone(l, i)] }));
 const isUnsure = (it, s) => !it.done && !it.checked && it.confidence < (s.unsure_below ?? 0.6);
 const conf = (c) => { const n = c >= 0.8 ? 3 : c >= (jelly.state.unsure_below ?? 0.6) ? 2 : 1; return { n, word: ["", "unsure", "fairly sure", "sure"][n] }; };
 const confDots = (c) => c == null ? "" : `<span class="conf" title="The agent was ${conf(c).word}" aria-label="The agent was ${conf(c).word}">${[1, 2, 3].map((k) => `<i class="${k <= conf(c).n ? "f" : ""}"></i>`).join("")}</span>`;
@@ -201,7 +208,7 @@ function detail(it, s, L) {
 function card(it, s, L, opt = {}) {
   const l = L.find((l) => l.id === it.lane) || {}, from = L.find((x) => x.id === it.moved?.from);
   const open = sel === it.id, q = asksAt(it);
-  return `<article class="item${open ? " on" : ""}${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}" id="${opt.id || `i-${esc(it.id)}`}" data-item="${esc(it.id)}"${opt.still ? "" : ` draggable="true"`} style="--c:${l.c}">
+  return `<article class="item${open ? " on" : ""}${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}" id="${opt.id || `i-${esc(it.id)}`}" data-item="${esc(it.id)}"${opt.still ? "" : ` draggable="true"`} style="--c:${l.c};--c-ink:${l.ink}">
     <div class="top">${opt.num ? `<span class="num">${opt.num}</span>` : ""}<span class="ref">${esc(it.ref || "")}</span><span class="t">${esc(it.title)}</span>${q ? `<span class="q" title="The agent asks you something here">?</span>` : ""}${confDots(it.confidence)}</div>
     <div class="why">${esc(it.reason)}</div>
     ${it.done ? `<span class="tag done">✓ ${esc(it.done.result)}</span>` : ""}
@@ -252,7 +259,7 @@ function render(s) {
   $("title").textContent = s.title || "Triage";
   $("ask").textContent = s.ask || "";
   $("mix").className = items.length > 40 ? "many" : "";
-  $("mix").innerHTML = L.map((l) => { const mine = items.filter((i) => i.lane === l.id); return `<div class="grp" style="--c:${l.c}"><b>${esc(l.label)}</b><span>${mine.length}</span>
+  $("mix").innerHTML = L.map((l) => { const mine = items.filter((i) => i.lane === l.id); return `<div class="grp" style="--c:${l.c};--c-on:${l.on}"><b>${esc(l.label)}</b><span>${mine.length}</span>
     <div class="chips">${mine.map((it) => `<button class="chip${isUnsure(it, s) ? " unsure" : ""}${it.done ? " done" : ""}${sel === it.id ? " on" : ""}" data-item="${esc(it.id)}" data-chip title="${esc(it.title)}">${esc(short(it))}</button>`).join("")}</div></div>`; }).join("");
 
   const unsure = items.filter((i) => isUnsure(i, s)).sort((a, b) => a.confidence - b.confidence);

@@ -7,9 +7,10 @@
 <style>
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
-    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
-    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
-    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #6e656a; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --accent-ink: var(--accent); --r: var(--rounded-md, 14px);
+    --good: #237a3d; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --on: #fff;
     --term: #17141c; --term-ink: #e9e4ee;
     color-scheme: light;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -17,6 +18,7 @@
   @media (prefers-color-scheme: dark) { :root {
     --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
     --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    --accent-ink: var(--color-primary, #ff5c95); --on: #15131a;
     --term: #0d0b11;
     color-scheme: dark;
   } }
@@ -37,7 +39,7 @@
   .running { --c: var(--good); } .paused, .stopping { --c: var(--warn); } .failed { --c: var(--bad); } .done { --c: var(--good); } .stopped, .ready { --c: var(--idle); }
   .pill.running i { animation: beat 1.4s infinite; } @keyframes beat { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c) 25%, transparent); } }
   #controls button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 8px 16px; font-weight: 600; }
-  #controls button.stop { color: var(--bad); } #controls button.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #controls button.stop { color: var(--bad); } #controls button.armed { background: var(--bad); border-color: var(--bad); color: var(--on); }
   #request { margin-top: 10px; font-size: 14px; border-radius: 10px; padding: 8px 12px; background: var(--soft); display: flex; gap: 9px; align-items: center; }
   #request:empty { display: none; }
   #request i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--idle)); }
@@ -83,10 +85,10 @@
   .dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--bad); pointer-events: none; }
   .dot.last { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; background: var(--accent); border: 2px solid var(--card); transition: left .45s ease, top .45s ease; }
   .live .dot.last { animation: beat2 1.4s infinite; } @keyframes beat2 { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent); } }
-  .dot.flag { all: unset; position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--warn); color: #fff; font: 700 11px/18px -apple-system, sans-serif; text-align: center; cursor: pointer; z-index: 2; }
+  .dot.flag { all: unset; position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--warn); color: #1f1a1d; font: 700 11px/18px -apple-system, sans-serif; text-align: center; cursor: pointer; z-index: 2; }
   .limit { position: absolute; left: 0; right: 0; height: 22px; margin-top: -11px; cursor: ns-resize; touch-action: none; }
   .limit::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; border-top: 2px dashed var(--bad); }
-  .limit span { position: absolute; right: 0; top: -9px; font: 600 11px ui-monospace, Menlo, monospace; background: var(--bad); color: #fff; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+  .limit span { position: absolute; right: 0; top: -9px; font: 600 11px ui-monospace, Menlo, monospace; background: var(--bad); color: var(--on); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
   .limit.unseen span { background: var(--warn); } .limit.drag::before { border-top-style: solid; }
   .cf { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cf .lim { display: flex; gap: 5px; align-items: center; }
@@ -102,7 +104,7 @@
   .flagcard p { margin: 3px 0 0; color: var(--ink-2); }
   .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; } .hero.one { grid-template-columns: 1fr; }
   .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); } .pane.after { border-color: var(--warn); }
-  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; background: var(--idle); color: #fff; } .pane.after > b { background: var(--warn); color: var(--bg); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px; background: var(--idle); color: var(--ink); } .pane.after > b { background: var(--warn); color: #1f1a1d; }
   .pane pre { margin: 0; padding: 10px 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, Menlo, monospace; }
   .pane img { display: block; width: 100%; }
   .cap2 { font-size: 13px; color: var(--muted); margin-top: 5px; }
@@ -112,7 +114,7 @@
   .act .seen { font-size: 12.5px; color: var(--muted); }
   #log { margin: 0; background: var(--term); color: var(--term-ink); border-radius: var(--r); padding: 12px 14px; font: 12.5px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
   #log:empty::after { content: "No lines yet."; opacity: .5; }
-  #log .t { opacity: .5; } #log .warn { color: #ffcf3f; } #log .bad { color: #ff7a70; }
+  #log .t { opacity: .55; } #log .warn { color: #ffcf3f; } #log .bad { color: #ff7a70; }
   @media (max-width: 640px) {
     #hero { grid-template-columns: 1fr; } #headline .big { font-size: 52px; } #progress { min-width: 0; }
     #phases li { padding: 6px 7px; font-size: 12px; } .hero { grid-template-columns: 1fr; }

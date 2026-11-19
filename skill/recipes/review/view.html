@@ -8,9 +8,10 @@
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
     --jelly-comment-inset: auto 10px 78px auto;
-    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #857b81; --line: #e8e2e4; --soft: #f4f0f1;
-    --accent: var(--color-primary, #c8255d); --r: var(--rounded-md, 14px);
-    --good: #2f9a4c; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #6e656a; --line: #e8e2e4; --soft: #f4f0f1;
+    --accent: var(--color-primary, #c8255d); --accent-ink: var(--accent); --r: var(--rounded-md, 14px);
+    --good: #237a3d; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --on: #fff;
     --term: #17141c; --term-ink: #e9e4ee; --add: #e6f6e9; --del: #fdeceb; --hunk: #eef1f8;
     color-scheme: light;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -18,6 +19,7 @@
   @media (prefers-color-scheme: dark) { :root {
     --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
     --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
+    --accent-ink: var(--color-primary, #ff5c95); --on: #15131a;
     --term: #0d0b11; --add: #17301e; --del: #3a1c1c; --hunk: #22263a;
     color-scheme: dark;
   } }
@@ -38,13 +40,13 @@
   .node { all: unset; box-sizing: border-box; cursor: pointer; display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-radius: var(--r);
     background: var(--card); border: 1.5px solid var(--line); border-left: 6px solid var(--c, var(--idle)); font-size: 14px; line-height: 1.3; }
   .node.on { border-color: var(--c, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, var(--ink)) 22%, transparent); }
-  .node .dot { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 700 13px -apple-system, sans-serif; color: #fff; background: var(--c, var(--idle)); }
+  .node .dot { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 700 13px -apple-system, sans-serif; color: var(--c-on, var(--on)); background: var(--c, var(--idle)); }
   .node .t { flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .node .n { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: nowrap; }
   .node .q { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 12px -apple-system, sans-serif; display: grid; place-items: center; }
-  .open { --c: var(--accent); } .approved { --c: var(--good); } .change, .question { --c: var(--warn); } .mech { --c: var(--idle); }
-  .seen, .tested { --c: var(--good); } .unverified { --c: var(--warn); }
-  .node.gap { border-style: dashed; cursor: default; --c: var(--warn); } .node.gap.outside { --c: var(--bad); }
+  .open { --c: var(--accent); --c-on: #fff; } .approved { --c: var(--good); } .change, .question { --c: var(--warn); --c-on: #1f1a1d; } .mech { --c: var(--idle); --c-on: var(--ink); }
+  .seen, .tested { --c: var(--good); } .unverified { --c: var(--warn); --c-on: #1f1a1d; }
+  .node.gap { border-style: dashed; cursor: default; --c: var(--warn); --c-on: #1f1a1d; } .node.gap.outside { --c: var(--bad); --c-on: var(--on); }
 
   /* Every changed line, as one bar: a segment per change, red for lines in none. */
   #lines { margin-top: 18px; }
@@ -62,7 +64,7 @@
   .crumbs .nav { margin-left: auto; display: flex; gap: 6px; }
   .crumbs .nav button { width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--card); font-size: 16px; line-height: 1; }
   .chip { font: 600 11.5px -apple-system, sans-serif; padding: 2px 8px; border-radius: 99px; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
-  .chip.high { background: var(--bad); color: #fff; } .chip.medium { background: var(--warn-soft); color: var(--ink); } .chip.low { background: var(--good-soft); color: var(--ink); }
+  .chip.high { background: var(--bad); color: var(--on); } .chip.medium { background: var(--warn-soft); color: var(--ink); } .chip.low { background: var(--good-soft); color: var(--ink); }
   .card h2 { margin: 8px 0 0; font-size: 21px; line-height: 1.25; letter-spacing: -.01em; }
   .why { margin: 4px 0 0; color: var(--ink-2); }
 
@@ -70,8 +72,8 @@
   .hero.one { grid-template-columns: 1fr; }
   .pane { min-width: 0; border-radius: 10px; overflow: hidden; border: 2px solid var(--idle); background: var(--term); }
   .pane.after { border-color: var(--good); }
-  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; background: var(--idle); color: #fff; }
-  .pane.after > b { background: var(--good); }
+  .pane > b { display: block; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; background: var(--idle); color: var(--ink); }
+  .pane.after > b { background: var(--good); color: var(--on); }
   .pane pre { margin: 0; padding: 12px; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, Menlo, monospace; }
   .pane pre .p { opacity: .55; }
   .pane iframe { display: block; width: 100%; height: 260px; border: 0; background: #fff; }
@@ -97,11 +99,11 @@
   .said { padding: 8px 12px; border-radius: 12px 12px 12px 2px; background: var(--warn-soft); max-width: 85%; }
   .said.agent { background: var(--soft); border-radius: 12px 12px 2px 12px; justify-self: end; }
   .said b { font-size: 11.5px; display: block; color: var(--muted); } .said span { white-space: pre-wrap; }
-  .since { margin-top: 14px; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .since { margin-top: 14px; font: 600 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink); }
 
   .act { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
   .act button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 10px 18px; font-weight: 600; }
-  .act button.yes, .compose button, #go button { background: var(--good); border-color: var(--good); color: #fff; }
+  .act button.yes, .compose button, #go button { background: var(--good); border-color: var(--good); color: var(--on); }
   .act .verdict { font-weight: 700; color: var(--good); font-size: 16px; }
   .act .undo { border: 0; background: none; color: var(--muted); font-weight: 500; padding: 10px 4px; text-decoration: underline; }
   .compose { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
