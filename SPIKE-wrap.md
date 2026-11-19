@@ -55,3 +55,40 @@ Nothing in Sasha was clicked except jelly's own card and panel, so its dev backe
 - **Overlay API.** The spike runs the jelly's view as raw HTML. A small helper (`jelly.overlay.text(selector, value)`, highlights) would make variants one-liners, and turning a picked variant into a real code change is the agent's next step.
 
 Rough size for a real version: about a week, most of it the lifecycle and the edges above.
+
+# Spike 2: `jelly shot`, the whole app for an agent in one call
+
+**Verdict: proven, with two things to fix before it is real (speed and noise).**
+
+```bash
+jelly wrap site http://localhost:5173
+jelly shot site                      # / and the pages it links to, at 1280 and 390
+jelly shot site --route /demo --widths 1280 --text
+```
+
+One command returned all 7 Sasha pages (`/`, `/blog`, `/sv`, `/login`, `/demo`, `/about-this-interview`, `/privacy`) at desktop and phone width, full height, as text. The full output is in `spike-wrap/shot-sasha.txt` (39 KB brief; 78 KB with `--text`). Per page it gives:
+
+- **Every heading and control with a selector to paste into `try` or `--at`:** `header a[href="/login"]`, `#email`, `form button[type=submit]`. The demo form comes out as `textbox "Full name" = "" #name`, `email "Work email" = "" #email`, and so on, so an agent can fill it with `jelly try` without exploring.
+- **Shared parts printed once** ("on every page except /sv, /demo"), since a translated page is a variant, not a reason to repeat the header.
+- **Problems the browser measured:** page errors, failed requests (status 400 and up), content wider than the screen, controls off the screen or covered by another element, tap targets under 24px at phone width, fields without labels, images without `alt`, and text clipped by `overflow`. Problems most pages share are listed once.
+
+## What it found on Sasha
+
+- No page errors, no failed requests, nothing wider than the screen at 390px, and nothing off-screen or covered.
+- **Tap targets at phone width:** the header "Sign in" link is 45×21, and footer links (Privacy, Terms, DPA, Svenska, Say hello) are 20px tall. WCAG 2.5.8 asks for 24px unless spacing compensates, so these are worth a look, not certain bugs.
+
+## False positives found and removed on the way
+
+All three came from apps hiding things on purpose; real apps will produce more:
+
+- Screen-reader-only text (`sr-only`, a 1×1px box) looked like clipped text.
+- The anti-spam honeypot field (`tabindex=-1`, inside `aria-hidden`) looked like a covered control.
+- 18px checkboxes with labels looked too small, although the label is the tap target.
+
+## Before it is real
+
+- **Speed:** 61 s for 14 renders, one after another. Each render is a fresh Chrome (about 1.8 s), and a jelly holds one snapshot at a time, so renders of one wrapped app cannot overlap yet. Keying snapshots by route and width would allow parallel renders, giving roughly 10 s.
+- **Noise:** the tap-size check should allow WCAG's spacing exception. Repeated items should be deduped by label and kind, not by selector, which changes per page when uniqueness changes.
+- **`--json`**, so an agent can filter problems by kind without parsing text.
+- **Routes behind a login:** need the named-session idea from `try`.
+- **Plain jellies:** `shot` works on wrapped apps; the same flags should work on any jelly (one route, two widths) for the same problem checks.

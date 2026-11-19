@@ -1174,8 +1174,13 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
     let wrapped = wraps().lock().expect("wraps lock").get(name).copied();
-    let url = if let Some(p) = wrapped {
-        format!("http://localhost:{p}/?agent=1{trial}")
+    let (route, shot) = shots().lock().expect("shots lock").get(name).cloned().unwrap_or_else(|| ("/".into(), false));
+    let shot_q = if shot { "&shot=1" } else { "" };
+    let url = if let Some(p) = wrapped.filter(|_| width >= 500) {
+        let sep = if route.contains('?') { '&' } else { '?' };
+        format!("http://localhost:{p}{route}{sep}agent=1{shot_q}{trial}")
+    } else if wrapped.is_some() {
+        format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}&src={}{shot_q}", route.replace('&', "%26").replace('#', "%23"))
     } else if width < 500 {
         format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}{trial}")
     } else {
@@ -1230,6 +1235,16 @@ struct SeeQ {
     /// The whole page, not just the first screen.
     #[serde(default)]
     full: bool,
+    /// `jelly shot`: this path of a wrapped app, with selectors and problems.
+    route: Option<String>,
+    #[serde(default)]
+    shot: bool,
+}
+
+/// The path and mode each wrapped jelly's next render uses (`jelly shot`). Spike.
+fn shots() -> &'static Mutex<std::collections::HashMap<String, (String, bool)>> {
+    static SHOTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (String, bool)>>> = std::sync::OnceLock::new();
+    SHOTS.get_or_init(Default::default)
 }
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
@@ -1237,6 +1252,9 @@ struct SeeQ {
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
     let render_name = name.clone();
+    if q.shot || q.route.is_some() {
+        shots().lock().expect("shots lock").insert(name.clone(), (q.route.clone().unwrap_or_else(|| "/".into()), q.shot));
+    }
     see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>| {
         let name = render_name.clone();
         async move { render(port, &name, None, width, height, png.as_deref(), RENDER_LIMIT).await }
@@ -1259,7 +1277,9 @@ where
         Ok(app.screen(&name, &owner)?.filter(|s| s.version == j.version && s.width == width))
     };
     let mut notes: Vec<String> = Vec::new();
-    let mut snap = fresh(&app)?;
+    // A shot renders a given page of a wrapped app, so a screen kept from
+    // another page must not stand in for it.
+    let mut snap = if q.shot || q.route.is_some() { None } else { fresh(&app)? };
     if snap.is_none() {
         let asked = now_ms();
         match render_page(width, height, None).await {
@@ -1622,6 +1642,10 @@ async fn design_css(State(app): State<Shared>, Path(project): Path<String>) -> R
 struct FrameQ {
     w: u32,
     h: u32,
+    /// A wrapped app's path to frame instead of the jelly (`jelly shot`).
+    src: Option<String>,
+    #[serde(default)]
+    shot: Option<String>,
     #[serde(rename = "try")]
     trial: Option<String>,
 }
@@ -1631,7 +1655,12 @@ async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<St
     let k = 500.0 / q.w.max(1) as f64;
     // Only a URL-safe token passes through, so it cannot break out of the attribute.
     let trial = q.trial.filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).map(|t| format!("&try={t}")).unwrap_or_default();
-    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1{trial}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
+    let wrapped = wraps().lock().expect("wraps lock").get(&name).copied();
+    let src = match (wrapped, q.src.filter(|s| s.starts_with('/') && !s.contains('"') && !s.contains('<'))) {
+        (Some(p), Some(route)) => format!("http://localhost:{p}{route}{}agent=1{}", if route.contains('?') { '&' } else { '?' }, if q.shot.is_some() { "&shot=1" } else { "" }),
+        _ => format!("/j/{name}/?agent=1{trial}"),
+    };
+    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"{src}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
 }
 
 #[derive(Deserialize)]

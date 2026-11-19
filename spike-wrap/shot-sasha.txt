@@ -1,0 +1,819 @@
+=== 1280px · 7 pages
+on every page except /sv, /demo:
+- link "Skip to content" [a[href="#main-content"]]
+
+--- / @ 1280px · no problems found
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - link "Svenska" [header a[href="/sv"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [nav a[href="/demo"]]
+- main: #main-content
+  - section:
+    - heading "Never open a CV again." [h1] #hero-title
+    - link "Request a demo" [#main-content > section:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(1)]
+    - link "How she works" [a[href="#how-it-works"]]
+    - figure:
+      - group "Example conversation with Sasha":
+      - svg 17×17
+  - section "A hire with Sasha": #customer-proof
+    - figure:
+  - section: #how-it-works
+    - header:
+      - heading "All those screening calls? They're her problem now." [h2] #process-title
+    - ol:
+      - heading "Work out who you actually need." [h3]
+      - group "Example role profile":
+        - svg 16×16
+        - heading "Recruiter" [h4]
+      - heading "Let everyone make their case." [h3]
+      - group "Preview of a candidate's voice interview":
+        - svg 33×33
+        - svg 16×16
+      - heading "See what their answers actually tell you." [h3]
+      - div: #evidence-preview
+        - svg 16×16
+        - heading "Ask good questions" [h4]
+        - details:
+            - svg 16×16
+          - ol:
+            - svg 16×16
+        - svg 16×16
+      - heading "Think it through. Then make the call." [h3]
+      - group "Illustration of comparing candidate evidence and follow-up questions":
+        - heading "Compare for this role" [h4]
+        - table:
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+        - svg 16×16
+  - section: #testimonials
+    - heading "What folks say about Sasha." [h2] #testimonials-title
+    - figure:
+    - figure:
+    - figure:
+  - section: #trust
+    - heading "She has opinions. You have the final say." [h2] #trust-title
+    - heading "Evidence you can check." [h3]
+    - heading "Gaps you can see." [h3]
+    - heading "Advice you can challenge." [h3]
+    - link "What candidates can expect" [a[href="/about-this-interview"]]
+    - link "Talk to us about Sasha" [#trust a[href="mailto:support@sasharec.ai"]]
+  - section: #questions
+    - heading "Fair questions." [h2] #questions-title
+    - heading "Do candidates want to be interviewed by an AI?" [h3]
+    - heading "Can candidates game the interview?" [h3]
+    - heading "What kinds of roles does she work for?" [h3]
+    - heading "How do I know the advice is fair?" [h3]
+    - heading "Who makes the hiring decision?" [h3]
+    - heading "How long does setup take?" [h3]
+    - heading "Where do we stand on GDPR and the EU AI Act?" [h3]
+      - link "privacy policy" [#questions a[href="/privacy"]]
+      - link "list of service providers" [#questions a[href="/sub-processors"]]
+  - section: #founders
+    - heading "Sasha didn't get her opinions from nowhere." [h2] #founders-title
+    - img "The three Sasha founders sitting together on a blue sofa."
+    - ul:
+      - link "Tove Oldebäck on LinkedIn" [a[href="https://www.linkedin.com/in/toveoldeb%C3%A4ck/"]]
+      - link "Peter Lindström on LinkedIn" [a[href="https://www.linkedin.com/in/peterlindstrom/"]]
+      - link "Rasmus Widing on LinkedIn" [a[href="https://www.linkedin.com/in/rasmuswiding/"]]
+  - section:
+    - heading "Put Sasha to work on your next hire." [h2] #closing-title
+    - link "Request a demo" [#main-content > section:nth-of-type(8) > div:nth-of-type(2) > a:nth-of-type(1)]
+    - details:
+        - svg 16×16
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [nav a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+
+--- /blog @ 1280px · no problems found
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - link "Svenska" [header a[href="/sv/blog"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [a[href="/demo"]]
+- main: #main-content
+  - section:
+    - heading "Our thinking." [h1]
+  - ul:
+    - link "How good is AI at assessing candidates? How good is AI at assessing candidates? How we think about it, and where we got " [a[href="/blog/how-good-is-ai"]]
+    - link "Can AI interview for hard roles Can AI interview for hard roles? Yes, if the role profile is good. What decides it isn't" [a[href="/blog/can-ai-interview-for-hard-roles"]]
+    - link "What decades of research say about good hiring In 2022, Paul Sackett and colleagues re-ran the best-known analysis in hi" [a[href="/blog/research-say-about-good-hiring"]]
+    - link "The interview I almost stopped I nearly stopped an interview because I thought it had gone off the rails. The candidate " [a[href="/blog/the-interview-i-almost-stopped"]]
+    - link "Candidates have already made up their minds about AI interviews Recruiters worry that AI interviews scare candidates awa" [a[href="/blog/candidates-minds-about-ai-interviews"]]
+    - link "RESEARCH Why your CV is lying to you Years of experience explain less than 1% of how well someone performs in a role. So" [a[href="/blog/why-your-cv-is-lying-to-you"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv/blog"]]
+  - link "Privacy" [a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+
+--- /sv @ 1280px · no problems found
+- link "Hoppa till innehållet" [a[href="#main-content"]]
+- header:
+  - nav "Huvudmeny":
+    - link "Sashas startsida" [nav a[href="/sv"]]
+    - link "Så arbetar hon" [a[href="/sv#how-it-works"]]
+    - link "Ditt beslut" [a[href="/sv#trust"]]
+    - link "Våra tankar" [header a[href="/sv/blog"]]
+    - link "English" [header a[href="/"]]
+    - button "Använd mörkt tema" [button[aria-label="Använd mörkt tema"]]
+    - link "Logga in" [header a[href="/login"]]
+    - link "Boka en demo" [nav a[href="/sv/demo"]]
+- main: #main-content
+  - section:
+    - heading "Öppna aldrig ett CV igen." [h1] #hero-title
+    - link "Boka en demo" [#main-content > section:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(1)]
+    - link "Så arbetar hon" [a[href="#how-it-works"]]
+    - figure:
+      - group "Exempel på ett samtal med Sasha":
+      - svg 17×17
+  - section "En rekrytering med Sasha": #customer-proof
+    - figure:
+  - section: #how-it-works
+    - header:
+      - heading "Alla de där screeningsamtalen? Nu är de hennes problem." [h2] #process-title
+    - ol:
+      - heading "Ta reda på vem du faktiskt behöver." [h3]
+      - group "Exempel på en rollprofil":
+        - svg 16×16
+        - heading "Rekryterare" [h4]
+      - heading "Låt alla föra sin talan." [h3]
+      - group "Förhandsvisning av en kandidats röstintervju":
+        - svg 33×33
+        - svg 16×16
+      - heading "Se vad svaren faktiskt säger dig." [h3]
+      - div: #evidence-preview
+        - svg 16×16
+        - heading "Ställa bra frågor" [h4]
+        - details:
+            - svg 16×16
+          - ol:
+            - svg 16×16
+        - svg 16×16
+      - heading "Tänk igenom det. Fatta sedan beslutet." [h3]
+      - group "Illustration av hur du jämför kandidaters belägg och följdfrågor":
+        - heading "Jämför för den här rollen" [h4]
+        - table:
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+        - svg 16×16
+  - section: #testimonials
+    - heading "Det här säger folk om Sasha." [h2] #testimonials-title
+    - figure:
+    - figure:
+    - figure:
+  - section: #trust
+    - heading "Hon har åsikter. Du har sista ordet." [h2] #trust-title
+    - heading "Belägg du kan granska." [h3]
+    - heading "Luckor du kan se." [h3]
+    - heading "Råd du kan ifrågasätta." [h3]
+    - link "Vad kandidaterna kan förvänta sig" [a[href="/about-this-interview"]]
+    - link "Prata med oss om Sasha" [#trust a[href="mailto:support@sasharec.ai"]]
+  - section: #questions
+    - heading "Rimliga frågor." [h2] #questions-title
+    - heading "Vill kandidater verkligen intervjuas av en AI?" [h3]
+    - heading "Kan kandidater fuska sig igenom intervjun?" [h3]
+    - heading "Vilka roller fungerar hon för?" [h3]
+    - heading "Hur vet jag att bedömningen är rättvis?" [h3]
+    - heading "Vem fattar anställningsbeslutet?" [h3]
+    - heading "Hur lång tid tar det att komma igång?" [h3]
+    - heading "Hur förhåller ni er till GDPR och EU:s AI-förordning?" [h3]
+      - link "vår integritetspolicy" [#questions a[href="/privacy"]]
+      - link "listan över tjänsteleverantörer" [#questions a[href="/sub-processors"]]
+  - section: #founders
+    - heading "Sashas åsikter kommer inte från ingenstans." [h2] #founders-title
+    - img "Sashas tre grundare sitter tillsammans i en blå soffa."
+    - ul:
+      - link "Tove Oldebäck på LinkedIn" [a[href="https://www.linkedin.com/in/toveoldeb%C3%A4ck/"]]
+      - link "Peter Lindström på LinkedIn" [a[href="https://www.linkedin.com/in/peterlindstrom/"]]
+      - link "Rasmus Widing på LinkedIn" [a[href="https://www.linkedin.com/in/rasmuswiding/"]]
+  - section:
+    - heading "Sätt Sasha i arbete med din nästa rekrytering." [h2] #closing-title
+    - link "Boka en demo" [#main-content > section:nth-of-type(8) > div:nth-of-type(2) > a:nth-of-type(1)]
+    - details:
+        - svg 16×16
+- footer:
+  - link "Sashas startsida" [footer a[href="/sv"]]
+  - nav "Sidfotsmeny":
+    - link "Våra tankar" [footer a[href="/sv/blog"]]
+    - link "Logga in" [footer a[href="/login"]]
+    - link "Säg hej" [nav a[href="mailto:support@sasharec.ai"]]
+    - link "English" [footer a[href="/"]]
+  - link "Integritet" [footer a[href="/privacy"]]
+  - link "Villkor" [a[href="/terms"]]
+  - link "PUB-avtal" [a[href="/dpa"]]
+  - link "Tjänsteleverantörer" [footer a[href="/sub-processors"]]
+
+--- /login @ 1280px · no problems found
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [a[href="/demo"]]
+- main: #main-content
+  - heading "Welcome back." [h1]
+  - form:
+    - email "Work email" = "" #email
+    - button "Email me a sign-in code" [button[type=submit]]
+    - link "Terms of Service" [#main-content a[href="/terms"]]
+  - link "Read the privacy policy." [#main-content a[href="/privacy"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [footer a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+
+--- /demo @ 1280px · no problems found
+- link "Skip to demo request" [a[href="#demo-main"]]
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - link "Svenska" [header a[href="/sv/demo"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [a[href="/demo"]]
+- main: #demo-main
+  - heading "Let's talk about your next hire." [h1]
+  - link "Meet Sasha first" [#demo-main a[href="/"]]
+  - form:
+    - textbox "Full name" = "" #name
+    - email "Work email" = "" #email
+    - textbox "Job title / role" = "" #details.job_title
+    - textbox "Company name" = "" #company
+    - select = "Choose an option" #details.company_type
+    - select = "Choose an option" #details.company_size
+    - select = "Choose an option" #details.screening_volume
+    - tel "Phone number(optional)" = "" #details.phone
+    - checkbox "Never open a CV again." unchecked #pain-never-open-cv
+    - checkbox "Figure out exactly who I'm actually looking for." unchecked #pain-define-person
+    - checkbox "Tell me whose answers are worth my time — and whose aren't." unchecked #pain-answers-worth-time
+    - checkbox "Hire the right person. Faster. Obviously." unchecked #pain-hire-faster
+    - checkbox "ACTUALLY give every candidate a fair shot." unchecked #pain-fair-shot
+    - checkbox "Make candidates not dread the process." unchecked #pain-candidate-experience
+    - checkbox "Stop burning out my team on screening calls." unchecked #pain-team-burnout
+    - checkbox "Never make a bad hire again." unchecked #pain-avoid-bad-hire
+    - checkbox "Honestly? No idea — but I want Sasha on my team and I'll figure it out from there." unchecked #pain-exploring
+    - textbox "Anything we should know before the demo? (optional)" = "" #details.comment
+    - checkbox "Send me occasional Sasha product updates. Optional. You can request a demo either way." unchecked [input[name="details.product_updates"]]
+    - textbox "Leave this field empty" = "" [input[name="website"]]
+    - button "Request a demo" [button[type=submit]]
+      - link "Read our privacy notice." [form a[href="/privacy"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv/demo"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+
+--- /about-this-interview @ 1280px · no problems found
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [a[href="/demo"]]
+- main: #main-content
+  - article:
+    - heading "How this interview works" [h1]
+    - section:
+      - heading "Who am I talking to?" [h2]
+    - section:
+      - heading "Why an AI, and not a person?" [h2]
+    - section:
+      - heading "How are my answers assessed?" [h2]
+    - section:
+      - heading "What happens to the audio?" [h2]
+    - section:
+      - heading "What if you get something wrong?" [h2]
+    - section:
+      - heading "Can I interrupt, pause, or skip a question?" [h2]
+    - section:
+      - heading "What if I'd rather not do this with an AI?" [h2]
+    - section:
+      - heading "Where do I take questions about my data?" [h2]
+        - link "privacy@sasharec.ai" [a[href="mailto:privacy@sasharec.ai"]]
+        - link "privacy policy" [#main-content a[href="/privacy"]]
+        - link "service providers" [#main-content a[href="/sub-processors"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+
+--- /privacy @ 1280px · no problems found
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - link "How she works" [a[href="/#how-it-works"]]
+    - link "Your decision" [a[href="/#trust"]]
+    - link "Our thinking" [header a[href="/blog"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Request a demo" [a[href="/demo"]]
+- main: #main-content
+  - article:
+    - header:
+      - heading "Privacy policy" [h1]
+    - section:
+      - heading "Who we are" [h2]
+        - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(1) > p:nth-of-type(1) > a:nth-of-type(1)]
+    - section:
+      - heading "Two roles" [h2]
+      - ul:
+    - section:
+      - heading "If you are a candidate" [h2]
+        - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(3) > p:nth-of-type(7) > a:nth-of-type(1)]
+    - section:
+      - heading "If you use a recruiter account" [h2]
+    - section:
+      - heading "If you request a demo" [h2]
+    - section:
+      - heading "If you visit the website" [h2]
+    - section:
+      - heading "The EU AI Act" [h2]
+    - section:
+      - heading "Where your data goes" [h2]
+        - link "service providers" [#main-content a[href="/sub-processors"]]
+    - section:
+      - heading "Security" [h2]
+    - section:
+      - heading "Your rights" [h2]
+      - ul:
+          - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(10) > ul:nth-of-type(1) > li:nth-of-type(1) > span:nth-of-type(2) > a:nth-of-type(1)]
+          - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(10) > ul:nth-of-type(1) > li:nth-of-type(2) > span:nth-of-type(2) > a:nth-of-type(1)]
+    - section:
+      - heading "Children, changes" [h2]
+    - footer:
+        - link "privacy@sasharec.ai" [footer a[href="mailto:privacy@sasharec.ai"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+
+=== 390px · 7 pages
+on every page except /sv, /demo:
+- link "Skip to content" [a[href="#main-content"]]
+on every page except /, /sv:
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Demo" [a[href="/demo"]]
+on most pages:
+problem  too small to tap: a "Sign in" [header a[href="/login"]] 45×21
+problem  too small to tap: a "Our thinking" [footer a[href="/blog"]] 101×20
+problem  too small to tap: a "Sign in" [footer a[href="/login"]] 101×20
+problem  too small to tap: a "Privacy" [footer a[href="/privacy"]] 46×20
+problem  too small to tap: a "Terms" [a[href="/terms"]] 38×20
+problem  too small to tap: a "DPA" [a[href="/dpa"]] 26×20
+problem  too small to tap: a "Say hello" [a[href="mailto:support@sasharec.ai"]] 101×20
+
+--- / @ 390px · 6 problems
+- header:
+  - nav "Main navigation":
+    - link "Sasha home" [nav a[href="/"]]
+    - button "Use dark theme" [button[aria-label="Use dark theme"]]
+    - link "Sign in" [header a[href="/login"]]
+    - link "Demo" [nav a[href="/demo"]]
+- main: #main-content
+  - section:
+    - heading "Never open a CV again." [h1] #hero-title
+    - link "Request a demo" [#main-content > section:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(1)]
+    - link "How she works" [a[href="#how-it-works"]]
+    - figure:
+      - group "Example conversation with Sasha":
+      - svg 16×16
+  - section "A hire with Sasha": #customer-proof
+    - figure:
+  - section: #how-it-works
+    - header:
+      - heading "All those screening calls? They're her problem now." [h2] #process-title
+    - ol:
+      - heading "Work out who you actually need." [h3]
+      - group "Example role profile":
+        - svg 16×16
+        - heading "Recruiter" [h4]
+      - heading "Let everyone make their case." [h3]
+      - group "Preview of a candidate's voice interview":
+        - svg 33×33
+        - svg 16×16
+      - heading "See what their answers actually tell you." [h3]
+      - div: #evidence-preview
+        - svg 16×16
+        - heading "Ask good questions" [h4]
+        - details:
+            - svg 16×16
+          - ol:
+            - svg 16×16
+        - svg 16×16
+      - heading "Think it through. Then make the call." [h3]
+      - group "Illustration of comparing candidate evidence and follow-up questions":
+        - heading "Compare for this role" [h4]
+        - table:
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+        - svg 16×16
+  - section: #testimonials
+    - heading "What folks say about Sasha." [h2] #testimonials-title
+    - figure:
+    - figure:
+    - figure:
+  - section: #trust
+    - heading "She has opinions. You have the final say." [h2] #trust-title
+    - heading "Evidence you can check." [h3]
+    - heading "Gaps you can see." [h3]
+    - heading "Advice you can challenge." [h3]
+    - link "What candidates can expect" [a[href="/about-this-interview"]]
+    - link "Talk to us about Sasha" [#trust a[href="mailto:support@sasharec.ai"]]
+  - section: #questions
+    - heading "Fair questions." [h2] #questions-title
+    - heading "Do candidates want to be interviewed by an AI?" [h3]
+    - heading "Can candidates game the interview?" [h3]
+    - heading "What kinds of roles does she work for?" [h3]
+    - heading "How do I know the advice is fair?" [h3]
+    - heading "Who makes the hiring decision?" [h3]
+    - heading "How long does setup take?" [h3]
+    - heading "Where do we stand on GDPR and the EU AI Act?" [h3]
+      - link "privacy policy" [#questions a[href="/privacy"]]
+      - link "list of service providers" [#questions a[href="/sub-processors"]]
+  - section: #founders
+    - heading "Sasha didn't get her opinions from nowhere." [h2] #founders-title
+    - img "The three Sasha founders sitting together on a blue sofa."
+    - ul:
+      - link "Tove Oldebäck on LinkedIn" [a[href="https://www.linkedin.com/in/toveoldeb%C3%A4ck/"]]
+      - link "Peter Lindström on LinkedIn" [a[href="https://www.linkedin.com/in/peterlindstrom/"]]
+      - link "Rasmus Widing on LinkedIn" [a[href="https://www.linkedin.com/in/rasmuswiding/"]]
+  - section:
+    - heading "Put Sasha to work on your next hire." [h2] #closing-title
+    - link "Request a demo" [#main-content > section:nth-of-type(8) > div:nth-of-type(2) > a:nth-of-type(1)]
+    - details:
+        - svg 16×16
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [nav a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+problem  too small to tap: a "How she works" [a[href="#how-it-works"]] 131×21
+problem  too small to tap: a "What candidates can expect" [a[href="/about-this-interview"]] 219×21
+problem  too small to tap: a "Talk to us about Sasha" [#trust a[href="mailto:support@sasharec.ai"]] 179×21
+problem  too small to tap: a "Say hello" [nav a[href="mailto:support@sasharec.ai"]] 101×20
+problem  too small to tap: a "Svenska" [footer a[href="/sv"]] 101×20
+problem  too small to tap: a "Service providers" [footer a[href="/sub-processors"]] 108×20
+
+--- /blog @ 390px · 3 problems
+- main: #main-content
+  - section:
+    - heading "Our thinking." [h1]
+  - ul:
+    - link "How good is AI at assessing candidates? How good is AI at assessing candidates? How we think about it, and where we got " [a[href="/blog/how-good-is-ai"]]
+    - link "Can AI interview for hard roles Can AI interview for hard roles? Yes, if the role profile is good. What decides it isn't" [a[href="/blog/can-ai-interview-for-hard-roles"]]
+    - link "What decades of research say about good hiring In 2022, Paul Sackett and colleagues re-ran the best-known analysis in hi" [a[href="/blog/research-say-about-good-hiring"]]
+    - link "The interview I almost stopped I nearly stopped an interview because I thought it had gone off the rails. The candidate " [a[href="/blog/the-interview-i-almost-stopped"]]
+    - link "Candidates have already made up their minds about AI interviews Recruiters worry that AI interviews scare candidates awa" [a[href="/blog/candidates-minds-about-ai-interviews"]]
+    - link "RESEARCH Why your CV is lying to you Years of experience explain less than 1% of how well someone performs in a role. So" [a[href="/blog/why-your-cv-is-lying-to-you"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv/blog"]]
+  - link "Privacy" [a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+problem  too small to tap: a "Svenska" [footer a[href="/sv/blog"]] 101×20
+problem  too small to tap: a "Privacy" [a[href="/privacy"]] 46×20
+problem  too small to tap: a "Service providers" [a[href="/sub-processors"]] 108×20
+
+--- /sv @ 390px · 12 problems
+- link "Hoppa till innehållet" [a[href="#main-content"]]
+- header:
+  - nav "Huvudmeny":
+    - link "Sashas startsida" [nav a[href="/sv"]]
+    - button "Använd mörkt tema" [button[aria-label="Använd mörkt tema"]]
+    - link "Logga in" [header a[href="/login"]]
+    - link "Demo" [nav a[href="/sv/demo"]]
+- main: #main-content
+  - section:
+    - heading "Öppna aldrig ett CV igen." [h1] #hero-title
+    - link "Boka en demo" [#main-content > section:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > a:nth-of-type(1)]
+    - link "Så arbetar hon" [a[href="#how-it-works"]]
+    - figure:
+      - group "Exempel på ett samtal med Sasha":
+      - svg 16×16
+  - section "En rekrytering med Sasha": #customer-proof
+    - figure:
+  - section: #how-it-works
+    - header:
+      - heading "Alla de där screeningsamtalen? Nu är de hennes problem." [h2] #process-title
+    - ol:
+      - heading "Ta reda på vem du faktiskt behöver." [h3]
+      - group "Exempel på en rollprofil":
+        - svg 16×16
+        - heading "Rekryterare" [h4]
+      - heading "Låt alla föra sin talan." [h3]
+      - group "Förhandsvisning av en kandidats röstintervju":
+        - svg 33×33
+        - svg 16×16
+      - heading "Se vad svaren faktiskt säger dig." [h3]
+      - div: #evidence-preview
+        - svg 16×16
+        - heading "Ställa bra frågor" [h4]
+        - details:
+            - svg 16×16
+          - ol:
+            - svg 16×16
+        - svg 16×16
+      - heading "Tänk igenom det. Fatta sedan beslutet." [h3]
+      - group "Illustration av hur du jämför kandidaters belägg och följdfrågor":
+        - heading "Jämför för den här rollen" [h4]
+        - table:
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+          - svg 16×16
+        - svg 16×16
+  - section: #testimonials
+    - heading "Det här säger folk om Sasha." [h2] #testimonials-title
+    - figure:
+    - figure:
+    - figure:
+  - section: #trust
+    - heading "Hon har åsikter. Du har sista ordet." [h2] #trust-title
+    - heading "Belägg du kan granska." [h3]
+    - heading "Luckor du kan se." [h3]
+    - heading "Råd du kan ifrågasätta." [h3]
+    - link "Vad kandidaterna kan förvänta sig" [a[href="/about-this-interview"]]
+    - link "Prata med oss om Sasha" [#trust a[href="mailto:support@sasharec.ai"]]
+  - section: #questions
+    - heading "Rimliga frågor." [h2] #questions-title
+    - heading "Vill kandidater verkligen intervjuas av en AI?" [h3]
+    - heading "Kan kandidater fuska sig igenom intervjun?" [h3]
+    - heading "Vilka roller fungerar hon för?" [h3]
+    - heading "Hur vet jag att bedömningen är rättvis?" [h3]
+    - heading "Vem fattar anställningsbeslutet?" [h3]
+    - heading "Hur lång tid tar det att komma igång?" [h3]
+    - heading "Hur förhåller ni er till GDPR och EU:s AI-förordning?" [h3]
+      - link "vår integritetspolicy" [#questions a[href="/privacy"]]
+      - link "listan över tjänsteleverantörer" [#questions a[href="/sub-processors"]]
+  - section: #founders
+    - heading "Sashas åsikter kommer inte från ingenstans." [h2] #founders-title
+    - img "Sashas tre grundare sitter tillsammans i en blå soffa."
+    - ul:
+      - link "Tove Oldebäck på LinkedIn" [a[href="https://www.linkedin.com/in/toveoldeb%C3%A4ck/"]]
+      - link "Peter Lindström på LinkedIn" [a[href="https://www.linkedin.com/in/peterlindstrom/"]]
+      - link "Rasmus Widing på LinkedIn" [a[href="https://www.linkedin.com/in/rasmuswiding/"]]
+  - section:
+    - heading "Sätt Sasha i arbete med din nästa rekrytering." [h2] #closing-title
+    - link "Boka en demo" [#main-content > section:nth-of-type(8) > div:nth-of-type(2) > a:nth-of-type(1)]
+    - details:
+        - svg 16×16
+- footer:
+  - link "Sashas startsida" [footer a[href="/sv"]]
+  - nav "Sidfotsmeny":
+    - link "Våra tankar" [footer a[href="/sv/blog"]]
+    - link "Logga in" [footer a[href="/login"]]
+    - link "Säg hej" [nav a[href="mailto:support@sasharec.ai"]]
+    - link "English" [footer a[href="/"]]
+  - link "Integritet" [footer a[href="/privacy"]]
+  - link "Villkor" [a[href="/terms"]]
+  - link "PUB-avtal" [a[href="/dpa"]]
+  - link "Tjänsteleverantörer" [footer a[href="/sub-processors"]]
+problem  too small to tap: a "Logga in" [header a[href="/login"]] 57×21
+problem  too small to tap: a "Så arbetar hon" [a[href="#how-it-works"]] 127×21
+problem  too small to tap: a "Vad kandidaterna kan förvänta " [a[href="/about-this-interview"]] 258×21
+problem  too small to tap: a "Prata med oss om Sasha" [#trust a[href="mailto:support@sasharec.ai"]] 193×21
+problem  too small to tap: a "Våra tankar" [footer a[href="/sv/blog"]] 96×20
+problem  too small to tap: a "Logga in" [footer a[href="/login"]] 96×20
+problem  too small to tap: a "Säg hej" [nav a[href="mailto:support@sasharec.ai"]] 96×20
+problem  too small to tap: a "English" [footer a[href="/"]] 96×20
+problem  too small to tap: a "Integritet" [footer a[href="/privacy"]] 55×20
+problem  too small to tap: a "Villkor" [a[href="/terms"]] 38×20
+problem  too small to tap: a "PUB-avtal" [a[href="/dpa"]] 62×20
+problem  too small to tap: a "Tjänsteleverantörer" [footer a[href="/sub-processors"]] 119×20
+
+--- /login @ 390px · 2 problems
+- main: #main-content
+  - heading "Welcome back." [h1]
+  - form:
+    - email "Work email" = "" #email
+    - button "Email me a sign-in code" [button[type=submit]]
+    - link "Terms of Service" [#main-content a[href="/terms"]]
+  - link "Read the privacy policy." [#main-content a[href="/privacy"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [footer a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+problem  too small to tap: a "Terms" [footer a[href="/terms"]] 38×20
+problem  too small to tap: a "Service providers" [a[href="/sub-processors"]] 108×20
+
+--- /demo @ 390px · 3 problems
+- link "Skip to demo request" [a[href="#demo-main"]]
+- main: #demo-main
+  - heading "Let's talk about your next hire." [h1]
+  - link "Meet Sasha first" [#demo-main a[href="/"]]
+  - form:
+    - textbox "Full name" = "" #name
+    - email "Work email" = "" #email
+    - textbox "Job title / role" = "" #details.job_title
+    - textbox "Company name" = "" #company
+    - select = "Choose an option" #details.company_type
+    - select = "Choose an option" #details.company_size
+    - select = "Choose an option" #details.screening_volume
+    - tel "Phone number(optional)" = "" #details.phone
+    - checkbox "Never open a CV again." unchecked #pain-never-open-cv
+    - checkbox "Figure out exactly who I'm actually looking for." unchecked #pain-define-person
+    - checkbox "Tell me whose answers are worth my time — and whose aren't." unchecked #pain-answers-worth-time
+    - checkbox "Hire the right person. Faster. Obviously." unchecked #pain-hire-faster
+    - checkbox "ACTUALLY give every candidate a fair shot." unchecked #pain-fair-shot
+    - checkbox "Make candidates not dread the process." unchecked #pain-candidate-experience
+    - checkbox "Stop burning out my team on screening calls." unchecked #pain-team-burnout
+    - checkbox "Never make a bad hire again." unchecked #pain-avoid-bad-hire
+    - checkbox "Honestly? No idea — but I want Sasha on my team and I'll figure it out from there." unchecked #pain-exploring
+    - textbox "Anything we should know before the demo? (optional)" = "" #details.comment
+    - checkbox "Send me occasional Sasha product updates. Optional. You can request a demo either way." unchecked [input[name="details.product_updates"]]
+    - textbox "Leave this field empty" = "" [input[name="website"]]
+    - button "Request a demo" [button[type=submit]]
+      - link "Read our privacy notice." [form a[href="/privacy"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+    - link "Svenska" [footer a[href="/sv/demo"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [a[href="/sub-processors"]]
+problem  too small to tap: a "Meet Sasha first" [#demo-main a[href="/"]] 136×21
+problem  too small to tap: a "Svenska" [footer a[href="/sv/demo"]] 101×20
+problem  too small to tap: a "Service providers" [a[href="/sub-processors"]] 108×20
+
+--- /about-this-interview @ 390px · 1 problems
+- main: #main-content
+  - article:
+    - heading "How this interview works" [h1]
+    - section:
+      - heading "Who am I talking to?" [h2]
+    - section:
+      - heading "Why an AI, and not a person?" [h2]
+    - section:
+      - heading "How are my answers assessed?" [h2]
+    - section:
+      - heading "What happens to the audio?" [h2]
+    - section:
+      - heading "What if you get something wrong?" [h2]
+    - section:
+      - heading "Can I interrupt, pause, or skip a question?" [h2]
+    - section:
+      - heading "What if I'd rather not do this with an AI?" [h2]
+    - section:
+      - heading "Where do I take questions about my data?" [h2]
+        - link "privacy@sasharec.ai" [a[href="mailto:privacy@sasharec.ai"]]
+        - link "privacy policy" [#main-content a[href="/privacy"]]
+        - link "service providers" [#main-content a[href="/sub-processors"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [footer a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+problem  too small to tap: a "Service providers" [footer a[href="/sub-processors"]] 108×20
+
+--- /privacy @ 390px · 2 problems
+- main: #main-content
+  - article:
+    - header:
+      - heading "Privacy policy" [h1]
+    - section:
+      - heading "Who we are" [h2]
+        - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(1) > p:nth-of-type(1) > a:nth-of-type(1)]
+    - section:
+      - heading "Two roles" [h2]
+      - ul:
+    - section:
+      - heading "If you are a candidate" [h2]
+        - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(3) > p:nth-of-type(7) > a:nth-of-type(1)]
+    - section:
+      - heading "If you use a recruiter account" [h2]
+    - section:
+      - heading "If you request a demo" [h2]
+    - section:
+      - heading "If you visit the website" [h2]
+    - section:
+      - heading "The EU AI Act" [h2]
+    - section:
+      - heading "Where your data goes" [h2]
+        - link "service providers" [#main-content a[href="/sub-processors"]]
+    - section:
+      - heading "Security" [h2]
+    - section:
+      - heading "Your rights" [h2]
+      - ul:
+          - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(10) > ul:nth-of-type(1) > li:nth-of-type(1) > span:nth-of-type(2) > a:nth-of-type(1)]
+          - link "privacy@sasharec.ai" [#main-content > article:nth-of-type(1) > section:nth-of-type(10) > ul:nth-of-type(1) > li:nth-of-type(2) > span:nth-of-type(2) > a:nth-of-type(1)]
+    - section:
+      - heading "Children, changes" [h2]
+    - footer:
+        - link "privacy@sasharec.ai" [footer a[href="mailto:privacy@sasharec.ai"]]
+- footer:
+  - link "Sasha home" [footer a[href="/"]]
+  - nav "Footer navigation":
+    - link "Our thinking" [footer a[href="/blog"]]
+    - link "Sign in" [footer a[href="/login"]]
+    - link "Say hello" [a[href="mailto:support@sasharec.ai"]]
+  - link "Privacy" [a[href="/privacy"]]
+  - link "Terms" [a[href="/terms"]]
+  - link "DPA" [a[href="/dpa"]]
+  - link "Service providers" [footer a[href="/sub-processors"]]
+problem  too small to tap: a "Privacy" [a[href="/privacy"]] 46×20
+problem  too small to tap: a "Service providers" [footer a[href="/sub-processors"]] 108×20
+

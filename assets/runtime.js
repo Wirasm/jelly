@@ -895,20 +895,39 @@
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
   const ACTIVE = "button, a, input, textarea, select, [role=button], img, canvas, svg, video, iframe";
   const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim().replace(/\s+/g, " ").slice(0, 120);
+  // `jelly shot`: the whole page for an agent, with selectors and measured problems.
+  const shotMode = new URLSearchParams(location.search).has("shot");
+  const CONTROL = "button, a[href], input, textarea, select, [role=button]";
+  // The shortest selector an agent can paste into `jelly try` or `--at`: a unique
+  // id, test id, href, name or label before falling back to the element's path.
+  function shortSelector(el) {
+    const tag = el.tagName.toLowerCase(), q = (v) => JSON.stringify(v);
+    const tries = [el.id && "#" + CSS.escape(el.id), el.dataset?.testid && `[data-testid=${q(el.dataset.testid)}]`,
+      tag === "a" && el.getAttribute("href") && `a[href=${q(el.getAttribute("href"))}]`, el.name && `${tag}[name=${q(el.name)}]`,
+      el.getAttribute("aria-label") && `${tag}[aria-label=${q(el.getAttribute("aria-label"))}]`,
+      el.type === "submit" && `${tag}[type=submit]`];
+    for (const s of tries) if (s && document.querySelectorAll(s).length === 1) return s;
+    // Unique within a landmark or id'd ancestor, nearest first, when that is enough.
+    for (let scope = el.parentElement?.closest("[id], header, nav, main, footer, form, aside, section[aria-label]"); scope; scope = scope.parentElement?.closest("[id], header, nav, main, footer, form, aside, section[aria-label]")) {
+      const prefix = scope.id ? "#" + CSS.escape(scope.id) : scope.tagName.toLowerCase();
+      for (const s of tries.slice(2)) if (s && document.querySelectorAll(`${prefix} ${s}`).length === 1) return `${prefix} ${s}`;
+    }
+    return selectorFor(el);
+  }
   function agentSnapshot() {
     const lines = [];
     const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
     const shown = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0"; };
-    const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
+    const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : shotMode && el.matches?.(CONTROL) ? ` [${shortSelector(el)}]` : ""}`);
     (function walk(el, depth) {
       for (const c of el.children) {
-        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
+        if (lines.length > (shotMode ? 1500 : 400) || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
         else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
         else if (tag === "a") add(depth, `link "${label(c)}"`, c);
         else if (tag === "input" && (c.type === "checkbox" || c.type === "radio")) add(depth, `${c.type} "${label(c.closest("label") || c)}" ${c.checked ? "checked" : "unchecked"}`, c);
-        else if (tag === "input" || tag === "textarea") add(depth, `${tag === "textarea" || !c.type || c.type === "text" ? "textbox" : c.type}${c.placeholder ? ` "${c.placeholder}"` : ""} = "${String(c.value).slice(0, 80)}"`, c);
+        else if (tag === "input" || tag === "textarea") { const named = (c.labels?.[0]?.innerText || c.getAttribute("aria-label") || c.placeholder || "").trim().replace(/\s+/g, " ").slice(0, 60); add(depth, `${tag === "textarea" || !c.type || c.type === "text" ? "textbox" : c.type}${named ? ` "${named}"` : ""} = "${String(c.value).slice(0, 80)}"`, c); }
         else if (tag === "select") add(depth, `select = "${c.options[c.selectedIndex]?.text || ""}"`, c);
         else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
         else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
@@ -927,7 +946,48 @@
         else walk(c, depth);
       }
     })(document.body, 0);
+    if (shotMode) lines.push(...shotReport());
     return lines.join("\n");
+  }
+
+  // Problems a browser can measure and a screenshot hides, at most a few of each kind.
+  function shotReport() {
+    const out = [], W = innerWidth, cap = (kind, items) => {
+      for (const item of items.slice(0, 12)) out.push(`problem  ${kind}: ${item}`);
+      if (items.length > 12) out.push(`problem  ${kind}: +${items.length - 12} more`);
+    };
+    const mine = (e) => !e.closest(OURS);
+    // Left out on purpose by the app: screen-reader-only text (a 1px box), aria-hidden
+    // parts and fields kept out of tab order (honeypots).
+    const visible = (e) => { const r = e.getBoundingClientRect(), cs = getComputedStyle(e); return r.width > 2 && r.height > 2 && cs.visibility !== "hidden" && cs.opacity !== "0" && !e.closest("[aria-hidden=true]") && !(e.matches(CONTROL) && e.tabIndex < 0); };
+    const all = [...document.body.querySelectorAll("*")].filter(mine);
+    const sw = document.documentElement.scrollWidth;
+    if (sw > W + 1) {
+      const wide = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > W + 1 && getComputedStyle(e).position !== "fixed"; });
+      cap(`wider than the screen (${sw}px at ${W}px)`, wide.filter((e) => !wide.includes(e.parentElement)).map((e) => `${shortSelector(e)} to ${Math.round(e.getBoundingClientRect().right)}px`));
+    }
+    const controls = [...document.querySelectorAll(CONTROL)].filter(mine).filter(visible);
+    const off = [], covered = [], small = [], unlabeled = [];
+    for (const c of controls) {
+      const r = c.getBoundingClientRect(), name = `${c.tagName.toLowerCase()} "${(c.getAttribute("aria-label") || c.innerText || c.value || c.placeholder || "").trim().slice(0, 30)}" [${shortSelector(c)}]`;
+      if (r.right > W + 1 || r.left < -1) { off.push(name); continue; }
+      const p = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (p && !c.contains(p) && !p.contains(c) && mine(p)) covered.push(`${name} under ${shortSelector(p)}`);
+      // A labelled checkbox or radio is tapped through its label, so its own box can be small.
+      const viaLabel = c.matches("input[type=checkbox], input[type=radio]") && c.labels?.length;
+      if (W < 600 && !viaLabel && getComputedStyle(c).display !== "inline" && (r.width < 24 || r.height < 24)) small.push(`${name} ${Math.round(r.width)}×${Math.round(r.height)}`);
+      if (c.matches("input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea") && !c.labels?.length && !c.getAttribute("aria-label") && !c.getAttribute("aria-labelledby")) unlabeled.push(name);
+    }
+    cap("off the screen", off);
+    cap("covered by another element", covered);
+    cap("too small to tap", small);
+    cap("field without a label", unlabeled);
+    cap("image without alt", [...document.images].filter(mine).filter(visible).filter((i) => !i.hasAttribute("alt")).map((i) => `${shortSelector(i)} ${(i.currentSrc || i.src).split("/").pop().slice(0, 40)}`));
+    cap("text cut off", all.filter((e) => !e.children.length && e.textContent.trim() && visible(e) && e.scrollWidth > e.clientWidth + 1 && ["hidden", "clip"].includes(getComputedStyle(e).overflowX)).map((e) => `${shortSelector(e)} "${e.textContent.trim().slice(0, 30)}"`));
+    cap("failed request", performance.getEntriesByType("resource").filter((r) => r.responseStatus >= 400).map((r) => `${r.responseStatus} ${r.name.replace(location.origin, "")}`));
+    const links = [...new Set([...document.querySelectorAll("a[href]")].filter(mine).map((a) => new URL(a.href, location.href)).filter((u) => u.origin === location.origin && !u.pathname.startsWith("/__jelly")).map((u) => u.pathname))];
+    out.push(`links    ${links.join(" ")}`);
+    return out;
   }
   // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {

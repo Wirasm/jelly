@@ -250,6 +250,24 @@ enum Cmd {
         #[arg(skip)]
         steps: Vec<Value>,
     },
+    /// The whole app for an agent in one go (spike): every page at desktop and
+    /// phone width, full height, controls with selectors, shared parts once, and
+    /// problems the browser measured.
+    Shot {
+        name: String,
+        /// Pages to take; repeat. Default: / and the pages it links to.
+        #[arg(long = "route")]
+        routes: Vec<String>,
+        /// Widths, comma separated.
+        #[arg(long, default_value = "1280,390")]
+        widths: String,
+        /// Most pages to follow from / when no --route is given.
+        #[arg(long, default_value_t = 6)]
+        max: usize,
+        /// Include the pages' body text, not just headings, controls and problems.
+        #[arg(long)]
+        text: bool,
+    },
     /// Put jelly on top of a running app (spike): comments, questions and `see`
     /// on the real thing. Prints the address to open.
     Wrap {
@@ -578,6 +596,75 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             report(ev)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
+            }
+            Ok(())
+        }
+        Cmd::Shot { name, routes, widths, max, text } => {
+            let name = id(&name)?;
+            let widths: Vec<u32> = widths.split(',').filter_map(|w| w.trim().parse().ok()).collect();
+            let take = |route: &str, width: u32| -> Result<String, String> {
+                let url = api(&format!("/{name}/see?width={width}&height=3000&route={}&shot=true", encode(route)));
+                let text = ureq::get(&url).timeout(std::time::Duration::from_secs(90)).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?;
+                // Only the page part: from "on screen" on, plus any page errors.
+                let errors: Vec<&str> = text.lines().filter(|l| l.starts_with("error ")).collect();
+                let page = text.split_once("\non screen").map(|(_, p)| p.split_once('\n').map_or("", |(_, rest)| rest)).unwrap_or("");
+                Ok(errors.iter().map(|e| format!("{e}\n")).collect::<String>() + page)
+            };
+            let mut routes = routes;
+            if routes.is_empty() {
+                let home = take("/", widths[0])?;
+                routes.push("/".into());
+                if let Some(links) = home.lines().find_map(|l| l.strip_prefix("links    ")) {
+                    for l in links.split_whitespace() {
+                        if routes.len() > max { break; }
+                        if !routes.iter().any(|r| r == l) { routes.push(l.to_string()); }
+                    }
+                }
+            }
+            // Top-level blocks of an outline: a line at column 0 and everything indented under it.
+            let blocks = |page: &str| -> Vec<String> {
+                let mut out: Vec<String> = Vec::new();
+                // Brief by default: headings, controls and structure; body text only with --text.
+                for line in page.lines().filter(|l| !l.starts_with("problem ") && !l.starts_with("links ") && !l.starts_with("error "))
+                    .filter(|l| text || !l.trim_start().starts_with("- text \"")) {
+                    if line.starts_with("- ") || out.is_empty() { out.push(line.to_string()); } else if let Some(last) = out.last_mut() { last.push('\n'); last.push_str(line); }
+                }
+                out
+            };
+            for &width in &widths {
+                let pages: Vec<(String, String)> = routes.iter().map(|r| take(r, width).map(|p| (r.clone(), p))).collect::<Result<_, _>>()?;
+                // Header, nav and footer that most pages share are printed once, with the pages
+                // that differ named, so a translated or logged-in variant does not undo it.
+                let mut shared: Vec<String> = Vec::new();
+                for (_, p) in &pages {
+                    for b in blocks(p) {
+                        if !shared.contains(&b) && pages.iter().filter(|(_, q)| blocks(q).contains(&b)).count() * 2 > pages.len() && pages.len() > 1 { shared.push(b); }
+                    }
+                }
+                output(format_args!("=== {width}px · {} pages\n", pages.len()))?;
+                for b in &shared {
+                    let without: Vec<&str> = pages.iter().filter(|(_, q)| !blocks(q).contains(b)).map(|(r, _)| r.as_str()).collect();
+                    let head = if without.is_empty() { "on every page".to_string() } else { format!("on every page except {}", without.join(", ")) };
+                    output(format_args!("{head}:\n{b}\n"))?;
+                }
+                // Problems every page shares (usually the header or footer) are printed once too.
+                let problems_of = |p: &str| -> Vec<String> { p.lines().filter(|l| l.starts_with("problem ") || l.starts_with("error ")).map(String::from).collect() };
+                let mut common: Vec<String> = Vec::new();
+                for (_, p) in &pages {
+                    for x in problems_of(p) {
+                        if !common.contains(&x) && pages.len() > 1 && pages.iter().filter(|(_, q)| problems_of(q).contains(&x)).count() * 2 > pages.len() { common.push(x); }
+                    }
+                }
+                if !common.is_empty() {
+                    output(format_args!("on most pages:\n{}\n", common.join("\n")))?;
+                }
+                for (route, page) in &pages {
+                    let own: Vec<String> = blocks(page).into_iter().filter(|b| !shared.contains(b)).collect();
+                    let problems: Vec<String> = problems_of(page).into_iter().filter(|x| !common.contains(x)).collect();
+                    output(format_args!("\n--- {route} @ {width}px{}\n{}\n{}", if problems.is_empty() { " · no problems found".to_string() } else { format!(" · {} problems", problems.len()) },
+                        own.join("\n"), problems.iter().map(|p| format!("{p}\n")).collect::<String>()))?;
+                }
+                output(format_args!("\n"))?;
             }
             Ok(())
         }
