@@ -60,3 +60,35 @@ fn share_defaults_outside_the_working_directory() {
     assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0);
     assert!(tmp.path().join("jelly-share/s.html").exists(), "{}", String::from_utf8_lossy(&out.stdout));
 }
+
+/// An asset added by mistake can be removed, and `see --poster` turns the
+/// screenshot into the jelly page's thumbnail in one step.
+#[test]
+fn assets_can_be_removed_and_posters_come_from_see() {
+    let home = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let d = daemon(home.path());
+    ureq::post(&format!("{}/api/jellies", d.1))
+        .send_json(json!({"name": "t:a", "view": "<p id=\"x\">hi</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}))
+        .unwrap();
+    let jelly = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1]).args(args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let assets = || -> Vec<String> { ureq::get(&format!("{}/api/jellies/t:a/assets", d.1)).call().unwrap().into_json().unwrap() };
+    let wrong = files.path().join("wrong.png");
+    std::fs::write(&wrong, b"not the right file").unwrap();
+    jelly(&["asset", "t:a", wrong.to_str().unwrap()]);
+    assert_eq!(assets(), ["wrong.png"]);
+    assert_eq!(jelly(&["asset", "t:a", "--rm", "wrong.png"]), "removed assets/wrong.png\n");
+    assert!(assets().is_empty());
+    let missing = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "asset", "t:a", "--rm", "wrong.png"]).output().unwrap();
+    assert!(!missing.status.success());
+    jelly(&["see", "t:a", "--poster"]);
+    assert_eq!(assets(), ["poster.png"]);
+    let poster = ureq::get(&format!("{}/j/t:a/assets/poster.png", d.1)).call().unwrap();
+    let mut png = Vec::new();
+    std::io::Read::read_to_end(&mut poster.into_reader(), &mut png).unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+}

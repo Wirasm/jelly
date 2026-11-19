@@ -208,6 +208,9 @@ enum Cmd {
         /// Print only what needs fixing: errors the page threw and `!` warnings.
         #[arg(long)]
         problems: bool,
+        /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
+        #[arg(long)]
+        poster: bool,
     },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
@@ -277,6 +280,9 @@ enum Cmd {
         name: String,
         #[arg(required = true)]
         files: Vec<PathBuf>,
+        /// Remove these assets (by name) instead of adding files.
+        #[arg(long)]
+        rm: bool,
     },
     /// Write a read-only snapshot of a jelly as one HTML file you can send
     /// anyone: state baked in, assets inlined.
@@ -663,10 +669,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
-        Cmd::See { name, width, png, full, problems } => {
+        Cmd::See { name, width, png, full, problems, poster } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
-            if png || full { q.push("png=true".into()); }
+            if png || full || poster { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
             // A jelly that changes while it renders (a live log, a monitor) answers 409;
@@ -679,6 +685,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 }
             };
             let text = resp.into_string().map_err(|e| e.to_string())?;
+            if poster {
+                let shot = text.lines().find_map(|l| l.strip_prefix("png ")).map(str::trim)
+                    .ok_or("no screenshot to use as the poster; see the `!` lines")?;
+                let bytes = std::fs::read(shot).map_err(|e| format!("{shot}: {e}"))?;
+                ureq::post(&api(&format!("/{}/assets/poster.png?by={}", id(&name)?, encode(&by))))
+                    .set("content-type", "application/octet-stream")
+                    .send_bytes(&bytes)
+                    .map_err(describe)?;
+            }
             if problems {
                 let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
                 output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
@@ -757,7 +772,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name)?)), json!({"by": by}))?),
         Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name)?)), json!({"by": by}))?),
-        Cmd::Asset { name, files } => {
+        Cmd::Asset { name, files, rm: true } => {
+            for f in files {
+                let file = f.to_string_lossy();
+                ureq::delete(&api(&format!("/{}/assets/{}?by={}", id(&name)?, encode(&file), encode(&by)))).call().map_err(describe)?;
+                output(format_args!("removed assets/{file}\n"))?;
+            }
+            Ok(())
+        }
+        Cmd::Asset { name, files, rm: false } => {
             let added = add_assets(&api(&format!("/{}", id(&name)?)), &files, &by)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
