@@ -57,6 +57,9 @@ pub struct Jelly {
     pub view_rev: u64,
     pub pinned: bool,
     pub made_by: String,
+    /// Who last reshaped it, if anyone. With `made_by` this says whose jelly it is (`owner`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaped_by: Option<String>,
     pub updated_ms: u64,
     /// When the agent made it; the surface's stream is in this order.
     #[serde(default)]
@@ -348,6 +351,10 @@ pub struct InboxRequest {
     #[serde(default)]
     pub project: String,
     pub reader: InboxReader,
+    /// Only events on jellies this agent owns (`Jelly::owner`). A filtered read
+    /// keeps its own cursor, so it never moves an unfiltered reader past events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mine: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -384,8 +391,16 @@ impl From<Event> for InboxItem {
 struct InboxCursor {
     project: String,
     reader: InboxReader,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mine: Option<String>,
     #[serde(flatten)]
     position: InboxPosition,
+}
+
+impl InboxCursor {
+    fn matches(&self, req: &InboxRequest) -> bool {
+        self.project == req.project && self.reader == req.reader && self.mine == req.mine
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -660,6 +675,7 @@ impl Store {
             view_rev: 1,
             pinned,
             made_by: by.into(),
+            shaped_by: None,
             updated_ms: now_ms(),
             created_ms: now_ms(),
             about: about.trim().into(),
@@ -702,6 +718,7 @@ impl Store {
         }
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
+        entry.jelly.shaped_by = Some(by.into());
         if let Some(a) = about {
             entry.jelly.about = a.trim().into();
         }
@@ -1259,27 +1276,30 @@ impl Store {
         }
     }
 
-    pub fn read_inbox(&self, project: &str, reader: &InboxReader) -> Result<InboxBatch, Error> {
-        self.read_inbox_at(project, reader, now_ms())
+    pub fn read_inbox(&self, req: &InboxRequest) -> Result<InboxBatch, Error> {
+        self.read_inbox_at(req, now_ms())
     }
 
-    fn read_inbox_at(&self, project: &str, reader: &InboxReader, at_ms: u64) -> Result<InboxBatch, Error> {
+    fn read_inbox_at(&self, req: &InboxRequest, at_ms: u64) -> Result<InboxBatch, Error> {
+        let InboxRequest { project, reader, mine } = req;
+        let wanted = |event: &Event| event.is_inbox_item(project)
+            && mine.as_ref().is_none_or(|m| self.jellies.get(&event.jelly).is_some_and(|e| e.jelly.owner() == m));
         let read = || -> std::io::Result<InboxBatch> {
             let mut cursors = self.inbox_cursors()?;
-            let existing = cursors.iter().find(|c| c.project == project && &c.reader == reader);
+            let existing = cursors.iter().find(|c| c.matches(req));
             let initial = InboxPosition::Recent { since_ms: at_ms.saturating_sub(3_600_000) };
             let position = existing.map_or(&initial, |c| &c.position);
             let mut through = match position { InboxPosition::After { seq } => *seq, InboxPosition::Recent { .. } => self.seq };
             let events = match position {
                 InboxPosition::Recent { since_ms } => self.events_since(*since_ms)?.into_iter()
-                    .filter(|event| event.is_inbox_item(project)).map(InboxItem::from).collect(),
+                    .filter(|event| wanted(event)).map(InboxItem::from).collect(),
                 InboxPosition::After { seq } => {
                     let mut events = Vec::new();
                     self.events_back(|line| {
                         let event: Event = serde_json::from_str(line)?;
                         through = through.max(event.seq);
                         if event.seq <= *seq { return Ok(false); }
-                        if event.is_inbox_item(project) { events.push(event.into()); }
+                        if wanted(&event) { events.push(event.into()); }
                         Ok(true)
                     })?;
                     events.reverse();
@@ -1288,7 +1308,7 @@ impl Store {
             };
             if existing.is_none() {
                 // Fix the initial window so an unacknowledged response can be retried even an hour later.
-                cursors.push(InboxCursor { project: project.into(), reader: reader.clone(), position: initial });
+                cursors.push(InboxCursor { project: project.clone(), reader: reader.clone(), mine: mine.clone(), position: initial });
                 write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)?;
             }
             Ok(InboxBatch { events, through })
@@ -1299,15 +1319,15 @@ impl Store {
     pub fn commit_inbox(&mut self, req: InboxCommit) -> Result<(), Error> {
         let commit = || -> std::io::Result<()> {
             let mut cursors = self.inbox_cursors()?;
-            let InboxRequest { project, reader } = req.inbox;
-            if let Some(cursor) = cursors.iter_mut().find(|c| c.project == project && c.reader == reader) {
+            if let Some(cursor) = cursors.iter_mut().find(|c| c.matches(&req.inbox)) {
                 let seq = match cursor.position {
                     InboxPosition::After { seq } => seq.max(req.through),
                     InboxPosition::Recent { .. } => req.through,
                 };
                 cursor.position = InboxPosition::After { seq };
             } else {
-                cursors.push(InboxCursor { project, reader, position: InboxPosition::After { seq: req.through } });
+                let InboxRequest { project, reader, mine } = req.inbox;
+                cursors.push(InboxCursor { project, reader, mine, position: InboxPosition::After { seq: req.through } });
             }
             write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)
         };
@@ -1533,6 +1553,12 @@ impl Jelly {
     pub fn project(&self) -> &str {
         self.name.split_once(':').map_or("", |(p, _)| p)
     }
+
+    /// The agent whose jelly this is: whoever last reshaped it, else its maker.
+    /// `--mine` keeps what happened on jellies whose owner is the reader's `--as` name.
+    pub fn owner(&self) -> &str {
+        self.shaped_by.as_deref().unwrap_or(&self.made_by)
+    }
 }
 
 /// Collects the JSON pointers (RFC 6901) where `a` and `b` differ.
@@ -1720,9 +1746,17 @@ mod tests {
         }
     }
 
+    fn req(project: &str, reader: &InboxReader) -> InboxRequest {
+        InboxRequest { project: project.into(), reader: reader.clone(), mine: None }
+    }
+
     fn consume_inbox(s: &mut Store, project: &str, reader: InboxReader) -> Result<Vec<Event>, Error> {
-        let batch = s.read_inbox(project, &reader)?;
-        s.commit_inbox(InboxCommit { inbox: InboxRequest { project: project.into(), reader }, through: batch.through })?;
+        consume(s, req(project, &reader))
+    }
+
+    fn consume(s: &mut Store, inbox: InboxRequest) -> Result<Vec<Event>, Error> {
+        let batch = s.read_inbox(&inbox)?;
+        s.commit_inbox(InboxCommit { inbox, through: batch.through })?;
         Ok(batch.events.into_iter().map(|item| item.event).collect())
     }
 
@@ -1919,7 +1953,7 @@ mod tests {
         assert!(!s.events_path().exists());
         assert!(s.events_since(0).unwrap().is_empty());
         let reader = InboxReader::Named { name: "new".into() };
-        let batch = s.read_inbox("p", &reader).unwrap();
+        let batch = s.read_inbox(&req("p", &reader)).unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.through, 0);
     }
@@ -1949,21 +1983,51 @@ mod tests {
         let last_start = saved[..saved.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
         damaged[last_start] = 0xff;
         fs::write(&path, damaged).unwrap();
-        let first = s.read_inbox_at("p", &reader, first_read_at).unwrap();
+        let first = s.read_inbox_at(&req("p", &reader), first_read_at).unwrap();
         assert_eq!(first.events.iter().map(|item| item.event.seq).collect::<Vec<_>>(), [2, 3]);
         let retry_at = first_read_at + 3_600_001;
         let expected = serde_json::to_value(&first).unwrap();
-        assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(s.read_inbox_at(&req("p", &reader), retry_at).unwrap()).unwrap(), expected);
         let empty_reader = InboxReader::Named { name: "empty".into() };
-        assert!(s.read_inbox_at("p", &empty_reader, retry_at).unwrap().events.is_empty());
+        assert!(s.read_inbox_at(&req("p", &empty_reader), retry_at).unwrap().events.is_empty());
         fs::write(&path, saved).unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
-        assert_eq!(serde_json::to_value(s.read_inbox_at("p", &reader, retry_at).unwrap()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(s.read_inbox_at(&req("p", &reader), retry_at).unwrap()).unwrap(), expected);
         let new_reader = InboxReader::Named { name: "new".into() };
-        assert!(s.read_inbox_at("p", &new_reader, retry_at).unwrap().events.is_empty());
-        s.commit_inbox(InboxCommit { inbox: InboxRequest { project: "p".into(), reader: reader.clone() }, through: first.through }).unwrap();
-        assert!(s.read_inbox_at("p", &reader, retry_at).unwrap().events.is_empty());
+        assert!(s.read_inbox_at(&req("p", &new_reader), retry_at).unwrap().events.is_empty());
+        s.commit_inbox(InboxCommit { inbox: req("p", &reader), through: first.through }).unwrap();
+        assert!(s.read_inbox_at(&req("p", &reader), retry_at).unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn inbox_mine_shows_each_agent_its_own_jellies_without_moving_the_full_inbox() {
+        let (_dir, mut s) = store();
+        for (name, agent) in [("a", "ana"), ("b", "bo")] {
+            s.create(name, "".into(), VERBS.into(), json!({"labels": {}}), agent, false, "", "p").unwrap();
+        }
+        let named = |name: &str| InboxReader::Named { name: name.into() };
+        let mine = |agent: &str| InboxRequest { mine: Some(agent.into()), ..req("p", &named(agent)) };
+        let jellies = |events: Vec<Event>| events.into_iter().map(|e| e.jelly).collect::<Vec<_>>();
+        for agent in ["ana", "bo"] {
+            consume(&mut s, mine(agent)).unwrap();
+            consume_inbox(&mut s, "p", named(agent)).unwrap();
+        }
+        s.call("p:a", "label", json!({"id": "x", "value": "1"}), PERSON).unwrap();
+        s.call("p:b", "label", json!({"id": "y", "value": "2"}), PERSON).unwrap();
+
+        assert_eq!(jellies(consume(&mut s, mine("ana")).unwrap()), ["p:a"]);
+        assert_eq!(jellies(consume(&mut s, mine("bo")).unwrap()), ["p:b"]);
+        assert!(consume(&mut s, mine("ana")).unwrap().is_empty());
+        // The filtered read kept its own cursor: the full inbox still has both.
+        assert_eq!(jellies(consume_inbox(&mut s, "p", named("ana")).unwrap()), ["p:a", "p:b"]);
+
+        // Reshaping hands the jelly to the reshaper.
+        s.reshape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
+        s.call("p:a", "label", json!({"id": "z", "value": "3"}), PERSON).unwrap();
+        assert!(consume(&mut s, mine("ana")).unwrap().is_empty());
+        assert_eq!(jellies(consume(&mut s, mine("bo")).unwrap()), ["p:a"]);
+        assert_eq!(jellies(consume_inbox(&mut s, "p", named("ana")).unwrap()), ["p:a"]);
     }
 
     #[test]

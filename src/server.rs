@@ -248,7 +248,7 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
         .filter(|j| j.name != PAGE)
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
-            "pinned": j.pinned, "made_by": j.made_by, "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
+            "pinned": j.pinned, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
@@ -826,7 +826,7 @@ fn inbox_item(event: Event) -> Value {
 }
 
 async fn read_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<InboxBatch>, ApiError> {
-    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req.project, &req.reader)?))
+    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req)?))
 }
 
 async fn commit_inbox(State(app): State<Shared>, Json(req): Json<InboxCommit>) -> Result<Json<Value>, ApiError> {
@@ -952,6 +952,8 @@ struct ProjectQ {
     /// List answered items instead of open ones: the decision record.
     #[serde(default)]
     answered: bool,
+    /// Only jellies this agent owns (`Jelly::owner`).
+    mine: Option<String>,
 }
 
 /// Everything open for the person, newest first; with `answered=true`, every
@@ -960,7 +962,9 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
     let mut items: Vec<Value> = Vec::new();
-    for j in store.list().filter(|j| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)) {
+    let wanted = |j: &&crate::store::Jelly| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)
+        && q.mine.as_deref().is_none_or(|m| j.owner() == m);
+    for j in store.list().filter(wanted) {
         for a in j.attention.iter().filter(|a| if q.answered { a.answer.is_some() } else { a.is_open() }) {
             let mut v = serde_json::to_value(a).expect("serializes");
             v["jelly"] = json!(j.name);
@@ -1286,7 +1290,8 @@ where
     // only the event that made this version says who made the last change.
     let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
     let last = format!(" · last change {}{by}", ago(j.updated_ms));
-    line(&mut out, format!("{} · {} · v{} · made by {}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
+    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · reshaped by {s}")).unwrap_or_default();
+    line(&mut out, format!("{} · {} · v{} · made by {}{shaped}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
         if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
     for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
@@ -2382,6 +2387,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attention_and_owner_follow_the_maker_or_last_reshaper() {
+        let (_dir, app) = app();
+        {
+            let mut store = app.store.lock().unwrap();
+            for (name, agent) in [("a", "ana"), ("b", "bo")] {
+                store.create(name, "".into(), "const verbs = {};".into(), json!({}), agent, false, "", "p").unwrap();
+                store.attend(&format!("p:{name}"), json!({"title": format!("Which {name}?")}), agent).unwrap();
+            }
+        }
+        let asked = |mine: Option<&str>| {
+            let app = app.clone();
+            let mine = mine.map(String::from);
+            async move {
+                let q = ProjectQ { project: Some("p".into()), answered: false, mine };
+                attention_list(State(app), Query(q)).await.0.as_array().unwrap().iter()
+                    .map(|i| i["jelly"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(asked(Some("ana")).await, ["p:a"]);
+        assert_eq!(asked(Some("bo")).await, ["p:b"]);
+        assert_eq!(asked(None).await.len(), 2);
+
+        app.store.lock().unwrap().reshape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
+        assert!(asked(Some("ana")).await.is_empty());
+        let owners: Vec<_> = list(State(app.clone())).await.0.as_array().unwrap().iter()
+            .map(|j| (j["name"].as_str().unwrap().to_string(), j["owner"].as_str().unwrap().to_string())).collect();
+        assert!(owners.contains(&("p:a".into(), "bo".into())) && owners.contains(&("p:b".into(), "bo".into())));
+    }
+
+    #[tokio::test]
     async fn asset_inventory_is_sorted_read_only_and_requires_a_jelly() {
         let (dir, app) = app();
         let missing = list_assets(State(app.clone()), Path("test:missing".into())).await.unwrap_err();
@@ -2819,7 +2854,7 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());
         let reader = crate::store::InboxReader::Named { name: "unreadable".into() };
-        assert!(app.store.lock().unwrap().read_inbox("test", &reader).is_err());
+        assert!(app.store.lock().unwrap().read_inbox(&crate::store::InboxRequest { project: "test".into(), reader, mine: None }).is_err());
     }
 
     #[test]

@@ -123,6 +123,10 @@ The non-consuming POST `/api/inbox` accepts `{ "project": "...", "reader": ... }
 with reader forms `{ "kind": "named", "name": "..." }`,
 `{ "kind": "conversation", "id": "..." }`, or
 `{ "kind": "parent", "pid": 123, "start_time": 456 }` (Unix seconds).
+An optional `"mine": "<name>"` keeps only events on jellies that name owns (made,
+or last reshaped, under it); `jelly inbox --mine` sends it. A filtered read keeps
+its own progress, apart from the same reader's unfiltered one, so it never moves
+an unfiltered read past events.
 Omitting `project` or using an empty string reads all projects. The response is
 `{ "events": [...], "through": 123 }`; events include `text`. The first read
 registers a fixed one-hour starting window, so uncommitted events remain available
