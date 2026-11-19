@@ -1138,7 +1138,11 @@ async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, 
     // The phone frame is scaled up to 500px wide, so the window grows with it.
     let height = if width < 500 { (height as f64 * 500.0 / width.max(1) as f64).ceil() as u32 } else { height };
     let width = width.max(500);
-    let profile = std::env::temp_dir().join("jelly-chrome");
+    // Chrome refuses a profile another Chrome is using (exit 21), so each render
+    // gets its own. A fresh profile starts as fast as a used one.
+    static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let profile = std::env::temp_dir().join(format!("jelly-chrome-{}-{n}", std::process::id()));
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         .arg(format!("--user-data-dir={}", profile.display()))
@@ -1152,7 +1156,10 @@ async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, 
         None => { cmd.arg("--dump-dom"); }
     }
     let run = cmd.arg(url).status();
-    match tokio::time::timeout(limit, run).await {
+    let result = tokio::time::timeout(limit, run).await;
+    // Best effort: a leftover folder in the temp dir harms nothing.
+    let _ = tokio::fs::remove_dir_all(&profile).await;
+    match result {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => Err(format!("the browser failed ({status})")),
         Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
