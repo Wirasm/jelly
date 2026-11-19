@@ -227,6 +227,12 @@ enum Cmd {
     /// the browser measured in light and dark mode.
     ///
     /// --json prints {jelly, version, summary, problems, png, outline}.
+    ///
+    /// `--compare v12` shows what changed since version 12 (or since a version
+    /// kept with `--save NAME`): the outline lines added, removed or changed, the
+    /// problems that are new or fixed, and one png with before and after side by
+    /// side. Its --json prints {jelly, version, against, against_version, summary,
+    /// problems, new_problems, fixed_problems, png, added, removed, changed}.
     See {
         name: String,
         /// Render at this width (390 for a phone). Default: 1280.
@@ -244,6 +250,14 @@ enum Cmd {
         /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
         #[arg(long)]
         poster: bool,
+        /// Compare with an earlier version, `v12`, or one kept with --save. Earlier
+        /// versions come from the undo history, back to the last undo.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["png", "full", "poster"])]
+        compare: Option<String>,
+        /// Keep this version under a name, to --compare with later. It is kept
+        /// outside the jelly, so the jelly does not change.
+        #[arg(long, value_name = "NAME")]
+        save: Option<String>,
     },
     /// Use a jelly as the person would, without changing it: do the steps in
     /// order, then print what is on screen, the verbs that ran and what they
@@ -846,8 +860,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
-        Cmd::See { name, width, png, full, problems, poster } => {
+        Cmd::See { name, width, png, full, problems, poster, compare, save } => {
             let mut q = vec![];
+            if let Some(c) = &compare { q.push(format!("compare={}", encode(c))); }
+            if let Some(s) = &save { q.push(format!("save={}", encode(s))); }
             if let Some(w) = width { q.push(format!("width={w}")); }
             if png || full || poster { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
