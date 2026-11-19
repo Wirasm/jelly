@@ -42,19 +42,20 @@ V
 # Milliseconds since the epoch; `date +%s%N` is GNU only.
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
 median() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
-# One step. Sets MS, RESULT (pass, slow or fail), LABEL and REPLY.
+# One step. Sets MS, RESULT (pass, slow or fail), LABEL, WANT and REPLY.
 step() {
-  local at want start out id
-  if (( $1 % 2 )); then at="#list"; want="it shows on the page below #list"; else at="#nope"; want="#nope matches nothing on the page"; fi
+  local at start out id
+  # The ask's `anchor` says where the daemon found the card shows.
+  if (( $1 % 2 )); then at="#list"; WANT="below"; else at="#nope"; WANT="missing"; fi
   start=$(now_ms)
-  out=$("$J" ask monitor-target "Run $1: which first?" --option a=Write --option b=Ship --at "$at" 2>&1)
+  out=$("$J" ask monitor-target "Run $1: which first?" --option a=Write --option b=Ship --at "$at" --json 2>&1)
   MS=$(( $(now_ms) - start ))
-  REPLY=${out#*; }; REPLY=${REPLY%. Answers arrive*}
-  id=$(sed -n 's/.*asked \(a[0-9]*\) .*/\1/p' <<<"$out")
+  REPLY=$(jq -r '.anchor // "not checked: \(.anchor_unchecked)"' <<<"$out" 2>/dev/null) || REPLY=$out
+  id=$(jq -r '.args.id // empty' <<<"$out" 2>/dev/null)
   [ -n "$id" ] && "$J" withdraw monitor-target "$id" >/dev/null 2>&1
   # The person's limit decides what counts as slow: moving it steers the run.
   LIMIT=$(read_state /metrics/0/threshold/value)
-  if [[ "$out" != *"$want"* ]]; then RESULT=fail
+  if [ "$REPLY" != "$WANT" ]; then RESULT=fail
   elif [ -n "$LIMIT" ] && [ "$MS" -gt "${LIMIT%.*}" ]; then RESULT=slow
   else RESULT=pass; fi
   LABEL="run $1 · --at $at · $MS ms"
@@ -83,7 +84,7 @@ for i in $(seq 1 "$TOTAL"); do
     FAILS=$(( FAILS + 1 ))
     if [ "$WRONG" -eq 0 ]; then
       call flag "$(printf '{"title":"Run %s: the reply was wrong","text":"It answered in %s ms, about an anchor that %s. Later wrong replies are in the log.","metric":"latency","v":%s,"show":{"labels":["should say","said"],"before":"%s","after":"%s"}}' \
-        "$i" "$MS" "$( (( i % 2 )) && echo exists || echo "does not exist")" "$MS" "$( (( i % 2 )) && echo "it shows on the page below #list" || echo "#nope matches nothing on the page, so it shows at the top")" "${REPLY//\"/\\\"}")"
+        "$i" "$MS" "$( (( i % 2 )) && echo exists || echo "does not exist")" "$MS" "$WANT" "${REPLY//\"/\\\"}")"
     fi
     WRONG=1
     call log "{\"text\":\"run $i: wrong reply in $MS ms: ${REPLY//\"/\\\"}\",\"level\":\"bad\"}"

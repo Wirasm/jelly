@@ -1228,10 +1228,14 @@ struct SeeQ {
     /// The whole page, not just the first screen.
     #[serde(default)]
     full: bool,
+    /// Answer with JSON instead of text.
+    #[serde(default)]
+    json: bool,
 }
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
-/// what the person did, what waits on them, and what is on screen.
+/// what the person did, what waits on them, and what is on screen. With
+/// `json`, the same split into the summary, the problem lines and the outline.
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
     let render_name = name.clone();
@@ -1323,6 +1327,8 @@ where
         line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
     }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
+    // Everything from here to the outline is a problem line.
+    let problems_from = out.len();
     if let Some(sc) = &snap {
         for e in &sc.errors { line(&mut out, format!("error    {e}")); }
         let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
@@ -1344,6 +1350,15 @@ where
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    if q.json {
+        return Ok(Json(json!({
+            "jelly": j.name, "version": j.version,
+            "summary": &out[..problems_from],
+            "problems": out[problems_from..].lines().collect::<Vec<_>>(),
+            "png": png,
+            "outline": snap.map(|s| s.text),
+        })).into_response());
+    }
     if let Some(s) = snap {
         line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
         out.push_str(&s.text);
@@ -1383,9 +1398,22 @@ struct Trial {
     state: Value,
     version: u64,
     steps: Vec<TryStep>,
-    /// What each verb call did, one line each.
-    calls: Vec<String>,
+    calls: Vec<TrialCall>,
     result: Option<TrialResult>,
+}
+
+/// One verb call the page made under `jelly try`.
+#[derive(Serialize)]
+struct TrialCall {
+    verb: String,
+    args: Value,
+    /// JSON pointers into the state that the call touched.
+    changed: Vec<String>,
+    /// Why the verb refused, when it did; then nothing changed.
+    refused: Option<String>,
+    /// What `jelly try` prints for it.
+    #[serde(skip)]
+    line: String,
 }
 
 /// What the page reports once its steps ran.
@@ -1401,7 +1429,7 @@ struct TrialResult {
     failed: Option<TrialFailure>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct TrialFailure {
     step: usize,
     error: String,
@@ -1413,6 +1441,9 @@ struct TryReq {
     width: Option<u32>,
     #[serde(default)]
     png: bool,
+    /// Answer with JSON instead of text.
+    #[serde(default)]
+    json: bool,
 }
 
 impl App {
@@ -1475,7 +1506,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     line(&mut out, format!("{} · tried {} step{} on v{version} · nothing was saved", trial.name, trial.steps.len(), if trial.steps.len() == 1 { "" } else { "s" }));
     for (i, s) in trial.steps.iter().enumerate() { line(&mut out, format!("step     {} {s}", i + 1)); }
     if trial.calls.is_empty() { line(&mut out, "call     none: no verb ran".into()); }
-    for c in &trial.calls { line(&mut out, c.clone()); }
+    for c in &trial.calls { line(&mut out, c.line.clone()); }
     if let Some(res) = &trial.result {
         for e in &res.errors { line(&mut out, format!("error    {e}")); }
         if let Some(f) = &res.failed {
@@ -1484,6 +1515,17 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
         }
     } else if notes.is_empty() {
         notes.push("The page rendered but did not finish the steps.".into());
+    }
+    if r.json {
+        let res = trial.result.as_ref();
+        return Ok(Json(json!({
+            "jelly": trial.name, "version": version, "steps": trial.steps, "calls": trial.calls,
+            "errors": res.map(|r| &r.errors[..]).unwrap_or_default(),
+            // `step` counts from 0 here: it indexes `steps`.
+            "failed": res.and_then(|r| r.failed.as_ref()),
+            "problems": notes, "png": png, "state": trial.state,
+            "outline": res.map(|r| &r.text),
+        })).into_response());
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
@@ -1519,7 +1561,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
     let next = match crate::verbs::run(&trial.verbs, &r.verb, &trial.state, &r.args, &by, now_ms()) {
         Ok(next) => next,
         Err(e) => {
-            trial.calls.push(format!("refused  {} {args}: {e}", r.verb));
+            trial.calls.push(TrialCall { line: format!("refused  {} {args}: {e}", r.verb), verb: r.verb, args: r.args, changed: Vec::new(), refused: Some(e.clone()) });
             return Err(Error::Invalid(e).into());
         }
     };
@@ -1533,7 +1575,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
         let more = if changed.len() > 5 { format!(" · {} more", changed.len() - 5) } else { String::new() };
         shown.join(" · ") + &more
     };
-    trial.calls.push(format!("call     {} {args} → {what}", r.verb));
+    trial.calls.push(TrialCall { line: format!("call     {} {args} → {what}", r.verb), verb: r.verb.clone(), args: r.args.clone(), changed: changed.clone(), refused: None });
     trial.state = next;
     trial.version += 1;
     Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": by, "verb": r.verb, "args": r.args,
@@ -2535,7 +2577,7 @@ mod tests {
 
     async fn seen(app: &Shared) -> String {
         let response = see(State(app.clone()), Path("test:x".into()),
-            Query(SeeQ { width: None, height: None, png: false, full: false }), axum::http::HeaderMap::new()).await.unwrap();
+            Query(SeeQ { width: None, height: None, png: false, full: false, json: false }), axum::http::HeaderMap::new()).await.unwrap();
         String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
     }
 
@@ -2583,7 +2625,7 @@ mod tests {
                 let (resume, resumed) = tokio::sync::oneshot::channel();
                 let mut rendezvous = Some((started, resumed));
                 let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                    SeeQ { width: None, height: None, png, full: false },
+                    SeeQ { width: None, height: None, png, full: false, json: false },
                     move |_, _, path| {
                         assert_eq!(path.is_some(), png);
                         let (started, resumed) = rendezvous.take().expect("one render");
@@ -2627,7 +2669,7 @@ mod tests {
             std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
             let browser = browser.to_str().unwrap().to_string();
             let response = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: true, full: false },
+                SeeQ { width: None, height: None, png: true, full: false, json: false },
                 move |width, height, path| {
                     let browser = browser.clone();
                     async move {
@@ -2656,7 +2698,7 @@ mod tests {
             let posting_app = app.clone();
             let posting_owner = current.clone();
             let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: false, full: false },
+                SeeQ { width: None, height: None, png: false, full: false, json: false },
                 move |_, _, path| {
                     assert!(path.is_none());
                     let app = posting_app.clone();
@@ -2920,7 +2962,7 @@ mod tests {
         let current = owner(&app, "test:x").await;
         post(&app, snapshot(&current, "PAGE", version)).await.unwrap();
         let see_x = || async {
-            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false },
+            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false, json: false },
                 |_, _, _| async { Err("no browser".to_string()) }).await.unwrap();
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };
