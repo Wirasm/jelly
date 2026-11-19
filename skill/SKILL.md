@@ -134,9 +134,14 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 ```
 
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
---since` to catch anything after your change. `wait` exits 2 on timeout. If
+--since` to catch anything after your change. `wait` exits 2 on timeout.
+In a script, add `--json` instead of parsing the text: changes print their event
+(`seq`, `version`, `changed`, `args.id` for asks), `see` and `try` their parts. If
 several agents share the jelly page, set `JELLY_AS=<your name>` so each has its
-own inbox and its changes are attributed.
+own inbox and its changes are attributed. Add `--mine` to `inbox`, `attention`
+or `comments` to see only your jellies (made or last reshaped under your name).
+It is never the default: the plain inbox is where you hear the person act on a
+jelly another agent made.
 
 ## Recipes
 
@@ -172,6 +177,7 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
 
 ```bash
 jelly ls                         # this project's jellies; --all for every project
+jelly serve --temp               # a throwaway daemon (free port, fresh home); use its URL as JELLY_URL
 jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into a folder
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png

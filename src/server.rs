@@ -125,7 +125,8 @@ impl App {
     }
 }
 
-pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::Result<()> {
+/// `note` is printed after the `jelly on URL` line, which stays first for scripts.
+pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option<String>) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
         store
@@ -151,6 +152,9 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
 
     let port = listener.local_addr()?.port();
     let _ = writeln!(std::io::stderr().lock(), "jelly on http://127.0.0.1:{port}");
+    if let Some(note) = note {
+        let _ = writeln!(std::io::stderr().lock(), "{note}");
+    }
     axum::serve(listener, router(app)).await
 }
 
@@ -254,7 +258,7 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
         .filter(|j| j.name != PAGE)
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
-            "pinned": j.pinned, "made_by": j.made_by, "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
+            "pinned": j.pinned, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
@@ -832,7 +836,7 @@ fn inbox_item(event: Event) -> Value {
 }
 
 async fn read_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<InboxBatch>, ApiError> {
-    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req.project, &req.reader)?))
+    Ok(Json(app.store.lock().expect("store lock").read_inbox(&req)?))
 }
 
 async fn commit_inbox(State(app): State<Shared>, Json(req): Json<InboxCommit>) -> Result<Json<Value>, ApiError> {
@@ -958,6 +962,8 @@ struct ProjectQ {
     /// List answered items instead of open ones: the decision record.
     #[serde(default)]
     answered: bool,
+    /// Only jellies this agent owns (`Jelly::owner`).
+    mine: Option<String>,
 }
 
 /// Everything open for the person, newest first; with `answered=true`, every
@@ -966,7 +972,9 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
     let mut items: Vec<Value> = Vec::new();
-    for j in store.list().filter(|j| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)) {
+    let wanted = |j: &&crate::store::Jelly| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)
+        && q.mine.as_deref().is_none_or(|m| j.owner() == m);
+    for j in store.list().filter(wanted) {
         for a in j.attention.iter().filter(|a| if q.answered { a.answer.is_some() } else { a.is_open() }) {
             let mut v = serde_json::to_value(a).expect("serializes");
             v["jelly"] = json!(j.name);
@@ -1259,10 +1267,14 @@ struct SeeQ {
     /// The whole page, not just the first screen.
     #[serde(default)]
     full: bool,
+    /// Answer with JSON instead of text.
+    #[serde(default)]
+    json: bool,
 }
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
-/// what the person did, what waits on them, and what is on screen.
+/// what the person did, what waits on them, and what is on screen. With
+/// `json`, the same split into the summary, the problem lines and the outline.
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
     let render_name = name.clone();
@@ -1335,7 +1347,8 @@ where
     // only the event that made this version says who made the last change.
     let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
     let last = format!(" · last change {}{by}", ago(j.updated_ms));
-    line(&mut out, format!("{} · {} · v{} · made by {}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
+    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · reshaped by {s}")).unwrap_or_default();
+    line(&mut out, format!("{} · {} · v{} · made by {}{shaped}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
         if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
     for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
@@ -1363,6 +1376,8 @@ where
         line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
     }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
+    // Everything from here to the outline is a problem line.
+    let problems_from = out.len();
     if let Some(sc) = &snap {
         for e in &sc.errors { line(&mut out, format!("error    {e}")); }
         let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
@@ -1385,6 +1400,15 @@ where
     }
     for p in problem_lines(snap.as_ref(), dark.as_ref()) { line(&mut out, format!("!        {p}")); }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    if q.json {
+        return Ok(Json(json!({
+            "jelly": j.name, "version": j.version,
+            "summary": &out[..problems_from],
+            "problems": out[problems_from..].lines().collect::<Vec<_>>(),
+            "png": png,
+            "outline": snap.map(|s| s.text),
+        })).into_response());
+    }
     if let Some(s) = snap {
         line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
         out.push_str(&s.text);
@@ -1465,9 +1489,22 @@ struct Trial {
     state: Value,
     version: u64,
     steps: Vec<TryStep>,
-    /// What each verb call did, one line each.
-    calls: Vec<String>,
+    calls: Vec<TrialCall>,
     result: Option<TrialResult>,
+}
+
+/// One verb call the page made under `jelly try`.
+#[derive(Serialize)]
+struct TrialCall {
+    verb: String,
+    args: Value,
+    /// JSON pointers into the state that the call touched.
+    changed: Vec<String>,
+    /// Why the verb refused, when it did; then nothing changed.
+    refused: Option<String>,
+    /// What `jelly try` prints for it.
+    #[serde(skip)]
+    line: String,
 }
 
 /// What the page reports once its steps ran.
@@ -1483,7 +1520,7 @@ struct TrialResult {
     failed: Option<TrialFailure>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct TrialFailure {
     step: usize,
     error: String,
@@ -1495,6 +1532,9 @@ struct TryReq {
     width: Option<u32>,
     #[serde(default)]
     png: bool,
+    /// Answer with JSON instead of text.
+    #[serde(default)]
+    json: bool,
 }
 
 impl App {
@@ -1557,7 +1597,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     line(&mut out, format!("{} · tried {} step{} on v{version} · nothing was saved", trial.name, trial.steps.len(), if trial.steps.len() == 1 { "" } else { "s" }));
     for (i, s) in trial.steps.iter().enumerate() { line(&mut out, format!("step     {} {s}", i + 1)); }
     if trial.calls.is_empty() { line(&mut out, "call     none: no verb ran".into()); }
-    for c in &trial.calls { line(&mut out, c.clone()); }
+    for c in &trial.calls { line(&mut out, c.line.clone()); }
     if let Some(res) = &trial.result {
         for e in &res.errors { line(&mut out, format!("error    {e}")); }
         if let Some(f) = &res.failed {
@@ -1566,6 +1606,17 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
         }
     } else if notes.is_empty() {
         notes.push("The page rendered but did not finish the steps.".into());
+    }
+    if r.json {
+        let res = trial.result.as_ref();
+        return Ok(Json(json!({
+            "jelly": trial.name, "version": version, "steps": trial.steps, "calls": trial.calls,
+            "errors": res.map(|r| &r.errors[..]).unwrap_or_default(),
+            // `step` counts from 0 here: it indexes `steps`.
+            "failed": res.and_then(|r| r.failed.as_ref()),
+            "problems": notes, "png": png, "state": trial.state,
+            "outline": res.map(|r| &r.text),
+        })).into_response());
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
@@ -1601,7 +1652,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
     let next = match crate::verbs::run(&trial.verbs, &r.verb, &trial.state, &r.args, &by, now_ms()) {
         Ok(next) => next,
         Err(e) => {
-            trial.calls.push(format!("refused  {} {args}: {e}", r.verb));
+            trial.calls.push(TrialCall { line: format!("refused  {} {args}: {e}", r.verb), verb: r.verb, args: r.args, changed: Vec::new(), refused: Some(e.clone()) });
             return Err(Error::Invalid(e).into());
         }
     };
@@ -1615,7 +1666,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
         let more = if changed.len() > 5 { format!(" · {} more", changed.len() - 5) } else { String::new() };
         shown.join(" · ") + &more
     };
-    trial.calls.push(format!("call     {} {args} → {what}", r.verb));
+    trial.calls.push(TrialCall { line: format!("call     {} {args} → {what}", r.verb), verb: r.verb.clone(), args: r.args.clone(), changed: changed.clone(), refused: None });
     trial.state = next;
     trial.version += 1;
     Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": by, "verb": r.verb, "args": r.args,
@@ -2504,6 +2555,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attention_and_owner_follow_the_maker_or_last_reshaper() {
+        let (_dir, app) = app();
+        {
+            let mut store = app.store.lock().unwrap();
+            for (name, agent) in [("a", "ana"), ("b", "bo")] {
+                store.create(name, "".into(), "const verbs = {};".into(), json!({}), agent, false, "", "p").unwrap();
+                store.attend(&format!("p:{name}"), json!({"title": format!("Which {name}?")}), agent).unwrap();
+            }
+        }
+        let asked = |mine: Option<&str>| {
+            let app = app.clone();
+            let mine = mine.map(String::from);
+            async move {
+                let q = ProjectQ { project: Some("p".into()), answered: false, mine };
+                attention_list(State(app), Query(q)).await.0.as_array().unwrap().iter()
+                    .map(|i| i["jelly"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(asked(Some("ana")).await, ["p:a"]);
+        assert_eq!(asked(Some("bo")).await, ["p:b"]);
+        assert_eq!(asked(None).await.len(), 2);
+
+        app.store.lock().unwrap().reshape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
+        assert!(asked(Some("ana")).await.is_empty());
+        let owners: Vec<_> = list(State(app.clone())).await.0.as_array().unwrap().iter()
+            .map(|j| (j["name"].as_str().unwrap().to_string(), j["owner"].as_str().unwrap().to_string())).collect();
+        assert!(owners.contains(&("p:a".into(), "bo".into())) && owners.contains(&("p:b".into(), "bo".into())));
+    }
+
+    #[tokio::test]
     async fn asset_inventory_is_sorted_read_only_and_requires_a_jelly() {
         let (dir, app) = app();
         let missing = list_assets(State(app.clone()), Path("test:missing".into())).await.unwrap_err();
@@ -2628,7 +2709,7 @@ mod tests {
 
     async fn seen(app: &Shared) -> String {
         let response = see(State(app.clone()), Path("test:x".into()),
-            Query(SeeQ { width: None, height: None, png: false, full: false }), axum::http::HeaderMap::new()).await.unwrap();
+            Query(SeeQ { width: None, height: None, png: false, full: false, json: false }), axum::http::HeaderMap::new()).await.unwrap();
         String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
     }
 
@@ -2676,7 +2757,7 @@ mod tests {
                 let (resume, resumed) = tokio::sync::oneshot::channel();
                 let mut rendezvous = Some((started, resumed));
                 let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                    SeeQ { width: None, height: None, png, full: false },
+                    SeeQ { width: None, height: None, png, full: false, json: false },
                     move |_, _, path, dark| {
                         assert_eq!(path.is_some(), png);
                         let light = (!dark).then(|| rendezvous.take().expect("one light render"));
@@ -2721,7 +2802,7 @@ mod tests {
             std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
             let browser = browser.to_str().unwrap().to_string();
             let response = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: true, full: false },
+                SeeQ { width: None, height: None, png: true, full: false, json: false },
                 move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
@@ -2753,7 +2834,7 @@ mod tests {
             let posting_app = app.clone();
             let posting_owner = current.clone();
             let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: false, full: false },
+                SeeQ { width: None, height: None, png: false, full: false, json: false },
                 move |_, _, path, dark| {
                     assert!(path.is_none() && !dark);
                     let app = posting_app.clone();
@@ -2955,7 +3036,7 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());
         let reader = crate::store::InboxReader::Named { name: "unreadable".into() };
-        assert!(app.store.lock().unwrap().read_inbox("test", &reader).is_err());
+        assert!(app.store.lock().unwrap().read_inbox(&crate::store::InboxRequest { project: "test".into(), reader, mine: None }).is_err());
     }
 
     #[test]
@@ -3017,7 +3098,7 @@ mod tests {
         let current = owner(&app, "test:x").await;
         post_both(&app, snapshot(&current, "PAGE", version)).await.unwrap();
         let see_x = || async {
-            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false },
+            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false, json: false },
                 |_, _, _, _| async { Err("no browser".to_string()) }).await.unwrap();
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };

@@ -28,6 +28,11 @@ struct Cli {
     /// you run from; the jelly page shows each project on its own page.
     #[arg(long, env = "JELLY_PROJECT", global = true)]
     project: Option<String>,
+    /// Print JSON instead of text, for scripts. Changes print the daemon's event
+    /// (seq, version, changed paths, the item's id for asks and looks); lists print
+    /// an array. Commands with nothing to report as JSON refuse it.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -36,20 +41,22 @@ struct Cli {
 enum Cmd {
     /// Run the daemon and the jelly page.
     Serve {
-        #[arg(long, default_value_t = 7878)]
-        port: u16,
+        /// Default: 7878, or a free port with --temp.
+        #[arg(long)]
+        port: Option<u16>,
         /// Where jellies are kept. Defaults to $JELLY_HOME or ~/.jelly.
         #[arg(long)]
         home: Option<PathBuf>,
+        /// A throwaway daemon: a free port and a fresh home in the temp dir, removed
+        /// when it stops (Ctrl-C or SIGTERM). The URL is on the first line.
+        #[arg(long, conflicts_with = "home")]
+        temp: bool,
     },
     /// List this project's jellies, one per line (all projects outside a repo).
     Ls {
         /// Every project, archived jellies included.
         #[arg(long)]
         all: bool,
-        /// Print the full JSON.
-        #[arg(long)]
-        json: bool,
     },
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
     New {
@@ -150,6 +157,7 @@ enum Cmd {
     /// puts one ask on an existing jelly, next to what it is about. It shows on
     /// the jelly and in the person's attention queue. With `--wait` it blocks
     /// until the person answers and prints `a1 answered: <option> · "<note>"`.
+    /// With --json it prints the ask's event, or with --wait the answered item.
     ///
     /// `jelly ask NAME --spec spec.json` makes an ask page: one or more questions,
     /// each an attention item with options (label, does, gains, costs, effort, a
@@ -161,7 +169,7 @@ enum Cmd {
         /// The question, for an ask on an existing jelly.
         question: Option<String>,
         /// A spec file for an ask page.
-        #[arg(long, conflicts_with = "question", group = "json_target")]
+        #[arg(long, conflicts_with = "question")]
         spec: Option<PathBuf>,
         /// An option as id=label, or id=label|what picking it does. Repeat it.
         #[arg(long = "option")]
@@ -178,14 +186,11 @@ enum Cmd {
         #[arg(long, alias = "detail", default_value = "")]
         context: String,
         /// Block until the person answers or the ask is withdrawn, then print the answer.
-        #[arg(long, conflicts_with = "spec", group = "json_target")]
+        #[arg(long, conflicts_with = "spec")]
         wait: bool,
         /// With --wait: give up after this many seconds (exit 2).
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
-        /// With --wait or --spec: print the full JSON.
-        #[arg(long, requires = "json_target")]
-        json: bool,
     },
     /// Ask the person to look at something: it lands in their attention queue,
     /// and they answer "seen" or with a word back.
@@ -202,13 +207,15 @@ enum Cmd {
     Attention {
         #[arg(long)]
         all: bool,
-        /// Print the full JSON.
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
         #[arg(long)]
-        json: bool,
+        mine: bool,
     },
     /// See a jelly as an agent: what it is, its verbs and state, what waits on
     /// the person, what they did lately, what is on screen as text, and problems
     /// the browser measured in light and dark mode.
+    ///
+    /// --json prints {jelly, version, summary, problems, png, outline}.
     See {
         name: String,
         /// Render at this width (390 for a phone). Default: 1280.
@@ -221,7 +228,7 @@ enum Cmd {
         #[arg(long)]
         full: bool,
         /// Print only what needs fixing: errors the page threw and `!` warnings.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "json")]
         problems: bool,
         /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
         #[arg(long)]
@@ -230,6 +237,9 @@ enum Cmd {
     /// Use a jelly as the person would, without changing it: do the steps in
     /// order, then print what is on screen, the verbs that ran and what they
     /// changed. Nothing is saved, recorded or undoable.
+    ///
+    /// --json prints {jelly, version, steps, calls, errors, failed, problems,
+    /// png, state, outline}; `failed.step` counts from 0.
     Try {
         name: String,
         /// Click the element this CSS selector matches. Repeatable.
@@ -289,9 +299,6 @@ enum Cmd {
         /// Give up after this many seconds (exit 2).
         #[arg(long)]
         timeout: Option<u64>,
-        /// Print the full event as JSON (recorded events omit state).
-        #[arg(long)]
-        json: bool,
     },
     /// List comments pinned to parts of a jelly's view, one line each with its
     /// thread. Leave out NAME for every jelly: this is the person's to-do list for you.
@@ -300,9 +307,9 @@ enum Cmd {
         /// Include resolved comments.
         #[arg(long)]
         all: bool,
-        /// Print the full JSON.
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
         #[arg(long)]
-        json: bool,
+        mine: bool,
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
     #[command(alias = "project")]
@@ -341,6 +348,9 @@ enum Cmd {
     Inbox {
         #[arg(long)]
         hook: bool,
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        #[arg(long)]
+        mine: bool,
         /// Stable conversation ID, shared by commands, hooks and resumed sessions.
         #[arg(long, env = "JELLY_SESSION_ID")]
         session_id: Option<String>,
@@ -482,6 +492,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     }
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
+    let json = cli.json;
+    if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Inbox { .. }) {
+        return Err("this command has no --json output".into());
+    }
+    // A change prints the daemon's event as it is, or one line about it.
+    let report = |ev: Value| if json { print(ev) } else { report(ev) };
     // Only commands that make or open jellies need it, so git runs only for those.
     let project = || detect_project(cli.project.clone());
     // Names are unique per project: a short name means this project's jelly
@@ -495,11 +512,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             .filter_map(|j| j["name"].as_str())))
     };
     match cli.cmd {
-        Cmd::Serve { port, home } => {
-            let home = home
-                .or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
-                .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
-                .ok_or("could not find your home directory: set --home or JELLY_HOME")?;
+        Cmd::Serve { port, home, temp } => {
+            let port = port.unwrap_or(if temp { 0 } else { 7878 });
+            let home = if temp {
+                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+                std::env::temp_dir().join(format!("jelly-temp-{}-{nanos}", std::process::id()))
+            } else {
+                home.or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
+                    .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
+                    .ok_or("could not find your home directory: set --home or JELLY_HOME")?
+            };
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
             rt.block_on(async {
                 // Reserve the endpoint before store initialization can write anything.
@@ -508,10 +530,20 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 // loses the other's changes. The lock lives as long as this daemon.
                 let _lock = lock_home(&home, listener.local_addr().map_err(|e| e.to_string())?.port())?;
                 let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-                server::serve(store, listener).await.map_err(|e| e.to_string().into())
+                let note = temp.then(|| {
+                    // A clean stop removes the home; a crash leaves it as evidence.
+                    let dir = home.clone();
+                    tokio::spawn(async move {
+                        stopped().await;
+                        let _ = std::fs::remove_dir_all(&dir);
+                        std::process::exit(0);
+                    });
+                    format!("jelly: temporary home {}; removed when this stops", home.display())
+                });
+                server::serve(store, listener, note).await.map_err(|e| e.to_string().into())
             })
         }
-        Cmd::Ls { all, json } => {
+        Cmd::Ls { all } => {
             let p = if all { String::new() } else { project() };
             let list: Vec<Value> = get(&api(""))?.as_array().cloned().unwrap_or_default().into_iter()
                 .filter(|j| all || !j["archived"].as_bool().unwrap_or(false))
@@ -565,6 +597,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let mut added = add_assets(&jelly, &assets, &by)?;
             for (file, bytes) in recipe_assets {
                 added.push(upload_asset(&jelly, file, bytes, &by)?);
+            }
+            if json {
+                return print(ev);
             }
             report(ev)?;
             for line in added {
@@ -629,7 +664,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Ask { name, question: Some(q), options, recommend, why, at, context, wait, timeout, json, .. } => {
+        Cmd::Ask { name, question: Some(q), options, recommend, why, at, context, wait, timeout, .. } => {
             let options: Vec<Value> = options.iter().map(|o| {
                 let (id, rest) = o.split_once('=').ok_or_else(|| format!("--option {o:?}: use id=label"))?;
                 let (label, does) = rest.split_once('|').unwrap_or((rest, ""));
@@ -660,9 +695,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
         }
-        Cmd::Attention { all, json } => {
+        Cmd::Attention { all, mine } => {
             let p = if all { String::new() } else { project() };
-            let list = get(&format!("{}/api/attention?project={}", cli.url, encode(&p)))?;
+            let only = mine_name(mine, &cli.by)?.map(|m| format!("&mine={}", encode(&m))).unwrap_or_default();
+            let list = get(&format!("{}/api/attention?project={}{only}", cli.url, encode(&p)))?;
             if json {
                 return print(list);
             }
@@ -681,7 +717,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
         Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": null, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
-        Cmd::Ask { name, spec: Some(spec), json, .. } => {
+        Cmd::Ask { name, spec: Some(spec), .. } => {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
             // The store's rule: a spec without `questions` is one question.
             let questions = spec.get("questions").map_or(1, |q| q.as_array().map_or(0, Vec::len));
@@ -695,7 +731,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
         }
-        Cmd::Wait { name, timeout, since, json } => {
+        Cmd::Wait { name, timeout, since } => {
             let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
                 .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
@@ -749,14 +785,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Err("the event stream ended".into())
         }
-        Cmd::Comments { name, all, json } => {
+        Cmd::Comments { name, all, mine } => {
             let one = name.is_some();
+            let mine = mine_name(mine, &cli.by)?;
             let names: Vec<String> = match name {
                 Some(n) => vec![id(&n)?],
                 None => {
                     let p = project();
                     get(&api(""))?.as_array().into_iter().flatten()
                     .filter(|j| p.is_empty() || j["project"] == p.as_str())
+                    .filter(|j| mine.as_ref().is_none_or(|m| j["owner"] == m.as_str()))
                     .filter(|j| all || j["open_comments"].as_u64().unwrap_or(0) > 0)
                     .filter_map(|j| j["name"].as_str().map(String::from)).collect()
                 }
@@ -793,6 +831,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if let Some(w) = width { q.push(format!("width={w}")); }
             if png || full || poster { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
+            if json { q.push("json=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
             // A jelly that changes while it renders (a live log, a monitor) answers 409;
             // a fresh render usually lands between changes.
@@ -804,16 +843,21 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 }
             };
             let text = resp.into_string().map_err(|e| e.to_string())?;
+            let seen: Option<Value> = json.then(|| serde_json::from_str(&text)).transpose().map_err(|e| e.to_string())?;
             if poster {
-                let shot = text.lines().find_map(|l| l.strip_prefix("png ")).map(str::trim)
-                    .ok_or("no screenshot to use as the poster; see the `!` lines")?;
+                let shot = match &seen {
+                    Some(v) => v["png"].as_str(),
+                    None => text.lines().find_map(|l| l.strip_prefix("png ")).map(str::trim),
+                }.ok_or("no screenshot to use as the poster; see the `!` lines")?;
                 let bytes = std::fs::read(shot).map_err(|e| format!("{shot}: {e}"))?;
                 ureq::post(&api(&format!("/{}/assets/poster.png?by={}", id(&name)?, encode(&by))))
                     .set("content-type", "application/octet-stream")
                     .send_bytes(&bytes)
                     .map_err(describe)?;
             }
-            if problems {
+            if let Some(v) = seen {
+                return print(v);
+            } else if problems {
                 let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
                 output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
             } else {
@@ -825,7 +869,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let url = api(&format!("/{}/try", id(&name)?));
             // Two renders with --png, each up to the daemon's 20 s limit.
             let resp = ureq::post(&url).timeout(std::time::Duration::from_secs(90))
-                .send_json(json!({"steps": steps, "width": width, "png": png})).map_err(describe)?;
+                .send_json(json!({"steps": steps, "width": width, "png": png, "json": json})).map_err(describe)?;
+            if json {
+                return print(resp.into_json().map_err(|e| e.to_string())?);
+            }
             output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
             Ok(())
         }
@@ -932,7 +979,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
         }
-        Cmd::Inbox { hook, session_id } => inbox(&cli.url, &project(), hook, cli.by, session_id),
+        Cmd::Inbox { hook, mine, session_id } => {
+            let mine = mine_name(mine, &cli.by)?;
+            inbox(&cli.url, &project(), hook, cli.by, mine, session_id)
+        }
         Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
@@ -1021,7 +1071,7 @@ fn parent_reader() -> Result<store::InboxReader, String> {
 }
 
 /// Prints what the person did since the last call, then moves the cursor.
-fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id: Option<String>) -> Result<(), CommandError> {
+fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, mine: Option<String>, session_id: Option<String>) -> Result<(), CommandError> {
     if hook && project.is_empty() {
         return Ok(()); // not in a repo: this session has no jellies of its own
     }
@@ -1035,18 +1085,28 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id
         },
         parent_reader,
     );
-    deliver_inbox(url, project, hook, reader, &mut std::io::stdout().lock())
+    deliver_inbox(url, project, hook, reader.map(|reader| store::InboxRequest { project: project.into(), reader, mine }), &mut std::io::stdout().lock())
+}
+
+/// The owner name `--mine` filters by. Without a name every agent is "agent",
+/// so "mine" would mean every unnamed agent's jellies; refuse instead.
+fn mine_name(mine: bool, by: &Option<String>) -> Result<Option<String>, String> {
+    match (mine, by) {
+        (false, _) => Ok(None),
+        (true, Some(name)) => Ok(Some(name.clone())),
+        (true, None) => Err("--mine needs your name: --as NAME or JELLY_AS".into()),
+    }
 }
 
 fn deliver_inbox(
     url: &str,
     project: &str,
     hook: bool,
-    reader: Result<store::InboxReader, String>,
+    request: Result<store::InboxRequest, String>,
     output: &mut impl Write,
 ) -> Result<(), CommandError> {
     let result = (|| {
-        let request = store::InboxRequest { project: project.into(), reader: reader? };
+        let request = request?;
         let response = ureq::post(&format!("{url}/api/inbox"))
             .timeout(std::time::Duration::from_secs(1))
             .send_json(&request);
@@ -1237,6 +1297,20 @@ fn read(p: &PathBuf) -> Result<String, String> {
 }
 
 /// Adds files beside a jelly; `jelly` is its API address.
+/// Resolves on Ctrl-C, or SIGTERM on Unix.
+async fn stopped() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => { tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} } }
+            Err(_) => { let _ = tokio::signal::ctrl_c().await; }
+        }
+    }
+    #[cfg(not(unix))]
+    { let _ = tokio::signal::ctrl_c().await; }
+}
+
 /// Holds `<home>/daemon.lock` exclusively, or says which daemon already does.
 fn lock_home(home: &Path, port: u16) -> Result<std::fs::File, String> {
     std::fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
@@ -1449,8 +1523,8 @@ mod tests {
     fn inbox_undecodable_responses_do_not_commit() {
         for body in ["broken", "", "[]", r#"{"events":[{"jelly":"p:sample"}],"through":4}"#] {
             let (url, server) = inbox_response(body);
-            let reader = crate::store::InboxReader::Named { name: "a".into() };
-            assert!(super::deliver_inbox(&url, "p", false, Ok(reader), &mut Vec::new()).is_err());
+            let request = crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: "a".into() }, mine: None };
+            assert!(super::deliver_inbox(&url, "p", false, Ok(request), &mut Vec::new()).is_err());
             assert_no_inbox_commit(server);
         }
     }
@@ -1469,8 +1543,8 @@ mod tests {
             let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "call",
                 "by": "person", "version": 1, "view_rev": 1, "text": "click {}"}], "through": 4}).to_string();
             let (url, server) = inbox_response(&body);
-            let reader = crate::store::InboxReader::Named { name: "a".into() };
-            let error = super::deliver_inbox(&url, "p", false, Ok(reader), &mut FailingOutput { fail_write }).unwrap_err();
+            let request = crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: "a".into() }, mine: None };
+            let error = super::deliver_inbox(&url, "p", false, Ok(request), &mut FailingOutput { fail_write }).unwrap_err();
             assert_eq!(error.to_string(), if fail_write { "output failed" } else { "flush failed" });
             assert_no_inbox_commit(server);
         }
