@@ -38,6 +38,7 @@ jelly inbox                                      # what they did since you last 
 jelly see plan                                   # what is on screen, as text
 jelly undo plan                                  # undo the last change to its view, verbs or state
 jelly pin plan                                   # keep it: a week untouched no longer archives it
+jelly rm plan                                    # remove it with its undo history and assets; cannot be undone
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
