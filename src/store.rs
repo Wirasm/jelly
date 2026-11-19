@@ -487,7 +487,7 @@ impl Event {
             EventKind::Note => format!("left a note: {}", clip(s(&a))),
             EventKind::Move => format!("moved here from {}", s(&a["from"])),
             EventKind::Pin => if a == Value::Bool(true) { "pinned it".into() } else { "unpinned it".into() },
-            EventKind::Asset => format!("added {}", s(&a["file"])),
+            EventKind::Asset => format!("{} {}", if a["removed"] == Value::Bool(true) { "removed" } else { "added" }, s(&a["file"])),
             EventKind::New => "made it".into(),
             EventKind::Reshape => "reshaped it".into(),
             EventKind::Remove => "removed it".into(),
@@ -864,6 +864,25 @@ impl Store {
                 None => fs::remove_file(&path),
             };
             rollback.map_err(|e| Error::Invalid(format!("{error}; could not restore {file}: {e}")))?;
+        }
+        result
+    }
+
+    /// Removes a file added with `put_asset`. Like adding one, it is outside undo.
+    pub fn remove_asset(&mut self, name: &str, file: &str, by: &str) -> Result<Event, Error> {
+        valid_file(file)?;
+        let previous_entry = self.jellies.get(name).cloned();
+        self.entry(name)?;
+        let path = self.asset_dir(name).join(file);
+        let previous = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Error::Invalid(format!("{name} has no asset {file}"))),
+            Err(e) => return Err(Error::Invalid(format!("could not read {file} before removing it: {e}"))),
+        };
+        fs::remove_file(&path).map_err(|e| Error::Invalid(format!("could not remove {file}: {e}")))?;
+        let result = self.commit(name, EventKind::Asset, by, None, Some(serde_json::json!({"file": file, "removed": true})), Vec::new(), previous_entry);
+        if let Err(error) = &result {
+            write_atomic(&path, &previous).map_err(|e| Error::Invalid(format!("{error}; could not restore {file}: {e}")))?;
         }
         result
     }

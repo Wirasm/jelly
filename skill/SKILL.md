@@ -68,8 +68,9 @@ jelly focus plan             # open it full size on their screen; `jelly focus` 
 
 Always run `jelly see` and fix every `error` and `!` line before you focus a
 jelly or ask about it. `see` only looks: nothing in its render is recorded as the
-person. Clear your own test clicks with `jelly set`. Add an `assets/poster.png`
-that tells the story on its own, and the jelly page uses it as the thumbnail.
+person. Clear your own test clicks with `jelly set`. `jelly see plan --poster` saves
+the screenshot as `assets/poster.png`, the jelly page's thumbnail; pick a moment
+that tells the story on its own.
 
 While you rebuild a jelly the person is looking at, say so: `jelly working plan
 "rebuilding the header"`, then `jelly done plan`.
@@ -155,6 +156,7 @@ jelly ls                         # this project's jellies; --all for every proje
 jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into a folder
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
+jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css

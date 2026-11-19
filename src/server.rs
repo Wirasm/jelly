@@ -175,7 +175,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/restore", post(restore))
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets", get(list_assets))
-        .route("/api/jellies/{name}/assets/{file}", post(put_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
+        .route("/api/jellies/{name}/assets/{file}", post(put_asset).delete(remove_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share))
         .route("/api/inbox", get(inbox).post(read_inbox))
         .route("/api/inbox/commit", post(commit_inbox))
@@ -645,6 +645,10 @@ async fn list_assets(State(app): State<Shared>, Path(name): Path<String>) -> Res
 
 async fn put_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>, body: Bytes) -> Result<Json<Event>, ApiError> {
     app.change(|s| s.put_asset(&name, &file, &body, &by(q.by)?))
+}
+
+async fn remove_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>) -> Result<Json<Event>, ApiError> {
+    app.change(|s| s.remove_asset(&name, &file, &by(q.by)?))
 }
 
 fn content_type(file: &str) -> &'static str {
