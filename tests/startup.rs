@@ -501,3 +501,54 @@ fn first_probe_reset_still_starts_the_daemon() {
     assert!(result.is_ok(), "{result:?}");
     assert!(ready(p));
 }
+
+/// Two daemons on one home both write events and jelly files, and each loses
+/// the other's changes. The second refuses to start and names the first.
+#[test]
+fn a_second_daemon_on_the_same_home_refuses_to_start() {
+    let s = Sandbox::new();
+    let home = s.0.path().join("shared-home");
+    let serve = |port: u16| {
+        Command::new(env!("CARGO_BIN_EXE_jelly"))
+            .args(["serve", "--port", &port.to_string(), "--home"])
+            .arg(&home)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first_port = port();
+    let mut first = serve(first_port);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ready(first_port) {
+        assert!(std::time::Instant::now() < deadline, "first daemon did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut second = serve(port());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while second.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            second.kill().unwrap();
+            first.kill().unwrap();
+            panic!("a second daemon started on the same home");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let second = second.wait_with_output().unwrap();
+    let message = String::from_utf8_lossy(&second.stderr);
+    assert!(!second.status.success(), "{message}");
+    assert!(message.contains("another jelly daemon") && message.contains(&url(first_port)), "{message}");
+    assert!(ready(first_port), "the first daemon keeps serving");
+    first.kill().unwrap();
+    first.wait().unwrap();
+    // Once the first is gone, the home is free again.
+    let third_port = port();
+    let mut third = serve(third_port);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ready(third_port) {
+        assert!(std::time::Instant::now() < deadline, "the home stayed locked after the first daemon stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    third.kill().unwrap();
+    third.wait().unwrap();
+}

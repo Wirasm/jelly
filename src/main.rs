@@ -503,6 +503,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             rt.block_on(async {
                 // Reserve the endpoint before store initialization can write anything.
                 let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
+                // Two daemons on one home both write events and jelly files, and each
+                // loses the other's changes. The lock lives as long as this daemon.
+                let _lock = lock_home(&home, listener.local_addr().map_err(|e| e.to_string())?.port())?;
                 let store = store::Store::open(&home).map_err(|e| format!("{}: {e}", home.display()))?;
                 server::serve(store, listener).await.map_err(|e| e.to_string().into())
             })
@@ -1233,6 +1236,24 @@ fn read(p: &PathBuf) -> Result<String, String> {
 }
 
 /// Adds files beside a jelly; `jelly` is its API address.
+/// Holds `<home>/daemon.lock` exclusively, or says which daemon already does.
+fn lock_home(home: &Path, port: u16) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
+    let path = home.join("daemon.lock");
+    let mut file = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if file.try_lock().is_err() {
+        let mut other = String::new();
+        let _ = file.read_to_string(&mut other);
+        let at = other.trim();
+        let at = if at.is_empty() { String::new() } else { format!(" at {at}") };
+        return Err(format!("another jelly daemon{at} is already using {}; stop it, or pass a different --home", home.display()));
+    }
+    file.set_len(0).and_then(|()| file.write_all(format!("http://127.0.0.1:{port}\n").as_bytes()))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(file)
+}
+
 fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<Vec<String>, String> {
     files.iter().map(|f| {
         let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?;
