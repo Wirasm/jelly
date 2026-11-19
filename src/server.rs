@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE};
+use crate::store::{named, viewer, AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -1281,13 +1281,13 @@ where
     for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
         let ans = a.answer.as_ref().expect("filtered");
         let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
-        line(&mut out, format!("answered {} {:?} → {pick}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }));
+        line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
     }
     for f in j.comments.iter().filter(|f| !f.resolved) {
-        line(&mut out, format!("comment  {} on {}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
+        line(&mut out, format!("comment  {} on {}{}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), named(&f.by), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
     for e in &mine {
-        line(&mut out, format!("person   {} {}", ago(e.at_ms), e.describe()));
+        line(&mut out, format!("person   {} {}{}", ago(e.at_ms), viewer(&e.by).map(|n| format!("{n} ")).unwrap_or_default(), e.describe()));
     }
     let project = j.project();
     if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
@@ -2658,6 +2658,8 @@ mod tests {
                 s.create(name, "".into(), verbs.into(), json!({}), "agent", false, "", "test").unwrap();
             }
             s.call("test:x", "label", json!({"id": "mine"}), PERSON).unwrap();
+            s.call("test:x", "label", json!({"id": "hers"}), "person:ana").unwrap();
+            s.comment("test:x", json!({"selector": "#hers"}), "bigger", "person:ana").unwrap();
             s.call("test:x", "label", json!({"id": "theirs"}), "agent").unwrap();
             for i in 0..100 {
                 s.call("test:y", "label", json!({"id": format!("n{i}")}), "agent").unwrap();
@@ -2679,6 +2681,8 @@ mod tests {
         std::fs::write(&path, saved).unwrap();
         assert!(header(&out).ends_with("last change just now by agent"), "{out}");
         assert!(out.contains(r#"person   just now label {"id":"mine"}"#), "{out}");
+        assert!(out.contains(r#"person   just now ana label {"id":"hers"}"#), "{out}");
+        assert!(out.contains(r#"comment  c1 on #hers by ana: "bigger""#), "{out}");
         app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
         let out = see_x().await;
         assert!(header(&out).ends_with("last change just now"), "the agent's change was trimmed, so no author: {out}");

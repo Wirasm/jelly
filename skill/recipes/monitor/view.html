@@ -146,7 +146,7 @@ const STATUS = { ready: "Not started", running: "Running", paused: "Paused", sto
 const fmt = (v) => v == null || !isFinite(v) ? "–" : Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en") : Math.abs(v) >= 10 ? (+v.toFixed(1)).toLocaleString("en") : String(+v.toFixed(2));
 const span = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`; };
 const clock = (t) => new Date(t).toTimeString().slice(0, 8);
-const who = (by) => (by === "person" ? "You" : by);
+const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span style="opacity:.55">$</span>${l.slice(1)}` : l)).join("\n");
 // A round step for nudging a limit, and a round value near x.
 const nice = (x) => { if (!(x > 0)) return 1; const p = 10 ** Math.floor(Math.log10(x)), f = x / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; };
@@ -304,7 +304,7 @@ function chart(s, m) {
     bar.style.top = Math.min(100, Math.max(0, Y(lim))) + "%";
     const unseen = !dragging && !seen(s, m.threshold?.seq);
     bar.className = `limit${dragging ? " drag" : ""}${unseen ? " unseen" : ""}`;
-    bar.querySelector("span").textContent = `limit ${fmt(lim)}${m.unit ? " " + m.unit : ""}${dragging ? "" : unseen ? " · not seen by the run yet" : m.threshold.by === "person" ? " · yours" : ""}`;
+    bar.querySelector("span").textContent = `limit ${fmt(lim)}${m.unit ? " " + m.unit : ""}${dragging ? "" : unseen ? " · not seen by the run yet" : m.threshold.by === jelly.by ? " · yours" : ""}`;
   }
   // A suggested limit, so the person reacts to a number instead of typing one.
   const mean = m.n ? m.sum / m.n : 0, sd = Math.sqrt(pts.reduce((n, p) => n + (p[1] - mean) ** 2, 0) / (pts.length || 1));

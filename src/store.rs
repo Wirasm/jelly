@@ -119,7 +119,7 @@ pub struct Attention {
 impl Comment {
     /// The agent replied last on an open thread: the person has something to read.
     pub fn awaiting_person(&self) -> bool {
-        !self.resolved && self.replies.last().is_some_and(|r| r.by != PERSON)
+        !self.resolved && self.replies.last().is_some_and(|r| !is_person(&r.by))
     }
 }
 
@@ -372,7 +372,10 @@ pub struct InboxItem {
 
 impl From<Event> for InboxItem {
     fn from(event: Event) -> Self {
-        let text = event.describe();
+        let text = match viewer(&event.by) {
+            Some(name) => format!("{name} {}", event.describe()),
+            None => event.describe(),
+        };
         Self { event, text }
     }
 }
@@ -449,14 +452,30 @@ impl EventKind {
     }
 }
 
-/// The person, as recorded in `by`. Agents use their own names.
+/// The person, as recorded in `by`. A person who named themselves in the
+/// browser writes as `person:<name>`. Agents use their own names.
 pub const PERSON: &str = "person";
+
+/// Made by a person, named or not.
+pub fn is_person(by: &str) -> bool {
+    by == PERSON || viewer(by).is_some()
+}
+
+/// The name a person gave themselves (`person:ana` is `ana`), if any.
+pub fn viewer(by: &str) -> Option<&str> {
+    by.strip_prefix("person:").filter(|n| !n.is_empty())
+}
+
+/// ` by ana` for a person who named themselves; nothing otherwise.
+pub fn named(by: &str) -> String {
+    viewer(by).map(|n| format!(" by {n}")).unwrap_or_default()
+}
 /// The internal jelly that is the jelly page.
 pub const PAGE: &str = "surface";
 
 impl Event {
     pub fn is_inbox_item(&self, project: &str) -> bool {
-        self.by == PERSON && self.jelly != PAGE && self.kind.is_for_agent()
+        is_person(&self.by) && self.jelly != PAGE && self.kind.is_for_agent()
             && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
     }
 
@@ -546,7 +565,7 @@ struct RecentEvents {
 
 impl RecentEvents {
     fn push(&mut self, event: Event) {
-        if event.by == PERSON {
+        if is_person(&event.by) {
             if self.person.len() == 8 {
                 self.person.remove(0);
             }
@@ -1375,12 +1394,13 @@ fn trim_log(path: &Path, keep: usize, carry: usize) -> std::io::Result<()> {
         _ => text[from - 1..].iter().position(|&b| b == b'\n').map(|i| from + i).filter(|&i| i < body.len())
             .unwrap_or_else(|| body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)),
     };
-    let needle = format!("\"by\":\"{PERSON}\"");
+    // Matches `person` and `person:<name>`; parsing the line decides.
+    let needle = format!("\"by\":\"{PERSON}");
     let mut carried = Vec::new();
     let mut room = carry;
     for line in text[..split].split(|&b| b == b'\n').rev() {
         let theirs = line.windows(needle.len()).any(|w| w == needle.as_bytes())
-            && serde_json::from_slice::<Event>(line).is_ok_and(|e| e.by == PERSON);
+            && serde_json::from_slice::<Event>(line).is_ok_and(|e| is_person(&e.by));
         if theirs {
             if line.len() + 1 > room {
                 break;
@@ -2233,6 +2253,35 @@ mod tests {
         assert!(s.reply("j", "c9", "x", "claude", false).is_err());
     }
 
+    #[test]
+    fn a_named_person_is_heard_as_a_person_under_their_name() {
+        let (_d, mut s) = store();
+        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let named = s.call("p:j", "label", json!({"id": "a", "value": "x"}), "person:ana").unwrap();
+        let unnamed = s.call("p:j", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let agent = s.call("p:j", "label", json!({"id": "c", "value": "z"}), "personal-bot").unwrap();
+        assert!(named.is_inbox_item("p") && unnamed.is_inbox_item("p"));
+        assert!(!agent.is_inbox_item("p"), "an agent whose name starts with person is still an agent");
+        assert_eq!(InboxItem::from(named).text, r#"ana label {"id":"a","value":"x"}"#);
+        assert_eq!(InboxItem::from(unnamed).text, r#"label {"id":"b","value":"y"}"#, "unnamed reads as before");
+        assert_eq!(s.recent_events("p:j").1.len(), 2);
+
+        s.comment("p:j", json!({"selector": "#a"}), "too small", "person:ana").unwrap();
+        s.reply("p:j", "c1", "Bigger now", "claude", false).unwrap();
+        assert!(s.get("p:j").unwrap().comments[0].awaiting_person());
+        s.reply("p:j", "c1", "thanks", "person:bo", false).unwrap();
+        assert!(!s.get("p:j").unwrap().comments[0].awaiting_person(), "another person's reply is not the agent's");
+    }
+
+    #[test]
+    fn the_plan_recipe_lets_any_person_clear_a_gate() {
+        let src = include_str!("../skill/recipes/plan/verbs.js");
+        let state = json!({"steps": [{"id": "s1", "title": "Ship", "status": "next", "gate": {"by": "agent", "cleared": null}}]});
+        assert!(crate::verbs::run(src, "clear_gate", &state, &json!({"step": "s1"}), "agent", 1).is_err());
+        let s = crate::verbs::run(src, "clear_gate", &state, &json!({"step": "s1"}), "person:ana", 1).unwrap();
+        assert_eq!(s["steps"][0]["gate"]["cleared"]["by"], "person:ana");
+    }
+
     const MONITOR_VERBS: &str = include_str!("../skill/recipes/monitor/verbs.js");
 
     #[test]
@@ -2394,7 +2443,7 @@ mod tests {
         let (dir, mut s) = store();
         s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         for i in 0..60 {
-            let by = if i % 10 == 3 { "person" } else { "agent" };
+            let by = match i % 10 { 3 => "person", 7 => "person:ana", _ => "agent" };
             s.call("j", "label", json!({"id": format!("k{i}"), "value": "v"}), by).unwrap();
         }
         let path = s.events_path();
@@ -2407,7 +2456,7 @@ mod tests {
         for l in before.lines() {
             if start >= before.len() - keep {
                 tail.push(l.to_string());
-            } else if l.contains("\"by\":\"person\"") {
+            } else if l.contains("\"by\":\"person\"") || l.contains("\"by\":\"person:ana\"") {
                 expected.push(l.to_string());
             }
             start += l.len() + 1;

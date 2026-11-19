@@ -149,8 +149,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const n1 = (n) => String(Math.round(Math.abs(n) * 10) / 10);
 const plural = (n, w) => `${n1(n)} ${w}${Math.abs(n) === 1 ? "" : "s"}`;
-const who = (by) => (by === "person" ? "you" : by);
-const whose = (by) => (by === "person" ? "your" : by === "agent" ? "the agent’s" : `${by}’s`);
+const who = (by) => jelly.who(by);
+const whose = (by) => (by === jelly.by ? "your" : by === "agent" ? "the agent’s" : `${jelly.who(by)}’s`);
 
 // The sums are `model` in this jelly's verbs. Until it is loaded (and in a shared
 // read-only file, where it never is) the page draws the result the verbs wrote.

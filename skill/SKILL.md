@@ -48,7 +48,12 @@ jelly.onState((state, event) => render(state)); // now, and after every change b
 jelly.call("add", { title });                   // runs a verb; rejects with its error
 jelly.watch("other", (state) => …);             // another jelly's state, live
 jelly.asset("shot.png");                        // URL of a file added with `jelly asset`
+jelly.who(vote.by);                             // "you", another person's name, or the agent's
 ```
+
+A person who sets a name on the jelly page writes as `person:<name>` instead of
+`person`, so several people on one jelly stay apart. `jelly.by` is this
+browser's `by`; in verbs, a person is `by === "person" || by.startsWith("person:")`.
 
 Keep data in state, not page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at

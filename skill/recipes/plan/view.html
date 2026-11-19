@@ -159,7 +159,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
-const who = (by) => (by === "person" ? "You" : by);
+const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const LOCK = `<svg viewBox="0 0 16 16"><path d="M4 7V5a4 4 0 0 1 8 0v2h1v8H3V7h1zm2 0h4V5a2 2 0 0 0-4 0v2z"/></svg>`;
 const LABEL = { next: "Next", doing: "In progress", done: "Done", blocked: "Blocked", gated: "Waits for you", vetoed: "Vetoed" };
 
@@ -213,10 +213,10 @@ function card(s, i, n) {
   const k = st(s), needs = (s.needs || []).map(byId).filter(Boolean);
   const flags = [];
   if (s.vetoed) flags.push(`<div class="flag veto"><div><b>Vetoed by ${esc(who(s.vetoed.by).toLowerCase())}${s.vetoed.stopped ? ", while it was in progress" : ""}</b><span>${esc(s.vetoed.note || "The agent leaves this step alone.")}</span></div><button data-do="unveto">Bring it back</button></div>`);
-  if (s.gate && !s.gate.cleared) flags.push(`<div class="flag gate"><div><b>${s.gate.by === "person" ? "You asked to be checked with before this" : `${esc(s.gate.by)} checks with you before this`}</b><span>${esc(s.gate.note || "The agent will not start it until you clear the gate.")}</span></div><button data-do="clear_gate">Clear the gate</button></div>`);
+  if (s.gate && !s.gate.cleared) flags.push(`<div class="flag gate"><div><b>${jelly.isPerson(s.gate.by) ? `${who(s.gate.by)} asked to be checked with before this` : `${esc(s.gate.by)} checks with you before this`}</b><span>${esc(s.gate.note || "The agent will not start it until you clear the gate.")}</span></div><button data-do="clear_gate">Clear the gate</button></div>`);
   if (s.gate?.cleared) flags.push(`<div class="flag open"><div><span>Gate cleared by ${esc(who(s.gate.cleared.by).toLowerCase())}${s.gate.note ? `: “${esc(s.gate.note)}”` : ""}</span></div></div>`);
   if (k === "blocked") flags.push(`<div class="flag block"><div><b>Blocked</b><span>${esc(s.blocked?.reason || "")}</span></div></div>`);
-  const talk = (s.notes || []).map((m) => `<div class="said${m.by === "person" ? "" : " agent"}"><b>${esc(who(m.by))}</b><span>${esc(m.text)}</span></div>`).join("");
+  const talk = (s.notes || []).map((m) => `<div class="said${jelly.isPerson(m.by) ? "" : " agent"}"><b>${esc(who(m.by))}</b><span>${esc(m.text)}</span></div>`).join("");
   const acts = [];
   if (!started(s)) acts.push(`<button class="sq" data-move="up" aria-label="Move earlier"${canMove(s, -1) ? "" : " disabled"}>↑</button><button class="sq" data-move="down" aria-label="Move later"${canMove(s, 1) ? "" : " disabled"}>↓</button>`);
   if (!started(s) && !gated(s)) acts.push(`<button data-do="gate">Check with me first</button>`);

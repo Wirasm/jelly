@@ -155,16 +155,20 @@ function render() {
   renderPast();
 }
 
+// "You" for this browser, else the person's or agent's name.
+const Who = (by) => (by === jelly.by ? "You" : jelly.who(by));
+
 function question(a, i) {
   const ans = a.answer;
   const picked = ans?.option;
   const rec = a.options.find((o) => o.id === a.recommend);
-  const state = !ans ? "not answered" : picked ? `You picked ${L(a.options.findIndex((o) => o.id === picked))}` : "Answered in words";
+  const by = ans && Who(ans.by);
+  const state = !ans ? "not answered" : picked ? `${by} picked ${L(a.options.findIndex((o) => o.id === picked))}` : `${by} answered in words`;
   return `<section class="q ${ans ? "answered" : ""}" id="q-${esc(qid(a))}">
     <div class="qh"><span class="num">${i + 1}</span><div><h2>${esc(a.title)}</h2>${a.context ? `<p class="qc">${esc(a.context)}</p>` : ""}</div><span class="state">${state}</span></div>
     ${rec ? `<div class="rec"><b>${esc(a.by)} recommends ${L(a.options.indexOf(rec))}: ${esc(rec.label)}.</b> <span>${esc(a.why)}</span></div>` : ""}
     ${a.options.length ? `<div class="opts">${a.options.map((o, k) => option(a, o, k)).join("")}</div>` : ""}
-    ${ans?.text ? `<div class="said">You said: ${esc(ans.text)}</div>` : ""}
+    ${ans?.text ? `<div class="said">${esc(by)} said: ${esc(ans.text)}</div>` : ""}
     <div class="note"><textarea data-note="${esc(a.id)}" placeholder="${a.options.length ? "Add context or a condition. Or, if none of these fit, say what would." : "Your answer"}"></textarea><button data-send="${esc(a.id)}">${a.options.length ? (picked ? "Add to answer" : "Answer in words") : "Answer"}</button></div>
   </section>`;
 }
@@ -182,7 +186,7 @@ function option(a, o, k) {
 
 function renderAdded() {
   const mine = jelly.comments.filter((c) => c.anchor?.selector === "#more");
-  $("added").innerHTML = mine.map((c) => `<div><small>${c.by === "person" ? "you" : esc(c.by)}${c.replies?.length ? " · the agent replied" : ""}</small>${esc(c.text)}${(c.replies || []).map((r) => `<small style="margin-top:6px">${esc(r.by)}</small>${esc(r.text)}`).join("")}</div>`).join("");
+  $("added").innerHTML = mine.map((c) => `<div><small>${esc(jelly.who(c.by))}${c.replies?.length ? " · the agent replied" : ""}</small>${esc(c.text)}${(c.replies || []).map((r) => `<small style="margin-top:6px">${esc(r.by)}</small>${esc(r.text)}`).join("")}</div>`).join("");
 }
 
 function renderPast() {
