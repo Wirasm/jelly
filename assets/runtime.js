@@ -1022,6 +1022,9 @@
       if (!ownText(el) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "OPTION"].includes(el.tagName) || !measurable(el)) continue;
       // Disabled controls are exempt in WCAG.
       if (el.closest(":disabled, [aria-disabled=true]")) continue;
+      // Symbols alone (●●●○○, ▲, →) are graphics, such as a meter's empty slots,
+      // not text someone reads; the text contrast rule does not fit them.
+      if (!/[\p{L}\p{N}]/u.test(ownText(el))) continue;
       const cs = getComputedStyle(el);
       const fg = rgba(cs.webkitTextFillColor || cs.color);
       if (fg[3] === 0) continue;

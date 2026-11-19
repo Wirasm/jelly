@@ -59,7 +59,11 @@ fn faint_text_is_caught_in_both_schemes() {
         </style>
         <p>Plain text</p><p class="big">Big grey heading text</p>
         <span class="sr-only">For screen readers</span>
-        <div aria-hidden="true" style="color: #fafafa">decoration</div>"#, None);
+        <div aria-hidden="true" style="color: #fafafa">decoration</div>
+        <span title="3 of 5">●●●<span style="opacity: .28">●●</span></span>"#, None);
+    // A word among the symbols is still text.
+    let out = problems(r#"<span style="color: #ddd">●● Low</span>"#, None);
+    assert!(out.contains("unreadable text"), "{out}");
 }
 
 #[test]
