@@ -22,13 +22,14 @@ fn try_runs_the_steps_and_changes_nothing() {
     let view = r#"<ul id="items"></ul>
         <form id="f" hidden><input id="title" aria-label="Title"><button id="save">Save</button></form>
         <button id="add">Add</button>
+        <button id="sign" onclick="jelly.viewer = 'Ana'; jelly.call('sign').catch(() => {})">Sign</button>
         <script>
         add.onclick = () => { f.hidden = false; };
         f.onsubmit = (e) => { e.preventDefault(); jelly.call("add", { title: title.value }).catch(() => {}); };
         jelly.onState((s) => { items.innerHTML = s.items.map((i) => `<li>${i}</li>`).join(""); });
         </script>"#;
     ureq::post(&format!("{url}/api/jellies"))
-        .send_json(json!({"name": "t:x", "view": view, "verbs": "const verbs = { add(s, { title }) { s.items.push(title); } };", "state": {"items": ["Eggs"]}, "by": "test"}))
+        .send_json(json!({"name": "t:x", "view": view, "verbs": "const verbs = { add(s, { title }) { s.items.push(title); }, sign(s, a, { by }) { s.signed = by; } };", "state": {"items": ["Eggs"]}, "by": "test"}))
         .unwrap();
     let jelly = |args: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &url]).args(args).output().unwrap();
@@ -42,6 +43,8 @@ fn try_runs_the_steps_and_changes_nothing() {
     // No verb runs here, so the page stays at the real version: if it reported its
     // screen like a normal render, `see` would show the typed draft.
     let drafted = jelly(&["try", "t:x", "--click", "#add", "--type", "#title=Draft"]);
+    // A page that names its viewer calls verbs as that person, as it would for real.
+    let signed = jelly(&["try", "t:x", "--click", "#sign"]);
     let seen = jelly(&["see", "t:x"]);
     let after: Value = ureq::get(&format!("{url}/api/jellies/t:x")).call().unwrap().into_json().unwrap();
     let log_after = log();
@@ -51,6 +54,7 @@ fn try_runs_the_steps_and_changes_nothing() {
     assert!(tried.contains(r#"text "Buy milk""#), "the page shows the added item: {tried}");
     assert_eq!((&after["state"], &after["version"]), (&before["state"], &before["version"]), "{tried}");
     assert_eq!(log_after, log_before, "no events recorded");
+    assert!(signed.contains(r#"/signed = "person:Ana""#), "{signed}");
     assert!(drafted.contains("call     none: no verb ran") && drafted.contains(r#"= "Draft""#), "{drafted}");
     assert!(!seen.contains("Buy milk") && !seen.contains("Draft"), "see shows the real jelly, not a trial: {seen}");
 }
