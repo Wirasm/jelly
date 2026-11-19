@@ -65,21 +65,32 @@ control sits there, move it with
 ## Look before you show
 
 ```bash
+jelly look plan              # desktop and phone in one call: outline, problems, one side-by-side png
 jelly see plan               # the page as text, its verbs and state, errors, what waits on the person
 jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
 jelly see plan --width 390   # phone width
 jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
+jelly see plan --compare v12 # what changed since v12: outline, problems new or fixed, one before/after png
+jelly see plan --save before # keep this version by name; later: jelly see plan --compare before
 jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it, change nothing
 jelly focus plan             # open it full size on their screen; `jelly focus` closes it
 ```
 
-Always run `jelly see` and fix every `error` and `!` line before you focus a
-jelly or ask about it. It renders in light and dark mode and flags what the browser
-measured, such as text unreadable in one mode or a control too small to tap at
-`--width 390`, each with a selector for `try` and `--at`. `see` only looks: nothing
-in its render is recorded as the person. To check that buttons and fields work, use `jelly try`, not a browser
+Always run `jelly look` and fix every `error` and `!` line before you focus a
+jelly or ask about it. It prints the outline at desktop width, then only what
+differs on a phone, and one png with desktop and phone side by side: read that
+image. It renders in light and dark mode at both widths and flags what the browser
+measured, such as text unreadable in one mode or a control too small to tap on a
+phone, each with a selector for `try` and `--at`. Use `see` when you only need the
+text or one width. `look` and `see` only look: nothing in their renders is recorded as the person.
+To check that buttons and fields work, use `jelly try`, not a browser
 driver: it does the steps in order, then prints the page, errors, and each verb
 that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
+After you change a jelly, check what the change did with `--compare` against the
+version you started from (`v` and the number `see` printed). It lists the outline
+lines added, removed or changed, marks problems your change made as `new:`, and
+says which it `fixed`. Earlier versions come from the undo history, which ends at
+the last undo; `--save NAME` keeps one for longer.
 `jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly
 page's thumbnail; pick a moment that tells the story on its own.
 
@@ -94,7 +105,7 @@ One question, on the part of a jelly it is about:
 jelly ask plan "Which hero?" --option bold="Bold gradient" --option quiet="Quiet white|Swaps to a plain hero" \
   --recommend quiet --why "The button stands out more" --at "#hero" --wait --timeout 300
 # blocks; prints: a1 answered: quiet · "keep the button blue". Exit 2 on timeout.
-jelly look plan "Check the footer links" --at "#footer"   # they answer "seen" or with a word
+jelly look plan "Check the footer links" --at "#footer"   # with words, it asks them to look; they answer "seen" or with a word
 jelly withdraw plan a1                                     # when it no longer applies
 ```
 
@@ -136,7 +147,7 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
 --since` to catch anything after your change. `wait` exits 2 on timeout.
 In a script, add `--json` instead of parsing the text: changes print their event
-(`seq`, `version`, `changed`, `args.id` for asks), `see` and `try` their parts. If
+(`seq`, `version`, `changed`, `args.id` for asks), `see`, `look` and `try` their parts. If
 several agents share the jelly page, set `JELLY_AS=<your name>` so each has its
 own inbox and its changes are attributed. Add `--mine` to `inbox`, `attention`
 or `comments` to see only your jellies (made or last reshaped under your name).

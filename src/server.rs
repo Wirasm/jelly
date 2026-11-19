@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `surface`.
 
-use crate::store::{named, viewer, AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Store, PAGE};
+use crate::store::{named, viewer, AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Past, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -37,6 +37,8 @@ struct App {
     screens: Mutex<std::collections::HashMap<String, ViewScreen>>,
     /// `jelly try` renders in progress, by token. Memory only.
     trials: Mutex<std::collections::HashMap<String, Trial>>,
+    /// `jelly look` and `see --compare` renders in progress, by token. Memory only.
+    probes: Mutex<std::collections::HashMap<String, Probe>>,
 }
 type Shared = Arc<App>;
 
@@ -135,7 +137,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -192,6 +194,9 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
         .route("/see-frame/{name}", get(see_frame))
+        .route("/api/jellies/{name}/look", get(look))
+        .route("/probe-frame", get(probe_frame))
+        .route("/api/probes/{token}", post(put_probe_screen))
         .route("/api/jellies/{name}/try", post(try_steps))
         .route("/api/tries/{token}", post(put_trial_result))
         .route("/api/tries/{token}/call", post(trial_call))
@@ -619,6 +624,8 @@ struct ViewQ {
     /// A `jelly try` token: the page does that trial's steps against the trial's state.
     #[serde(rename = "try")]
     trial: Option<String>,
+    /// A `jelly look` token: the page posts its snapshot to that probe.
+    probe: Option<String>,
 }
 
 /// Serves a jelly's view with the runtime injected, so `window.jelly` exists
@@ -635,10 +642,21 @@ async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
             boot["try"] = json!({"token": token, "steps": t.steps});
         }
     }
+    let mut view = &j.view;
+    let probes = app.probes.lock().expect("probes lock");
+    if let Some((token, probe)) = q.probe.and_then(|t| probes.get(&t).filter(|p| p.name == j.name).map(|p| (t, p))) {
+        boot["screenUrl"] = json!(format!("/api/probes/{token}"));
+        if let Some(past) = &probe.past {
+            view = &past.view;
+            boot["state"] = past.state.clone();
+            boot["version"] = json!(past.version);
+            boot["past"] = json!(true);
+        }
+    }
     // `</` cannot appear inside the script, or state text could close the tag.
     let boot = boot.to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script src=\"/runtime.js\"></script>");
-    Ok(Html(inject_head(&j.view, &inject)))
+    Ok(Html(inject_head(view, &inject)))
 }
 
 /// Puts `inject` first thing in `<head>`, so it runs before the view's scripts.
@@ -1218,7 +1236,12 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
     };
     // The phone frame is scaled up to 500px wide, so the window grows with it.
     let height = if width < 500 { (height as f64 * 500.0 / width.max(1) as f64).ceil() as u32 } else { height };
-    let width = width.max(500);
+    run_browser_at(bin, &url, width.max(500), height, png, dark, limit).await
+}
+
+/// Runs headless Chrome on `url` in a window of this size, light or dark. With
+/// `png`, writes a screenshot of the window there; otherwise dumps the DOM.
+async fn run_browser_at(bin: &str, url: &str, width: u32, height: u32, png: Option<&std::path::Path>, dark: bool, limit: std::time::Duration) -> Result<(), String> {
     // Chrome refuses a profile another Chrome is using (exit 21), so each render
     // gets its own. A fresh profile starts as fast as a used one.
     static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1270,13 +1293,23 @@ struct SeeQ {
     /// Answer with JSON instead of text.
     #[serde(default)]
     json: bool,
+    /// Compare with an earlier version (`v12`) or one saved with `save`.
+    compare: Option<String>,
+    /// Keep this version under a name to compare with later.
+    save: Option<String>,
 }
 
 /// Everything an agent needs to pick up a jelly, as plain text: what it is,
 /// what the person did, what waits on them, and what is on screen. With
 /// `json`, the same split into the summary, the problem lines and the outline.
-async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(mut q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
+    // Read what to compare with before saving, so `--compare x --save x` compares with the old x.
+    let before = q.compare.as_deref().map(|c| past(&app, &name, c)).transpose()?;
+    if let Some(label) = q.save.take() { save(&app, &name, &label)?; }
+    if let Some(before) = before {
+        return compare(&app, port, &name, before, &q).await;
+    }
     let render_name = name.clone();
     see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>, dark| {
         let name = render_name.clone();
@@ -1340,62 +1373,13 @@ where
     } else { None };
 
     app.validate_see(&name, &owner, j.version)?;
-    let mut out = String::new();
+    let mut out = summary(&app, &j);
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
-    let (last, mine) = app.store.lock().expect("store lock").recent_events(&name);
-    // A trim can drop the newest event while an older one of the person's stays:
-    // only the event that made this version says who made the last change.
-    let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
-    let last = format!(" · last change {}{by}", ago(j.updated_ms));
-    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · reshaped by {s}")).unwrap_or_default();
-    line(&mut out, format!("{} · {} · v{} · made by {}{shaped}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
-        if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
-    if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
-    for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
-    let verbs = crate::verbs::check(&j.verbs).unwrap_or_default();
-    line(&mut out, format!("verbs    {}", if verbs.is_empty() { "none (read-only)".to_string() } else { verbs.iter().map(|v| verb_sig(&j.verbs, v)).collect::<Vec<_>>().join(" · ") }));
-    line(&mut out, format!("state    {}", shape(&j.state)));
-    let assets = app.store.lock().expect("store lock").assets(&name);
-    if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
-    for a in j.attention.iter().filter(|a| a.is_open()) {
-        line(&mut out, format!("waits    {}", a.summary()));
-    }
-    for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
-        let ans = a.answer.as_ref().expect("filtered");
-        let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
-        line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
-    }
-    for f in j.comments.iter().filter(|f| !f.resolved) {
-        line(&mut out, format!("comment  {} on {}{}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), named(&f.by), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
-    }
-    for e in &mine {
-        line(&mut out, format!("person   {} {}{}", ago(e.at_ms), viewer(&e.by).map(|n| format!("{n} ")).unwrap_or_default(), e.describe()));
-    }
-    let project = j.project();
-    if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
-        line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
-    }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
     // Everything from here to the outline is a problem line.
     let problems_from = out.len();
     if let Some(sc) = &snap {
-        for e in &sc.errors { line(&mut out, format!("error    {e}")); }
-        let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
-        for m in &sc.invalid {
-            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which has invalid CSS selector syntax; {fallback}"));
-        }
-        for m in &sc.missing {
-            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which matches nothing on the page; {fallback}"));
-        }
-        for m in &sc.floating {
-            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            line(&mut out, format!("!        {id} asks about {sel}, which is in a fixed or sticky part of the page; {fallback}"));
-        }
-        for f in &sc.fallback {
-            line(&mut out, format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
-        }
+        for p in screen_problems(sc) { line(&mut out, p); }
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
     for p in problem_lines(snap.as_ref(), dark.as_ref()) { line(&mut out, format!("!        {p}")); }
@@ -1415,6 +1399,65 @@ where
         out.push('\n');
     }
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
+}
+
+/// The part of `jelly see` that needs no browser: what the jelly is, who made
+/// it, its verbs and state, what waits on the person and what they did lately.
+fn summary(app: &App, j: &crate::store::Jelly) -> String {
+    let mut out = String::new();
+    let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
+    let (last, mine) = app.store.lock().expect("store lock").recent_events(&j.name);
+    // A trim can drop the newest event while an older one of the person's stays:
+    // only the event that made this version says who made the last change.
+    let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
+    let last = format!(" · last change {}{by}", ago(j.updated_ms));
+    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · reshaped by {s}")).unwrap_or_default();
+    line(&mut out, format!("{} · {} · v{} · made by {}{shaped}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
+        if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
+    if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
+    for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
+    let verbs = crate::verbs::check(&j.verbs).unwrap_or_default();
+    line(&mut out, format!("verbs    {}", if verbs.is_empty() { "none (read-only)".to_string() } else { verbs.iter().map(|v| verb_sig(&j.verbs, v)).collect::<Vec<_>>().join(" · ") }));
+    line(&mut out, format!("state    {}", shape(&j.state)));
+    let assets = app.store.lock().expect("store lock").assets(&j.name);
+    if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
+    for a in j.attention.iter().filter(|a| a.is_open()) {
+        line(&mut out, format!("waits    {}", a.summary()));
+    }
+    for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
+        let ans = a.answer.as_ref().expect("filtered");
+        let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
+        line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
+    }
+    for f in j.comments.iter().filter(|f| !f.resolved) {
+        line(&mut out, format!("comment  {} on {}{}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), named(&f.by), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
+    }
+    for e in &mine {
+        line(&mut out, format!("person   {} {}{}", ago(e.at_ms), viewer(&e.by).map(|n| format!("{n} ")).unwrap_or_default(), e.describe()));
+    }
+    let project = j.project();
+    if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
+        line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
+    }
+    out
+}
+
+/// Errors the page threw and questions whose anchor did not place, as
+/// `error` and `!` lines.
+fn screen_problems(sc: &Screen) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in &sc.errors { out.push(format!("error    {e}")); }
+    let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
+    for (list, why) in [(&sc.invalid, "has invalid CSS selector syntax"), (&sc.missing, "matches nothing on the page"), (&sc.floating, "is in a fixed or sticky part of the page")] {
+        for m in list {
+            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
+            out.push(format!("!        {id} asks about {sel}, which {why}; {fallback}"));
+        }
+    }
+    for f in &sc.fallback {
+        out.push(format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
+    }
+    out
 }
 
 /// Awaits a render that may not have been started.
@@ -1456,6 +1499,398 @@ fn problem_lines(light: Option<&Screen>, dark: Option<&Screen>) -> Vec<String> {
     }
     for p in light.and_then(|s| s.problems.as_ref()).into_iter().flatten() { add(&p.kind, p.items.clone(), ""); }
     out
+}
+
+// ---- jelly look ----------------------------------------------------------------
+
+/// One page in a `jelly look` or `see --compare` render. Its snapshot goes
+/// here, not into the jelly's shared one, so pages at several widths or
+/// versions can render at once.
+struct Probe {
+    name: String,
+    width: u32,
+    height: u32,
+    /// Shown above the page in the side-by-side screenshot.
+    label: String,
+    dark: bool,
+    /// An earlier version to show instead of the current one. Agent renders
+    /// cannot call verbs, so this only ever shows the past.
+    past: Option<Past>,
+    screen: Option<Screen>,
+}
+
+impl App {
+    fn start_probe(&self, name: &str, (width, height): (u32, u32), label: &str, dark: bool, past: Option<&Past>) -> Result<String, ApiError> {
+        let token = random_token()?;
+        let probe = Probe { name: name.into(), width, height, label: label.into(), dark, past: past.cloned(), screen: None };
+        self.probes.lock().expect("probes lock").insert(token.clone(), probe);
+        Ok(token)
+    }
+}
+
+/// Removes the probes when dropped, so a cancelled request leaves none behind.
+struct Probes<'a>(&'a App, Vec<String>);
+
+impl Drop for Probes<'_> {
+    fn drop(&mut self) {
+        let mut probes = self.0.probes.lock().expect("probes lock");
+        for t in &self.1 { probes.remove(t); }
+    }
+}
+
+const FRAME_PAD: u32 = 16;
+const FRAME_LABEL: u32 = 24;
+
+/// Renders these probes side by side in one browser and waits for each page's
+/// snapshot. With `png`, the screenshot holds them all, each under its label.
+async fn render_probes(app: &App, port: u16, tokens: &[String], png: Option<&std::path::Path>) -> Result<Vec<Option<Screen>>, String> {
+    let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
+    let (width, height, dark) = {
+        let probes = app.probes.lock().expect("probes lock");
+        let sizes: Vec<_> = tokens.iter().filter_map(|t| probes.get(t)).map(|p| (p.width, p.height, p.dark)).collect();
+        (FRAME_PAD + sizes.iter().map(|s| s.0 + FRAME_PAD).sum::<u32>(),
+         FRAME_LABEL + sizes.iter().map(|s| s.1).max().unwrap_or(0) + FRAME_PAD,
+         sizes.iter().any(|s| s.2))
+    };
+    let url = format!("http://127.0.0.1:{port}/probe-frame?t={}", tokens.join(","));
+    run_browser_at(&bin, &url, width.max(500), height, png, dark, RENDER_LIMIT).await?;
+    // The page posts its snapshot shortly before the browser exits; give it a moment to land.
+    let taken = || -> Vec<Option<Screen>> {
+        let probes = app.probes.lock().expect("probes lock");
+        tokens.iter().map(|t| probes.get(t).and_then(|p| p.screen.clone())).collect()
+    };
+    for _ in 0..30 {
+        if taken().iter().all(Option::is_some) { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(taken())
+}
+
+#[derive(Deserialize)]
+struct ProbeFrameQ {
+    /// Probe tokens, comma-separated, in the order they show left to right.
+    t: String,
+}
+
+/// The page a probe render loads: each probe's jelly in a frame of its exact
+/// size, side by side, labelled. Phone widths need the frame anyway, because
+/// headless Chrome will not make a window narrower than 500px.
+async fn probe_frame(State(app): State<Shared>, Query(q): Query<ProbeFrameQ>) -> Html<String> {
+    let probes = app.probes.lock().expect("probes lock");
+    let frames: String = q.t.split(',').filter_map(|t| probes.get(t).map(|p| (t, p))).map(|(t, p)| {
+        // Only tokens the daemon issued get here, and they are URL-safe base64.
+        format!("<div><div class=\"l\">{}</div><iframe src=\"/j/{}/?agent=1&probe={t}{}\" style=\"width:{}px;height:{}px\"></iframe></div>",
+            p.label, p.name, if p.dark { "&dark=1" } else { "" }, p.width, p.height)
+    }).collect();
+    Html(format!("<!doctype html><meta charset=\"utf-8\"><style>body{{margin:0;padding:0 {FRAME_PAD}px;display:flex;gap:{FRAME_PAD}px;align-items:flex-start;background:#c9c9d1}}\
+        .l{{height:{FRAME_LABEL}px;line-height:{FRAME_LABEL}px;font:600 13px system-ui,sans-serif;color:#222}}\
+        iframe{{display:block;border:0;background:#fff}}</style><body>{frames}</body>"))
+}
+
+/// A probe page's snapshot.
+async fn put_probe_screen(State(app): State<Shared>, Path(token): Path<String>, Json(mut sc): Json<Screen>) -> Result<StatusCode, ApiError> {
+    let mut probes = app.probes.lock().expect("probes lock");
+    let probe = probes.get_mut(&token).ok_or_else(|| ApiError::Store(Error::Invalid("this render is over".into())))?;
+    sc.at_ms = now_ms();
+    probe.screen = Some(sc);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// How outline `to` differs from outline `from`, by line. A line whose `#id`
+/// is on both sides changed; so did a line without an id replaced by one of the
+/// same kind (`text`, `button`, …) in the same place. Other lines were added or
+/// removed.
+#[derive(Serialize, Default)]
+struct OutlineDiff {
+    added: Vec<String>,
+    removed: Vec<String>,
+    changed: Vec<Changed>,
+}
+
+#[derive(Serialize)]
+struct Changed {
+    from: String,
+    to: String,
+}
+
+fn outline_diff(from: &str, to: &str) -> OutlineDiff {
+    let (a, b): (Vec<&str>, Vec<&str>) = (from.lines().collect(), to.lines().collect());
+    // An outline line is `  - button "Go" #go`; the indent and dash are only layout.
+    let item = |l: &str| { let l = l.trim_start(); l.strip_prefix("- ").unwrap_or(l).to_string() };
+    let id = |l: &str| l.rsplit_once(" #").map(|(_, id)| id.to_string()).filter(|id| !id.contains([' ', '"']));
+    let kind = |l: &str| l.split([' ', ':']).next().unwrap_or("").to_string();
+    // Each side's lines that differ, with the diff hunk they are in.
+    let (mut old, mut new) = (Vec::<(usize, Option<String>)>::new(), Vec::<(usize, Option<String>)>::new());
+    for (hunk, op) in similar::capture_diff_slices(similar::Algorithm::Myers, &a, &b).iter().enumerate() {
+        if matches!(op, similar::DiffOp::Equal { .. }) { continue; }
+        old.extend(a[op.old_range()].iter().map(|l| (hunk, Some(item(l)))));
+        new.extend(b[op.new_range()].iter().map(|l| (hunk, Some(item(l)))));
+    }
+    let mut d = OutlineDiff::default();
+    for (oh, o) in old.iter_mut() {
+        let Some(line) = o.as_ref() else { continue };
+        let found = new.iter_mut().find(|(nh, n)| n.as_ref().is_some_and(|n| match id(line) {
+            Some(i) => id(n).as_ref() == Some(&i),
+            // Without ids, only a same-kind line in the same hunk is the same element.
+            None => nh == oh && id(n).is_none() && kind(n) == kind(line),
+        }));
+        if let Some((_, n)) = found {
+            d.changed.push(Changed { from: o.take().expect("checked"), to: n.take().expect("matched") });
+        }
+    }
+    d.removed = old.into_iter().filter_map(|(_, l)| l).collect();
+    d.added = new.into_iter().filter_map(|(_, l)| l).collect();
+    d
+}
+
+/// How many outline differences `look` prints; the rest are counted.
+const DIFF_SHOWN: usize = 40;
+
+impl OutlineDiff {
+    fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+
+    /// `changed`, `removed` and `added` lines, at most `DIFF_SHOWN` of them.
+    fn lines(&self) -> Vec<String> {
+        let all: Vec<String> = self.changed.iter().map(|c| format!("changed  {} → {}", c.from, c.to))
+            .chain(self.removed.iter().map(|l| format!("removed  {l}")))
+            .chain(self.added.iter().map(|l| format!("added    {l}")))
+            .collect();
+        let more = all.len().saturating_sub(DIFF_SHOWN);
+        let mut out: Vec<String> = all.into_iter().take(DIFF_SHOWN).collect();
+        if more > 0 { out.push(format!("…        {more} more; --json has them all")); }
+        out
+    }
+}
+
+/// Every `error` and `!` line for one width: what the page threw, questions
+/// that did not place, and what the light and dark renders measured.
+fn measured_problems(light: &Option<Screen>, dark: &Option<Screen>) -> Vec<String> {
+    light.as_ref().map(screen_problems).unwrap_or_default().into_iter()
+        .chain(problem_lines(light.as_ref(), dark.as_ref()).into_iter().map(|p| format!("!        {p}")))
+        .collect()
+}
+
+const DESKTOP: (u32, u32) = (1280, 900);
+const PHONE: (u32, u32) = (390, 844);
+
+#[derive(Deserialize)]
+struct LookQ {
+    #[serde(default)]
+    json: bool,
+}
+
+/// `jelly look`: the jelly at desktop and phone width in one call. The desktop
+/// outline, what differs on a phone, the measured problems at both widths, and
+/// one screenshot with both side by side. Four pages render in three browsers
+/// at once (the two light pages share the screenshot), so it takes about as
+/// long as one render.
+async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<LookQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+    let port = port_of(&req_headers);
+    let (j, home) = {
+        let store = app.store.lock().expect("store lock");
+        (store.get(&name)?.clone(), store.home().to_path_buf())
+    };
+    let label = |(w, h): (u32, u32), what: &str| format!("{what} {w}×{h}");
+    // Desktop and phone in light mode, then each in dark mode.
+    let probes = Probes(&app, vec![
+        app.start_probe(&name, DESKTOP, &label(DESKTOP, "desktop"), false, None)?,
+        app.start_probe(&name, PHONE, &label(PHONE, "phone"), false, None)?,
+        app.start_probe(&name, DESKTOP, "", true, None)?,
+        app.start_probe(&name, PHONE, "", true, None)?,
+    ]);
+    let dir = home.join("see");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{}-look.png", crate::disk::name(&name)));
+    // A screenshot left from an earlier look must not pass for this one.
+    let _ = std::fs::remove_file(&path);
+    let (light, dd, pd) = tokio::join!(
+        render_probes(&app, port, &probes.1[..2], Some(&path)),
+        render_probes(&app, port, &probes.1[2..3], None),
+        render_probes(&app, port, &probes.1[3..], None),
+    );
+    let mut notes = Vec::new();
+    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, what: &str| match r {
+        Ok(s) => s,
+        Err(e) => { notes.push(format!("No {what}: {e}")); vec![None; n] }
+    };
+    let mut light = got(light, 2, "snapshot").into_iter();
+    let (desk_sc, phone_sc) = (light.next().flatten(), light.next().flatten());
+    let desk_dark_sc = got(dd, 1, "dark mode check").pop().flatten();
+    let phone_dark_sc = got(pd, 1, "dark mode check at phone width").pop().flatten();
+    if desk_sc.is_none() { notes.push("The page sent no snapshot at desktop width.".into()); }
+    if phone_sc.is_none() { notes.push("The page sent no snapshot at phone width.".into()); }
+    let png = path.exists().then_some(path);
+
+    let mut out = summary(&app, &j);
+    let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
+    if let Some(p) = &png { line(&mut out, format!("png      {} · desktop on the left, phone on the right", p.display())); }
+    let problems_from = out.len();
+    let desk_problems = measured_problems(&desk_sc, &desk_dark_sc);
+    // Only the problems desktop does not have, so nothing is said twice.
+    let phone_problems: Vec<String> = measured_problems(&phone_sc, &phone_dark_sc).into_iter()
+        .filter(|p| !desk_problems.contains(p))
+        .map(|p| match p.split_once(' ') { Some((tag, rest)) => format!("{tag:<8} at phone width: {}", rest.trim_start()), None => p })
+        .collect();
+    for p in desk_problems.iter().chain(&phone_problems) { line(&mut out, p.clone()); }
+    for n in notes { line(&mut out, format!("!        {n}")); }
+    let diff = match (&desk_sc, &phone_sc) {
+        (Some(d), Some(p)) => Some(outline_diff(&d.text, &p.text)),
+        _ => None,
+    };
+    if q.json {
+        return Ok(Json(json!({
+            "jelly": j.name, "version": j.version,
+            "summary": &out[..problems_from],
+            "problems": out[problems_from..].lines().collect::<Vec<_>>(),
+            "png": png,
+            "outline": desk_sc.map(|s| s.text),
+            "phone": diff.map(|d| json!({"width": PHONE.0, "height": PHONE.1, "added": d.added, "removed": d.removed, "changed": d.changed})),
+        })).into_response());
+    }
+    if let Some(s) = &desk_sc {
+        line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
+        out.push_str(&s.text);
+        out.push('\n');
+    }
+    if let Some(d) = diff {
+        line(&mut out, format!("\nat phone width {}×{}, compared with desktop:", PHONE.0, PHONE.1));
+        if d.is_empty() { line(&mut out, "same     the outline is the same as on desktop".into()); }
+        for l in d.lines() { line(&mut out, l); }
+    }
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
+}
+
+// ---- jelly see --compare -------------------------------------------------------
+
+/// `v12` names version 12.
+fn version_of(s: &str) -> Option<u64> {
+    s.strip_prefix('v').filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
+}
+
+/// Where `see --save LABEL` keeps a jelly's view and state.
+fn saved_path(app: &App, name: &str, label: &str) -> Result<std::path::PathBuf, ApiError> {
+    let ok = (1..=40).contains(&label.len()) && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !ok || version_of(label).is_some() {
+        return Err(Error::Invalid(format!("{label:?} cannot name a saved version: use letters, digits, - and _ (v and a number is a version)")).into());
+    }
+    let home = app.store.lock().expect("store lock").home().to_path_buf();
+    Ok(home.join("see").join("saved").join(crate::disk::name(name)).join(format!("{label}.json")))
+}
+
+/// Keeps the jelly's view and state as they are now under `label`, outside the
+/// jelly: nothing about the jelly changes.
+fn save(app: &App, name: &str, label: &str) -> Result<(), ApiError> {
+    let path = saved_path(app, name, label)?;
+    let past = {
+        let store = app.store.lock().expect("store lock");
+        let j = store.get(name)?;
+        Past { view: j.view.clone(), state: j.state.clone(), version: j.version }
+    };
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(path.parent().expect("saved_path has a folder"))?;
+        std::fs::write(&path, serde_json::to_vec(&past).expect("a past version serializes"))
+    };
+    write().map_err(|e| ApiError::Internal(format!("could not save {name} as {label}: {e}")))
+}
+
+/// What `--compare` means by `against`, with how to name it: an earlier
+/// version rebuilt from history, or one saved with `--save`.
+fn past(app: &App, name: &str, against: &str) -> Result<(String, Past), ApiError> {
+    if let Some(v) = version_of(against) {
+        return Ok((format!("v{v}"), app.store.lock().expect("store lock").at_version(name, v)?));
+    }
+    let path = saved_path(app, name, against)?;
+    let bytes = std::fs::read(&path).map_err(|_| Error::Invalid(format!("nothing is saved as {against} for {name}; save it with: jelly see {name} --save {against}")))?;
+    let past: Past = serde_json::from_slice(&bytes).map_err(|e| ApiError::Internal(format!("{}: {e}", path.display())))?;
+    Ok((format!("{against} (v{})", past.version), past))
+}
+
+/// `jelly see --compare`: what changed since an earlier version. Both versions
+/// render at once, side by side in one screenshot, each also in dark mode, and
+/// the answer is the outline difference and the problems that are new or fixed.
+async fn compare(app: &Shared, port: u16, name: &str, (against, before): (String, Past), q: &SeeQ) -> Result<Response, ApiError> {
+    let (j, home) = {
+        let store = app.store.lock().expect("store lock");
+        (store.get(name)?.clone(), store.home().to_path_buf())
+    };
+    let width = q.width.unwrap_or(DESKTOP.0);
+    let size = (width, q.height.unwrap_or(if width <= 500 { PHONE.1 } else { DESKTOP.1 }));
+    let now = format!("now v{}", j.version);
+    // Before and now in light mode, then each in dark mode.
+    let probes = Probes(app, vec![
+        app.start_probe(name, size, &against, false, Some(&before))?,
+        app.start_probe(name, size, &now, false, None)?,
+        app.start_probe(name, size, "", true, Some(&before))?,
+        app.start_probe(name, size, "", true, None)?,
+    ]);
+    let dir = home.join("see");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{}-compare.png", crate::disk::name(name)));
+    let _ = std::fs::remove_file(&path);
+    let (light, bd, nd) = tokio::join!(
+        render_probes(app, port, &probes.1[..2], Some(&path)),
+        render_probes(app, port, &probes.1[2..3], None),
+        render_probes(app, port, &probes.1[3..], None),
+    );
+    let mut notes = Vec::new();
+    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, what: &str| match r {
+        Ok(s) => s,
+        Err(e) => { notes.push(format!("No {what}: {e}")); vec![None; n] }
+    };
+    let mut light = got(light, 2, "snapshot").into_iter();
+    let (before_sc, now_sc) = (light.next().flatten(), light.next().flatten());
+    let before_dark = got(bd, 1, "dark mode check").pop().flatten();
+    let now_dark = got(nd, 1, "dark mode check").pop().flatten();
+    if before_sc.is_none() { notes.push(format!("{against} sent no snapshot.")); }
+    if now_sc.is_none() { notes.push("The page sent no snapshot.".into()); }
+    let png = path.exists().then_some(path);
+
+    let was = measured_problems(&before_sc, &before_dark);
+    let is = measured_problems(&now_sc, &now_dark);
+    let new: Vec<&String> = is.iter().filter(|p| !was.contains(p)).collect();
+    let fixed: Vec<&String> = was.iter().filter(|p| !is.contains(p)).collect();
+    let diff = match (&before_sc, &now_sc) {
+        (Some(b), Some(n)) => Some(outline_diff(&b.text, &n.text)),
+        _ => None,
+    };
+
+    let mut out = summary(app, &j);
+    let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
+    if let Some(p) = &png { line(&mut out, format!("png      {} · {against} on the left, {now} on the right", p.display())); }
+    let problems_from = out.len();
+    for p in &is {
+        // New problems say so, so the agent sees what its change broke.
+        let p = if new.contains(&p) { p.split_once(' ').map(|(tag, rest)| format!("{tag:<8} new: {}", rest.trim_start())).unwrap_or(p.clone()) } else { p.clone() };
+        line(&mut out, p);
+    }
+    for n in notes { line(&mut out, format!("!        {n}")); }
+    if q.json {
+        let diff = diff.unwrap_or_default();
+        return Ok(Json(json!({
+            "jelly": j.name, "version": j.version, "against": against, "against_version": before.version,
+            "summary": &out[..problems_from],
+            "problems": out[problems_from..].lines().collect::<Vec<_>>(),
+            "new_problems": new, "fixed_problems": fixed,
+            "png": png,
+            "added": diff.added, "removed": diff.removed, "changed": diff.changed,
+        })).into_response());
+    }
+    line(&mut out, format!("\ncompared with {against}:"));
+    if let Some(d) = diff {
+        if d.is_empty() { line(&mut out, "same     the outline did not change".into()); }
+        for l in d.lines() { line(&mut out, l); }
+    }
+    // `fixed  unreadable text …`, without the `!`; an error keeps its word.
+    for f in fixed {
+        line(&mut out, match f.split_once(' ') {
+            Some(("!", rest)) => format!("fixed    {}", rest.trim_start()),
+            Some((tag, rest)) => format!("fixed    {tag}: {}", rest.trim_start()),
+            None => format!("fixed    {f}"),
+        });
+    }
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }
 
 // ---- jelly try ---------------------------------------------------------------
@@ -1801,7 +2236,7 @@ mod share_tests {
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
         store.withdraw("test:share", "a3", "agent").unwrap();
         let (events, _) = broadcast::channel(16);
-        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() }))
+        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() }))
     }
 
     async fn exported(app: Shared) -> String {
@@ -2045,7 +2480,7 @@ mod wait_tests {
             store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
-        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() })
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() })
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
@@ -2063,7 +2498,7 @@ mod wait_tests {
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
-            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() };
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() };
             let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
@@ -2392,7 +2827,7 @@ mod wait_tests {
         let store = Store::open(dir.path()).unwrap();
         let path = store.events_path();
         let (events, _) = broadcast::channel(1);
-        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() };
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() };
         let q = WaitQ { timeout: Some(1), ..query(None, 0) };
         let waiting = wait_since(&app, &q);
         tokio::pin!(waiting);
@@ -2467,7 +2902,7 @@ mod placement_tests {
         let mut store = Store::open(dir.path()).unwrap();
         store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
-        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
         for kind in ["ask", "look"] {
             for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
                 let mut received = app.events.subscribe();
@@ -2540,6 +2975,25 @@ mod problem_tests {
         // Without a dark render, nothing is said about either scheme.
         assert!(problem_lines(Some(&light), None).iter().all(|l| !l.contains(" mode")));
     }
+
+    /// A line replaced by one of the same kind is a change; a button replaced by
+    /// a heading is one removed and one added. Ids pair lines first.
+    #[test]
+    fn outline_diff_pairs_changes_by_id_then_kind() {
+        let d = outline_diff("- heading \"A\" [h1]\n  - text \"3 items\" #n\n  - button \"Go\"\n- link \"x\"",
+            "- heading \"A\" [h1]\n  - text \"4 items\" #n\n  - heading \"Gone\" [h2]\n- link \"x\"\n- img \"new\"");
+        assert_eq!(serde_json::to_value(&d).unwrap(), json!({
+            "added": ["heading \"Gone\" [h2]", "img \"new\""],
+            "removed": ["button \"Go\""],
+            "changed": [{"from": "text \"3 items\" #n", "to": "text \"4 items\" #n"}],
+        }));
+        // A line with an id pairs with its id, not with whatever took its place.
+        let d = outline_diff("- text \"3 items\" #count", "- text \"Faint\" #faint\n- text \"4 items\" #count");
+        assert_eq!(serde_json::to_value(&d).unwrap(), json!({
+            "added": ["text \"Faint\" #faint"], "removed": [],
+            "changed": [{"from": "text \"3 items\" #count", "to": "text \"4 items\" #count"}],
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -2550,7 +3004,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
         (dir, app)
     }
 
@@ -2709,7 +3163,7 @@ mod tests {
 
     async fn seen(app: &Shared) -> String {
         let response = see(State(app.clone()), Path("test:x".into()),
-            Query(SeeQ { width: None, height: None, png: false, full: false, json: false }), axum::http::HeaderMap::new()).await.unwrap();
+            Query(SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None }), axum::http::HeaderMap::new()).await.unwrap();
         String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
     }
 
@@ -2757,7 +3211,7 @@ mod tests {
                 let (resume, resumed) = tokio::sync::oneshot::channel();
                 let mut rendezvous = Some((started, resumed));
                 let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                    SeeQ { width: None, height: None, png, full: false, json: false },
+                    SeeQ { width: None, height: None, png, full: false, json: false, compare: None, save: None },
                     move |_, _, path, dark| {
                         assert_eq!(path.is_some(), png);
                         let light = (!dark).then(|| rendezvous.take().expect("one light render"));
@@ -2802,7 +3256,7 @@ mod tests {
             std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
             let browser = browser.to_str().unwrap().to_string();
             let response = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: true, full: false, json: false },
+                SeeQ { width: None, height: None, png: true, full: false, json: false, compare: None, save: None },
                 move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
@@ -2834,7 +3288,7 @@ mod tests {
             let posting_app = app.clone();
             let posting_owner = current.clone();
             let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: false, full: false, json: false },
+                SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None },
                 move |_, _, path, dark| {
                     assert!(path.is_none() && !dark);
                     let app = posting_app.clone();
@@ -2894,7 +3348,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
@@ -3098,7 +3552,7 @@ mod tests {
         let current = owner(&app, "test:x").await;
         post_both(&app, snapshot(&current, "PAGE", version)).await.unwrap();
         let see_x = || async {
-            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false, json: false },
+            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None },
                 |_, _, _, _| async { Err("no browser".to_string()) }).await.unwrap();
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };

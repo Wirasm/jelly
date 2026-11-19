@@ -192,15 +192,26 @@ enum Cmd {
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
     },
-    /// Ask the person to look at something: it lands in their attention queue,
-    /// and they answer "seen" or with a word back.
+    /// Look at a jelly at desktop and phone width in one call, or, with WHAT, ask
+    /// the person to look at something.
+    ///
+    /// `jelly look NAME` prints what `see` does at desktop width, then what differs
+    /// at phone width, the problems measured at both widths (light and dark), and
+    /// one screenshot with desktop and phone side by side. Both widths render at
+    /// once, so it takes about as long as one `see`. With --json it prints {jelly,
+    /// version, summary, problems, png, outline, phone: {width, height, added,
+    /// removed, changed}}.
+    ///
+    /// `jelly look NAME "Check the footer links" --at "#footer"` puts a look in the
+    /// person's attention queue; they answer "seen" or with a word back.
     Look {
         name: String,
-        what: String,
-        #[arg(long)]
+        /// What the person should look at. Leave out to look at the jelly yourself.
+        what: Option<String>,
+        #[arg(long, requires = "what")]
         at: Option<String>,
-        #[arg(long, alias = "detail", default_value = "")]
-        context: String,
+        #[arg(long, alias = "detail", requires = "what")]
+        context: Option<String>,
     },
     /// Everything waiting on the person in this project (or everywhere with
     /// --all), one line per item.
@@ -216,6 +227,12 @@ enum Cmd {
     /// the browser measured in light and dark mode.
     ///
     /// --json prints {jelly, version, summary, problems, png, outline}.
+    ///
+    /// `--compare v12` shows what changed since version 12 (or since a version
+    /// kept with `--save NAME`): the outline lines added, removed or changed, the
+    /// problems that are new or fixed, and one png with before and after side by
+    /// side. Its --json prints {jelly, version, against, against_version, summary,
+    /// problems, new_problems, fixed_problems, png, added, removed, changed}.
     See {
         name: String,
         /// Render at this width (390 for a phone). Default: 1280.
@@ -233,6 +250,14 @@ enum Cmd {
         /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
         #[arg(long)]
         poster: bool,
+        /// Compare with an earlier version, `v12`, or one kept with --save. Earlier
+        /// versions come from the undo history, back to the last undo.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["png", "full", "poster"])]
+        compare: Option<String>,
+        /// Keep this version under a name, to --compare with later. It is kept
+        /// outside the jelly, so the jelly does not change.
+        #[arg(long, value_name = "NAME")]
+        save: Option<String>,
     },
     /// Use a jelly as the person would, without changing it: do the steps in
     /// order, then print what is on screen, the verbs that ran and what they
@@ -690,7 +715,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             out["jelly"] = json!(jelly);
             print(out)
         }
-        Cmd::Look { name, what, at, context } => {
+        Cmd::Look { name, what: None, .. } => {
+            let url = api(&format!("/{}/look{}", id(&name)?, if json { "?json=true" } else { "" }));
+            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
+            if json {
+                return print(resp.into_json().map_err(|e| e.to_string())?);
+            }
+            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))
+        }
+        Cmd::Look { name, what: Some(what), at, context } => {
+            let context = context.unwrap_or_default();
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
@@ -826,8 +860,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
-        Cmd::See { name, width, png, full, problems, poster } => {
+        Cmd::See { name, width, png, full, problems, poster, compare, save } => {
             let mut q = vec![];
+            if let Some(c) = &compare { q.push(format!("compare={}", encode(c))); }
+            if let Some(s) = &save { q.push(format!("save={}", encode(s))); }
             if let Some(w) = width { q.push(format!("width={w}")); }
             if png || full || poster { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }

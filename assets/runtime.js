@@ -53,6 +53,8 @@
   const subs = [];
   const enc = encodeURIComponent;
   const api = `/api/jellies/${enc(boot.name)}`;
+  // `jelly look` renders post their snapshot to their own slot instead.
+  const screenUrl = boot.screenUrl || `${api}/screen`;
   // Names are unique per project: a short name means a jelly in this one.
   const project = boot.name.includes(":") ? boot.name.split(":")[0] : "";
   const full = (name) => (name.includes(":") || name === "surface" || !project ? name : `${project}:${name}`);
@@ -172,8 +174,9 @@
   })();
 
   listeners.add((ev) => {
-    // A trial shows its own copy of the state; real changes meanwhile do not reach it.
-    if (ev.jelly !== boot.name || trial) return;
+    // A trial shows its own copy of the state, and `see --compare` an earlier
+    // version; real changes meanwhile do not reach either.
+    if (ev.jelly !== boot.name || trial || boot.past) return;
     if (ev.kind === "remove") {
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
@@ -1077,7 +1080,7 @@
       && ["hidden", "clip"].includes(getComputedStyle(e).overflowX) && getComputedStyle(e).textOverflow !== "ellipsis").map((e) => `${shortSelector(e)} "${e.textContent.trim().slice(0, 30)}"`));
     // A load that failed already shows as an error line.
     add("failed request", performance.getEntriesByType("resource")
-      .filter((r) => r.responseStatus >= 400 && ![`${location.origin}${api}/screen`, `${location.origin}/favicon.ico`].includes(r.name) && !errors.includes(`could not load ${r.name}`))
+      .filter((r) => r.responseStatus >= 400 && ![`${location.origin}${screenUrl}`, `${location.origin}/favicon.ico`].includes(r.name) && !errors.includes(`could not load ${r.name}`))
       .map((r) => `${r.responseStatus} ${r.name.replace(location.origin, "")}`));
     return out;
   }
@@ -1087,7 +1090,7 @@
     if (snapT || trial) return;
     snapT = setTimeout(() => {
       snapT = null;
-      fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
+      fetch(screenUrl, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
           // Only `jelly see`'s own renders measure problems; a person's browser does not pay for them.
           ...(agentMode && { dark: darkRender, contrast: contrast(), problems: darkRender ? [] : problems() }),

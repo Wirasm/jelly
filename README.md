@@ -24,7 +24,9 @@ prose, and whenever you need them to choose.
   gains, costs and your recommendation. They pick, add a note, or add their own question.
 - **See what you made.** `jelly see NAME` prints the page as text, with everything
   waiting on them, what they did lately, and problems the browser measured, such as
-  text unreadable in dark mode. `--png` when layout matters.
+  text unreadable in dark mode. `--png` when layout matters. `jelly look NAME`
+  does desktop and phone width in one call, with one side-by-side screenshot.
+  `jelly see NAME --compare v12` shows what a change did since version 12.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
@@ -39,6 +41,7 @@ jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
+jelly look plan                                  # desktop and phone: outline, problems, one png
 jelly see plan                                   # what is on screen, as text
 jelly try plan --click "#add" --type "#title=Tea" --click "#save"   # use it without changing it
 jelly show plan                                  # the full jelly: view, verbs, state
