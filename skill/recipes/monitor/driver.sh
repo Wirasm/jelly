@@ -39,14 +39,16 @@ V
   DAEMON=$(pgrep -f "serve --port $(sed 's/.*://' <<<"${JELLY_URL:-:7878}")" | head -1)
   LAT=(); ALL=(); FAILS=0; WRONG=0
 }
+# Milliseconds since the epoch; `date +%s%N` is GNU only.
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
 median() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
 # One step. Sets MS, RESULT (pass, slow or fail), LABEL and REPLY.
 step() {
   local at want start out id
   if (( $1 % 2 )); then at="#list"; want="it shows on the page below #list"; else at="#nope"; want="#nope matches nothing on the page"; fi
-  start=$(date +%s%N)
+  start=$(now_ms)
   out=$("$J" ask monitor-target "Run $1: which first?" --option a=Write --option b=Ship --at "$at" 2>&1)
-  MS=$(( ($(date +%s%N) - start) / 1000000 ))
+  MS=$(( $(now_ms) - start ))
   REPLY=${out#*; }; REPLY=${REPLY%. Answers arrive*}
   id=$(sed -n 's/.*asked \(a[0-9]*\) .*/\1/p' <<<"$out")
   [ -n "$id" ] && "$J" withdraw monitor-target "$id" >/dev/null 2>&1
@@ -71,8 +73,8 @@ for i in $(seq 1 "$TOTAL"); do
   [ "$i" -eq 6 ] && call phase '{"id":"measure"}'
   step "$i"; DONE=$i
   MED=$( [ ${#LAT[@]} -gt 0 ] && median "${LAT[@]}" || echo "$MS" )
-  rss=$(awk '/VmRSS/ {printf "%.1f", $2 / 1024}' "/proc/$DAEMON/status" 2>/dev/null || echo 0)
-  browsers=$(pgrep -c -f -- "${BROWSER_MATCH:---headless=new}" || true)
+  rss=$(ps -o rss= -p "$DAEMON" 2>/dev/null | awk '{printf "%.1f", $1 / 1024}')
+  browsers=$(pgrep -f -- "${BROWSER_MATCH:---headless=new}" | wc -l | tr -d ' ')
   call push "{\"points\":[{\"m\":\"latency\",\"v\":$MS},{\"m\":\"browsers\",\"v\":${browsers:-0}},{\"m\":\"memory\",\"v\":${rss:-0}}],
              \"items\":[{\"r\":\"$RESULT\",\"label\":\"$LABEL\"}],\"done\":$DONE,\"total\":$TOTAL}"
   # Flag what the person should see, once each: the first wrong reply (the
