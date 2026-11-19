@@ -192,15 +192,26 @@ enum Cmd {
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
     },
-    /// Ask the person to look at something: it lands in their attention queue,
-    /// and they answer "seen" or with a word back.
+    /// Look at a jelly at desktop and phone width in one call, or, with WHAT, ask
+    /// the person to look at something.
+    ///
+    /// `jelly look NAME` prints what `see` does at desktop width, then what differs
+    /// at phone width, the problems measured at both widths (light and dark), and
+    /// one screenshot with desktop and phone side by side. Both widths render at
+    /// once, so it takes about as long as one `see`. With --json it prints {jelly,
+    /// version, summary, problems, png, outline, phone: {width, height, added,
+    /// removed, changed}}.
+    ///
+    /// `jelly look NAME "Check the footer links" --at "#footer"` puts a look in the
+    /// person's attention queue; they answer "seen" or with a word back.
     Look {
         name: String,
-        what: String,
-        #[arg(long)]
+        /// What the person should look at. Leave out to look at the jelly yourself.
+        what: Option<String>,
+        #[arg(long, requires = "what")]
         at: Option<String>,
-        #[arg(long, alias = "detail", default_value = "")]
-        context: String,
+        #[arg(long, alias = "detail", requires = "what")]
+        context: Option<String>,
     },
     /// Everything waiting on the person in this project (or everywhere with
     /// --all), one line per item.
@@ -690,7 +701,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             out["jelly"] = json!(jelly);
             print(out)
         }
-        Cmd::Look { name, what, at, context } => {
+        Cmd::Look { name, what: None, .. } => {
+            let url = api(&format!("/{}/look{}", id(&name)?, if json { "?json=true" } else { "" }));
+            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
+            if json {
+                return print(resp.into_json().map_err(|e| e.to_string())?);
+            }
+            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))
+        }
+        Cmd::Look { name, what: Some(what), at, context } => {
+            let context = context.unwrap_or_default();
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
