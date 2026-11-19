@@ -810,6 +810,8 @@
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
+  const ACTIVE = "button, a, input, textarea, select, [role=button], img, canvas, svg, video, iframe";
+  const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim().replace(/\s+/g, " ").slice(0, 120);
   function agentSnapshot() {
     const lines = [];
     const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
@@ -827,7 +829,14 @@
         else if (tag === "select") add(depth, `select = "${c.options[c.selectedIndex]?.text || ""}"`, c);
         else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
         else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
-        else if (LEAF.has(tag)) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (LEAF.has(tag) || ownText(c)) {
+          // One line of text keeps its parts together, so `<span>p50 <b>6.5</b></span>`
+          // keeps its label. Text around controls or blocks (`<p>Then <button>Go</button></p>`)
+          // gives its own words, then what is inside.
+          const active = c.querySelector(ACTIVE);
+          if (!active && (LEAF.has(tag) || !c.innerText.trim().includes("\n"))) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+          else { const t = ownText(c); if (t) add(depth, `text "${t}"`, c); walk(c, depth + (t ? 1 : 0)); }
+        }
         else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); walk(c, depth + 1); continue; }
         else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
