@@ -22,7 +22,8 @@ fn see_keeps_labels_and_controls_inside_text() {
         <p>When ready, <button id="go">Go</button></p>
         <section id="s">Intro <h2>Part</h2><p>Body</p></section>
         <p>Read the <a href="/guide">setup guide</a> first.</p>
-        <div>Total: <span id="count">3</span> items</div>"#;
+        <div>Total: <span id="count">3</span> items</div>
+        <div style="display: contents"><h3 id="inner">Inside contents</h3><button id="in-btn">Inner</button></div>"#;
     ureq::post(&format!("{url}/api/jellies"))
         .send_json(json!({"name": "t:o", "view": view, "verbs": "const verbs = {};", "state": {}, "by": "test"}))
         .unwrap();
@@ -40,6 +41,9 @@ fn see_keeps_labels_and_controls_inside_text() {
         r#"  - link "setup guide""#,
         r#"- text "Total: 3 items""#,
         r#"  - text "3" #count"#,
+        // SvelteKit mounts every app in a `display: contents` box (#110).
+        r#"- heading "Inside contents" [h3] #inner"#,
+        r#"- button "Inner" #in-btn"#,
     ] {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
