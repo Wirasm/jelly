@@ -1504,8 +1504,10 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
     let mut trials = app.trials.lock().expect("trials lock");
     let trial = trials.get_mut(&token).ok_or_else(trial_over)?;
     let args = clip(&r.args.to_string(), 120);
-    // A real page's calls come from the person, so the verbs see the same.
-    let next = match crate::verbs::run(&trial.verbs, &r.verb, &trial.state, &r.args, "person", now_ms()) {
+    // A real page's calls come from the person (named, if the page set a name),
+    // so the verbs see the same. Only person identities are accepted here.
+    let by = r.by.filter(|b| crate::store::is_person(b)).unwrap_or_else(|| "person".into());
+    let next = match crate::verbs::run(&trial.verbs, &r.verb, &trial.state, &r.args, &by, now_ms()) {
         Ok(next) => next,
         Err(e) => {
             trial.calls.push(format!("refused  {} {args}: {e}", r.verb));
@@ -1525,7 +1527,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
     trial.calls.push(format!("call     {} {args} → {what}", r.verb));
     trial.state = next;
     trial.version += 1;
-    Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": "person", "verb": r.verb, "args": r.args,
+    Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": by, "verb": r.verb, "args": r.args,
         "changed": changed, "version": trial.version, "state": trial.state})))
 }
 

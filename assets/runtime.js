@@ -950,7 +950,7 @@
   async function trialCall(verb, args) {
     trialCalls++;
     try {
-      const r = await fetch(`/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args }) });
+      const r = await fetch(`/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args, by: me() }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText);
       return j;
