@@ -7,7 +7,7 @@ mod store;
 mod startup;
 mod verbs;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
@@ -206,6 +206,30 @@ enum Cmd {
         #[arg(long)]
         full: bool,
     },
+    /// Use a jelly as the person would, without changing it: do the steps in
+    /// order, then print what is on screen, the verbs that ran and what they
+    /// changed. Nothing is saved, recorded or undoable.
+    Try {
+        name: String,
+        /// Click the element this CSS selector matches. Repeatable.
+        #[arg(long, value_name = "SELECTOR")]
+        click: Vec<String>,
+        /// Fill a field: `--type "#title=Buy milk"`. Repeatable.
+        #[arg(long = "type", value_name = "SELECTOR=TEXT")]
+        type_: Vec<String>,
+        /// Press a key in an element: `--press "#title=Enter"`. Repeatable.
+        #[arg(long, value_name = "SELECTOR=KEY")]
+        press: Vec<String>,
+        /// Render at this width (390 for a phone).
+        #[arg(long)]
+        width: Option<u32>,
+        /// Also save a screenshot after the steps and print its path.
+        #[arg(long)]
+        png: bool,
+        /// The steps in the order given, filled in from the flags above by `main`.
+        #[arg(skip)]
+        steps: Vec<Value>,
+    },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
     /// Write a jelly's view, verbs, state and assets into a folder to edit.
@@ -357,7 +381,17 @@ fn output(args: std::fmt::Arguments<'_>) -> Result<(), CommandError> {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    if let (Cmd::Try { steps, .. }, Some(m)) = (&mut cli.cmd, matches.subcommand_matches("try")) {
+        match try_steps(m) {
+            Ok(s) => *steps = s,
+            Err(e) => {
+                eprintln!("jelly: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(CommandError::Output(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
@@ -366,6 +400,42 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `jelly try`'s steps in the order they were given, which separate flags lose.
+fn try_steps(m: &clap::ArgMatches) -> Result<Vec<Value>, String> {
+    let mut steps: Vec<(usize, Value)> = Vec::new();
+    for (flag, field) in [("click", ""), ("type_", "text"), ("press", "key")] {
+        let (Some(values), Some(at)) = (m.get_many::<String>(flag), m.indices_of(flag)) else { continue };
+        for (value, i) in values.zip(at) {
+            let step = if field.is_empty() {
+                json!({"do": "click", "at": value})
+            } else {
+                let (sel, rest) = split_target(value).ok_or_else(|| format!("--{} wants SELECTOR={}, e.g. \"#title={}\"", flag.trim_end_matches('_'), field.to_uppercase(), if field == "key" { "Enter" } else { "Buy milk" }))?;
+                json!({"do": flag.trim_end_matches('_'), "at": sel, field: rest})
+            };
+            steps.push((i, step));
+        }
+    }
+    if steps.is_empty() {
+        return Err("give jelly try at least one --click, --type or --press".into());
+    }
+    steps.sort_by_key(|(i, _)| *i);
+    Ok(steps.into_iter().map(|(_, s)| s).collect())
+}
+
+/// Splits `SELECTOR=VALUE` at the first `=` outside brackets, so `[name=q]=hi` works.
+fn split_target(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '[' | '(' => depth += 1,
+            ']' | ')' => depth -= 1,
+            '=' if depth == 0 && i > 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn daemon_command() -> Result<std::process::Command, String> {
@@ -667,6 +737,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
             let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
+            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
+            Ok(())
+        }
+        Cmd::Try { name, width, png, steps, .. } => {
+            let url = api(&format!("/{}/try", id(&name)?));
+            // Two renders with --png, each up to the daemon's 20 s limit.
+            let resp = ureq::post(&url).timeout(std::time::Duration::from_secs(90))
+                .send_json(json!({"steps": steps, "width": width, "png": png})).map_err(describe)?;
             output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
             Ok(())
         }
@@ -1118,6 +1196,19 @@ mod tests {
     use super::{answer_line, placement, wait_line, write_output};
     use std::io::{self, Write};
     use serde_json::json;
+
+    #[test]
+    fn try_steps_keep_their_order_across_flags() {
+        use clap::CommandFactory;
+        let m = super::Cli::command().get_matches_from(["jelly", "try", "x", "--click", "#a", "--type", "[name=q]=x=y", "--press", "#q=Enter", "--click", "#b"]);
+        let steps = super::try_steps(m.subcommand_matches("try").unwrap()).unwrap();
+        assert_eq!(steps, [
+            json!({"do": "click", "at": "#a"}),
+            json!({"do": "type", "at": "[name=q]", "text": "x=y"}),
+            json!({"do": "press", "at": "#q", "key": "Enter"}),
+            json!({"do": "click", "at": "#b"}),
+        ]);
+    }
 
     #[test]
     fn startup_precedes_dispatch_and_hooks_suppress_its_errors() {

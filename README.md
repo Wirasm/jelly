@@ -24,6 +24,8 @@ prose, and whenever you need them to choose.
   gains, costs and your recommendation. They pick, add a note, or add their own question.
 - **See what you made.** `jelly see NAME` prints the page as text, with everything
   waiting on them and what they did lately. `--png` when layout matters.
+  `jelly try NAME --click … --type …` uses the page the way they would and shows
+  the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
@@ -36,6 +38,7 @@ jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
 jelly see plan                                   # what is on screen, as text
+jelly try plan --click "#add" --type "#title=Tea" --click "#save"   # use it without changing it
 jelly show plan                                  # the full jelly: view, verbs, state
 jelly state plan /labels                         # its state, or the part at a JSON pointer
 jelly events plan                                # stream its events as JSON lines; no name streams every jelly's

@@ -35,6 +35,8 @@ struct App {
     events: broadcast::Sender<Event>,
     /// What some browser last showed of each jelly, as text. Memory only.
     screens: Mutex<std::collections::HashMap<String, ViewScreen>>,
+    /// `jelly try` renders in progress, by token. Memory only.
+    trials: Mutex<std::collections::HashMap<String, Trial>>,
 }
 type Shared = Arc<App>;
 
@@ -88,14 +90,11 @@ impl App {
     }
 
     fn snapshot_owner(&self, name: &str, view_rev: u64) -> Result<String, ApiError> {
-        use base64::Engine as _;
         let mut screens = self.screens.lock().expect("screens lock");
         if let Some(entry) = screens.get(name).filter(|s| s.view_rev == view_rev) {
             return Ok(entry.owner.clone());
         }
-        let mut bytes = [0; 32];
-        getrandom::fill(&mut bytes).map_err(|e| ApiError::Internal(format!("could not issue snapshot owner: {e}")))?;
-        let owner = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let owner = random_token()?;
         screens.insert(name.into(), ViewScreen { owner: owner.clone(), view_rev, screen: None });
         Ok(owner)
     }
@@ -129,7 +128,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default() });
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -152,14 +151,14 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
 fn router(app: Shared) -> Router {
     Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
-        .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
+        .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into()), Query(ViewQ::default())).await }))
         .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
         // Views live at /j/<name>/ so a view can use relative `assets/<file>` paths.
         .route("/j/{name}", get(|Path(name): Path<String>| async move { Redirect::permanent(&format!("/j/{name}/")) }))
         .route("/j/{name}/", get(view))
         .route("/j/{name}/assets/{file}", get(asset))
         // A project's page is the same page, showing only that project's jellies.
-        .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path(PAGE.into())).await }))
+        .route("/p/{project}", get(|st: State<Shared>| async move { view(st, Path(PAGE.into()), Query(ViewQ::default())).await }))
         .route("/api/events", get(events))
         .route("/api/wait", get(wait))
         .route("/api/ws", get(ws))
@@ -183,6 +182,9 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/note", post(note))
         .route("/api/jellies/{name}/see", get(see))
         .route("/see-frame/{name}", get(see_frame))
+        .route("/api/jellies/{name}/try", post(try_steps))
+        .route("/api/tries/{token}", post(put_trial_result))
+        .route("/api/tries/{token}/call", post(trial_call))
         .route("/api/projects/{project}/design", get(get_design).put(put_design))
         .route("/p/{project}/DESIGN.md", get(get_design))
         .route("/p/{project}/design.css", get(design_css))
@@ -602,13 +604,27 @@ async fn pump(mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct ViewQ {
+    /// A `jelly try` token: the page does that trial's steps against the trial's state.
+    #[serde(rename = "try")]
+    trial: Option<String>,
+}
+
 /// Serves a jelly's view with the runtime injected, so `window.jelly` exists
 /// before any of the view's own scripts run.
-async fn view(State(app): State<Shared>, Path(name): Path<String>) -> Result<Html<String>, ApiError> {
+async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ViewQ>) -> Result<Html<String>, ApiError> {
     let store = app.store.lock().expect("store lock");
     let j = store.get(&name)?;
     let owner = app.snapshot_owner(&name, j.view_rev)?;
-    let boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
+    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
+    if let Some(token) = q.trial {
+        if let Some(t) = app.trials.lock().expect("trials lock").get(&token).filter(|t| t.name == j.name) {
+            boot["state"] = t.state.clone();
+            boot["version"] = json!(t.version);
+            boot["try"] = json!({"token": token, "steps": t.steps});
+        }
+    }
     // `</` cannot appear inside the script, or state text could close the tag.
     let boot = boot.to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script src=\"/runtime.js\"></script>");
@@ -856,7 +872,7 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         let j = store.get(name).map_err(|e| e.to_string())?;
         app.snapshot_owner(name, j.view_rev).map_err(|_| "could not issue snapshot owner".to_string())?
     };
-    let render = render(port, name, 1280, 900, None, ANCHOR_CHECK);
+    let render = render(port, name, None, 1280, 900, None, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
     // as the snapshot is in; dropping the render stops the browser.
@@ -1134,18 +1150,22 @@ const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Runs headless Chrome on a jelly at a given size. With `png`, writes a
 /// screenshot there; either way the page's runtime posts a fresh snapshot.
-async fn render(port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
+/// With `trial`, the page runs that `jelly try`'s steps.
+async fn render(port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
     let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
-    run_browser(&bin, port, name, width, height, png, limit).await
+    run_browser(&bin, port, name, trial, width, height, png, limit).await
 }
 
-async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
+#[allow(clippy::too_many_arguments)]
+async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
+    // Trial tokens are URL-safe base64, so they go into the URL as they are.
+    let trial = trial.map(|t| format!("&try={t}")).unwrap_or_default();
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
     let url = if width < 500 {
-        format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}")
+        format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}{trial}")
     } else {
-        format!("http://127.0.0.1:{port}/j/{name}/?agent=1")
+        format!("http://127.0.0.1:{port}/j/{name}/?agent=1{trial}")
     };
     // The phone frame is scaled up to 500px wide, so the window grows with it.
     let height = if width < 500 { (height as f64 * 500.0 / width.max(1) as f64).ceil() as u32 } else { height };
@@ -1205,7 +1225,7 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Quer
     let render_name = name.clone();
     see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>| {
         let name = render_name.clone();
-        async move { render(port, &name, width, height, png.as_deref(), RENDER_LIMIT).await }
+        async move { render(port, &name, None, width, height, png.as_deref(), RENDER_LIMIT).await }
     }).await
 }
 
@@ -1319,6 +1339,192 @@ where
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }
 
+// ---- jelly try ---------------------------------------------------------------
+
+/// One thing `jelly try` does in the page, as a person would.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "do", rename_all = "lowercase")]
+enum TryStep {
+    Click { at: String },
+    /// Replaces the field's value, like a person selecting it all and typing.
+    Type { at: String, text: String },
+    Press { at: String, key: String },
+}
+
+impl std::fmt::Display for TryStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Click { at } => write!(f, "click {at}"),
+            Self::Type { at, text } => write!(f, "type {at} {text:?}"),
+            Self::Press { at, key } => write!(f, "press {at} {key}"),
+        }
+    }
+}
+
+/// A `jelly try` render in progress. The page's verb calls run against `state`,
+/// which starts as the jelly's and is thrown away at the end: nothing is saved,
+/// logged or undoable.
+struct Trial {
+    name: String,
+    verbs: String,
+    state: Value,
+    version: u64,
+    steps: Vec<TryStep>,
+    /// What each verb call did, one line each.
+    calls: Vec<String>,
+    result: Option<TrialResult>,
+}
+
+/// What the page reports once its steps ran.
+#[derive(Deserialize)]
+struct TrialResult {
+    text: String,
+    width: u32,
+    height: u32,
+    #[serde(default)]
+    errors: Vec<String>,
+    /// The step that could not be done and why; the steps after it did not run.
+    #[serde(default)]
+    failed: Option<TrialFailure>,
+}
+
+#[derive(Deserialize)]
+struct TrialFailure {
+    step: usize,
+    error: String,
+}
+
+#[derive(Deserialize)]
+struct TryReq {
+    steps: Vec<TryStep>,
+    width: Option<u32>,
+    #[serde(default)]
+    png: bool,
+}
+
+impl App {
+    fn start_trial(&self, name: &str, steps: &[TryStep]) -> Result<String, ApiError> {
+        let store = self.store.lock().expect("store lock");
+        let j = store.get(name)?;
+        let token = random_token()?;
+        let trial = Trial { name: j.name.clone(), verbs: j.verbs.clone(), state: j.state.clone(), version: j.version, steps: steps.to_vec(), calls: Vec::new(), result: None };
+        self.trials.lock().expect("trials lock").insert(token.clone(), trial);
+        Ok(token)
+    }
+}
+
+fn random_token() -> Result<String, ApiError> {
+    use base64::Engine as _;
+    let mut bytes = [0; 32];
+    getrandom::fill(&mut bytes).map_err(|e| ApiError::Internal(format!("could not issue a token: {e}")))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// `jelly try`: renders the jelly, does the steps in it as a person would, and
+/// says what happened. The page's verb calls go to `trial_call`, so the jelly
+/// itself is never changed.
+async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_headers: axum::http::HeaderMap, Json(r): Json<TryReq>) -> Result<Response, ApiError> {
+    let port = port_of(&req_headers);
+    let width = r.width.unwrap_or(1280);
+    let height = if width <= 500 { 844 } else { 900 };
+    let (version, home) = {
+        let store = app.store.lock().expect("store lock");
+        (store.get(&name)?.version, store.home().to_path_buf())
+    };
+    let mut notes = Vec::new();
+    let token = app.start_trial(&name, &r.steps)?;
+    match render(port, &name, Some(&token), width, height, None, RENDER_LIMIT).await {
+        Ok(()) => {
+            for _ in 0..30 {
+                if app.trials.lock().expect("trials lock").get(&token).is_some_and(|t| t.result.is_some()) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+        Err(e) => notes.push(format!("No snapshot: {e}")),
+    }
+    let trial = app.trials.lock().expect("trials lock").remove(&token).expect("only this handler removes its trial");
+    // The screenshot is a second render that does the same steps from the same start.
+    let png = if r.png {
+        let dir = home.join("see");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{}-try-{width}.png", crate::disk::name(&trial.name)));
+        let token = app.start_trial(&name, &r.steps)?;
+        let shot = render(port, &name, Some(&token), width, height, Some(&path), RENDER_LIMIT).await;
+        app.trials.lock().expect("trials lock").remove(&token);
+        match shot {
+            Ok(()) => Some(path),
+            Err(e) => { notes.push(format!("No screenshot: {e}")); None }
+        }
+    } else { None };
+
+    let mut out = String::new();
+    let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
+    line(&mut out, format!("{} · tried {} step{} on v{version} · nothing was saved", trial.name, trial.steps.len(), if trial.steps.len() == 1 { "" } else { "s" }));
+    for (i, s) in trial.steps.iter().enumerate() { line(&mut out, format!("step     {} {s}", i + 1)); }
+    if trial.calls.is_empty() { line(&mut out, "call     none: no verb ran".into()); }
+    for c in &trial.calls { line(&mut out, c.clone()); }
+    if let Some(res) = &trial.result {
+        for e in &res.errors { line(&mut out, format!("error    {e}")); }
+        if let Some(f) = &res.failed {
+            let step = trial.steps.get(f.step).map(|s| s.to_string()).unwrap_or_default();
+            line(&mut out, format!("!        step {} ({step}) failed: {}; the steps after it did not run", f.step + 1, f.error));
+        }
+    } else if notes.is_empty() {
+        notes.push("The page rendered but did not finish the steps.".into());
+    }
+    for n in notes { line(&mut out, format!("!        {n}")); }
+    if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
+    line(&mut out, format!("state    {}", shape(&trial.state)));
+    if let Some(res) = trial.result {
+        line(&mut out, format!("\non screen at {}×{} after the steps:", res.width, res.height));
+        out.push_str(&res.text);
+        out.push('\n');
+    }
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
+}
+
+async fn put_trial_result(State(app): State<Shared>, Path(token): Path<String>, Json(res): Json<TrialResult>) -> Result<StatusCode, ApiError> {
+    let mut trials = app.trials.lock().expect("trials lock");
+    let trial = trials.get_mut(&token).ok_or_else(trial_over)?;
+    trial.result = Some(res);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn trial_over() -> ApiError {
+    Error::NotFound("this jelly try is over".into()).into()
+}
+
+/// A verb call from a page under `jelly try`: runs against the trial's state and
+/// answers like a real call, but saves nothing and records no event.
+async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Value>, ApiError> {
+    let mut trials = app.trials.lock().expect("trials lock");
+    let trial = trials.get_mut(&token).ok_or_else(trial_over)?;
+    let args = clip(&r.args.to_string(), 120);
+    // A real page's calls come from the person, so the verbs see the same.
+    let next = match crate::verbs::run(&trial.verbs, &r.verb, &trial.state, &r.args, "person", now_ms()) {
+        Ok(next) => next,
+        Err(e) => {
+            trial.calls.push(format!("refused  {} {args}: {e}", r.verb));
+            return Err(Error::Invalid(e).into());
+        }
+    };
+    let mut changed = Vec::new();
+    crate::store::diff(&trial.state, &next, &mut String::new(), &mut changed);
+    let what = if changed.is_empty() { "changed nothing".to_string() } else {
+        let shown: Vec<String> = changed.iter().take(5).map(|p| match next.pointer(p) {
+            Some(v) => format!("{p} = {}", clip(&v.to_string(), 60)),
+            None => format!("{p} removed"),
+        }).collect();
+        let more = if changed.len() > 5 { format!(" · {} more", changed.len() - 5) } else { String::new() };
+        shown.join(" · ") + &more
+    };
+    trial.calls.push(format!("call     {} {args} → {what}", r.verb));
+    trial.state = next;
+    trial.version += 1;
+    Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": "person", "verb": r.verb, "args": r.args,
+        "changed": changed, "version": trial.version, "state": trial.state})))
+}
+
 fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
 }
@@ -1400,12 +1606,16 @@ async fn design_css(State(app): State<Shared>, Path(project): Path<String>) -> R
 struct FrameQ {
     w: u32,
     h: u32,
+    #[serde(rename = "try")]
+    trial: Option<String>,
 }
 
 async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
     // Scaled up to fill the 500px window, so the screenshot is the phone layout and nothing else.
     let k = 500.0 / q.w.max(1) as f64;
-    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
+    // Only a URL-safe token passes through, so it cannot break out of the attribute.
+    let trial = q.trial.filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).map(|t| format!("&try={t}")).unwrap_or_default();
+    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1{trial}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
 }
 
 #[derive(Deserialize)]
@@ -1440,7 +1650,7 @@ mod share_tests {
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
         store.withdraw("test:share", "a3", "agent").unwrap();
         let (events, _) = broadcast::channel(16);
-        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default() }))
+        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() }))
     }
 
     async fn exported(app: Shared) -> String {
@@ -1684,7 +1894,7 @@ mod wait_tests {
             store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
-        (dir, App { store: Mutex::new(store), events, screens: Mutex::default() })
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() })
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
@@ -1702,7 +1912,7 @@ mod wait_tests {
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
-            let app = App { store: Mutex::new(store), events, screens: Mutex::default() };
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() };
             let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
@@ -2031,7 +2241,7 @@ mod wait_tests {
         let store = Store::open(dir.path()).unwrap();
         let path = store.events_path();
         let (events, _) = broadcast::channel(1);
-        let app = App { store: Mutex::new(store), events, screens: Mutex::default() };
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() };
         let q = WaitQ { timeout: Some(1), ..query(None, 0) };
         let waiting = wait_since(&app, &q);
         tokio::pin!(waiting);
@@ -2106,7 +2316,7 @@ mod placement_tests {
         let mut store = Store::open(dir.path()).unwrap();
         store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
-        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default() });
         for kind in ["ask", "look"] {
             for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
                 let mut received = app.events.subscribe();
@@ -2161,7 +2371,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default() });
         (dir, app)
     }
 
@@ -2265,7 +2475,7 @@ mod tests {
     }
 
     async fn owner(app: &Shared, name: &str) -> String {
-        let Html(html) = view(State(app.clone()), Path(name.into())).await.unwrap();
+        let Html(html) = view(State(app.clone()), Path(name.into()), Query(ViewQ::default())).await.unwrap();
         let boot = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
         serde_json::from_str::<Value>(boot).unwrap()["snapshotOwner"].as_str().unwrap().into()
     }
@@ -2288,7 +2498,7 @@ mod tests {
     async fn bundled_runtime_posts_served_ownership_and_reloads_obsolete_pages() {
         let (_dir, app) = app();
         create_page(&app, "PAGE", false).await;
-        let Html(html) = view(State(app.clone()), Path("test:x".into())).await.unwrap();
+        let Html(html) = view(State(app.clone()), Path("test:x".into()), Query(ViewQ::default())).await.unwrap();
         let boot = html.split_once("window.__JELLY__=").unwrap().1.split_once(";</script>").unwrap().0;
         let rt = rquickjs::Runtime::new().unwrap();
         let ctx = rquickjs::Context::full(&rt).unwrap();
@@ -2376,7 +2586,7 @@ mod tests {
                 move |width, height, path| {
                     let browser = browser.clone();
                     async move {
-                        run_browser(&browser, 0, "test:x", width, height, path.as_deref(), std::time::Duration::from_secs(5)).await
+                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), std::time::Duration::from_secs(5)).await
                     }
                 }).await.unwrap();
             let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
@@ -2461,7 +2671,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
