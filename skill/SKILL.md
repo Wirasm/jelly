@@ -62,6 +62,7 @@ fixed control sits there, move it with
 jelly see plan               # the page as text, its verbs and state, errors, what waits on the person
 jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
 jelly see plan --width 390   # phone width
+jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
 jelly focus plan             # open it full size on their screen; `jelly focus` closes it
 ```
 
@@ -155,7 +156,7 @@ jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
-jelly share plan --out /tmp/plan.html   # one read-only HTML file, state and assets baked in
+jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly pin plan                   # keep it; unpinned jellies archive after a quiet week
 jelly rm plan
