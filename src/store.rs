@@ -508,7 +508,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::NotFound(n) => write!(f, "no jelly named {n}"),
-            Error::Exists(n) => write!(f, "a jelly named {n} already exists; reshape it or pass replace"),
+            Error::Exists(n) => write!(f, "a jelly named {n} already exists; reshape it or pass --replace"),
             Error::Invalid(m) => f.write_str(m),
         }
     }

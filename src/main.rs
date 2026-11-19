@@ -205,6 +205,9 @@ enum Cmd {
         /// Screenshot the whole page, not just the first screen (implies --png).
         #[arg(long)]
         full: bool,
+        /// Print only what needs fixing: errors the page threw and `!` warnings.
+        #[arg(long)]
+        problems: bool,
     },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
@@ -279,7 +282,7 @@ enum Cmd {
     /// anyone: state baked in, assets inlined.
     Share {
         name: String,
-        /// Where to write it (default: ./<name>.html).
+        /// Where to write it (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -562,7 +565,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let round = &r["state"]["round"];
             let since = format!("seq:{}", r["seq"]);
             if json {
-                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json: the answers arrive as answer events")}));
+                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json")}));
             }
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
@@ -660,14 +663,28 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
-        Cmd::See { name, width, png, full } => {
+        Cmd::See { name, width, png, full, problems } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
             if png || full { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
-            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
-            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
+            // A jelly that changes while it renders (a live log, a monitor) answers 409;
+            // a fresh render usually lands between changes.
+            let mut tries = 0;
+            let resp = loop {
+                match ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call() {
+                    Err(ureq::Error::Status(409, _)) if tries < 2 => tries += 1,
+                    other => break other.map_err(describe)?,
+                }
+            };
+            let text = resp.into_string().map_err(|e| e.to_string())?;
+            if problems {
+                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
+                output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
+            } else {
+                output(format_args!("{text}"))?;
+            }
             Ok(())
         }
         Cmd::Note { name, text } => report(send("POST", &api(&format!("/{}/note", id(&name)?)), json!({"text": text, "by": by}))?),
@@ -753,7 +770,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);
-            let out = out.unwrap_or_else(|| PathBuf::from(format!("{short}.html")));
+            let out = match out {
+                Some(out) => out,
+                None => {
+                    let dir = std::env::temp_dir().join("jelly-share");
+                    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                    dir.join(format!("{short}.html"))
+                }
+            };
             std::fs::write(&out, &html).map_err(|e| format!("{}: {e}", out.display()))?;
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
