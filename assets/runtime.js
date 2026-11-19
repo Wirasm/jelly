@@ -8,6 +8,10 @@
 //   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
 //   jelly.onAttend(fn)          fn(item) when the dock opens a question; returns unsubscribe
 //   jelly.itemsAt("#thumbs")    questions asked about that element; .answer.option is the pick
+//   jelly.viewer                this browser's name, "" if unset; assign to rename (kept per browser)
+//   jelly.by                    what this browser writes as: "person", or "person:<name>" once named
+//   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
+//   jelly.isPerson(by)          true for "person" and "person:<name>"
 //
 // Comments anywhere: hold Option (Alt) and click any element, or press the
 // Comment button, to pin a comment to it. The agent gets a `comment` event that
@@ -27,6 +31,9 @@
   // jelly page's tiles) are agent renders too.
   const agentMode = new URLSearchParams(location.search).has("agent") ||
     (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has("agent"); } catch { return false; } })();
+  // `jelly try` renders carry steps to do as a person would. Their verb calls run
+  // against a throwaway copy of the state in the daemon, so nothing is saved.
+  const trial = agentMode ? boot.try : undefined;
   const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
   addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
@@ -72,13 +79,21 @@
     return { selector: selectorFor(el), text: text.trim().replace(/\s+/g, " ").slice(0, 80) };
   }
 
+  // A person may name themselves, so two people on one jelly can tell who did
+  // what. The name is per browser (every jelly shares this origin) and read on
+  // each write, so renaming on the jelly page applies to open jellies at once.
+  const viewer = () => { try { return localStorage.getItem("jelly.viewer") || ""; } catch { return ""; } };
+  const me = () => (viewer() ? `person:${viewer()}` : "person");
+  const isPerson = (by) => by === "person" || String(by).startsWith("person:");
+  const who = (by) => (by === me() ? "you" : isPerson(by) ? by.slice(7) || "someone" : by);
+
   async function post(path, body) {
     // Nobody is at an agent render, so nothing it does may be recorded as the person.
     if (agentMode) throw new Error("jelly see only looks; this change was not made");
     const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, by: "person" }),
+      body: JSON.stringify({ ...body, by: me() }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.statusText);
@@ -153,7 +168,8 @@
   })();
 
   listeners.add((ev) => {
-    if (ev.jelly !== boot.name) return;
+    // A trial shows its own copy of the state; real changes meanwhile do not reach it.
+    if (ev.jelly !== boot.name || trial) return;
     if (ev.kind === "remove") {
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
@@ -169,6 +185,14 @@
   window.jelly = {
     name: boot.name,
     about: boot.about,
+    get viewer() { return viewer(); },
+    set viewer(name) {
+      name = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+      try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
+    },
+    get by() { return me(); },
+    who,
+    isPerson,
     get state() { return state; },
     /** Every event from every jelly. Returns a function that stops listening. */
     events(fn) { listeners.add(fn); return () => listeners.delete(fn); },
@@ -177,7 +201,7 @@
     get feedback() { return comments; }, // old name
     onState(fn) { subs.push(fn); fn(state, null); },
     async call(verb, args = {}) {
-      const ev = await post(`${api}/call`, { verb, args, source: source() });
+      const ev = trial ? await trialCall(verb, args) : await post(`${api}/call`, { verb, args, source: source() });
       apply(ev);
       return ev;
     },
@@ -310,8 +334,6 @@
   const lastAt = (f) => Math.max(f.at_ms, ...(f.replies || []).map((r) => r.at_ms));
   // Open threads, plus resolved ones from the last day so the person sees the answer.
   const visible = () => comments.filter((f) => !f.resolved || Date.now() - lastAt(f) < DAY);
-  const who = (by) => (by === "person" ? "you" : by);
-
   function thread(f, x, y) {
     const msgs = [{ by: f.by, text: f.text, at_ms: f.at_ms }, ...(f.replies || [])];
     const p = openPop(x, y, `<div class="jf-on"></div><div class="jf-thread"></div>
@@ -321,7 +343,7 @@
     const t = p.querySelector(".jf-thread");
     for (const m of msgs) {
       const d = document.createElement("div");
-      d.className = "jf-msg" + (m.by === "person" ? "" : " agent");
+      d.className = "jf-msg" + (isPerson(m.by) ? "" : " agent");
       d.innerHTML = '<div class="jf-by"></div><div class="jf-text"></div>';
       d.querySelector(".jf-by").textContent = who(m.by);
       d.querySelector(".jf-text").textContent = m.text;
@@ -351,7 +373,7 @@
       const last = f.replies?.at(-1);
       const pin = document.createElement("div");
       // Amber: waiting on the agent. Teal: the agent answered. Faded: resolved.
-      pin.className = "jf-marker" + (last && last.by !== "person" ? " agent" : "") + (f.resolved ? " done" : "");
+      pin.className = "jf-marker" + (last && !isPerson(last.by) ? " agent" : "") + (f.resolved ? " done" : "");
       pin.textContent = f.resolved ? "✓" : i + 1;
       pin.title = last ? `${who(last.by)}: ${last.text}` : f.text;
       // In the margin left of the element, pointing at it.
@@ -906,7 +928,8 @@
   }
   // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {
-    if (snapT) return;
+    // A trial's page is not what `jelly see` should show; it reports in `runTrial`.
+    if (snapT || trial) return;
     snapT = setTimeout(() => {
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
@@ -921,6 +944,65 @@
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
+
+  // ---- jelly try: do the steps, then report what the page shows ----
+  let trialCalls = 0;
+  async function trialCall(verb, args) {
+    trialCalls++;
+    try {
+      const r = await fetch(`/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      return j;
+    } finally { trialCalls--; }
+  }
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Does one step the way a person would; returns why it could not be done.
+  function doStep(s) {
+    let el;
+    try { el = document.querySelector(s.at); } catch { return `${s.at} is not a valid CSS selector`; }
+    if (!el) return `${s.at} matches nothing`;
+    if (el.checkVisibility && !el.checkVisibility()) return `${s.at} is not visible`;
+    if (el.disabled) return `${s.at} is disabled`;
+    el.scrollIntoView?.({ block: "center" });
+    el.focus?.();
+    if (s.do === "click") {
+      const o = { bubbles: true, cancelable: true, composed: true, view: window };
+      el.dispatchEvent(new PointerEvent("pointerdown", o)); el.dispatchEvent(new MouseEvent("mousedown", o));
+      el.dispatchEvent(new PointerEvent("pointerup", o)); el.dispatchEvent(new MouseEvent("mouseup", o));
+      // `click()` also does what the browser does: toggles a checkbox, submits a form.
+      if (typeof el.click === "function") el.click(); else el.dispatchEvent(new MouseEvent("click", o));
+    } else if (s.do === "type") {
+      if (el.isContentEditable) el.textContent = s.text;
+      else if ("value" in el) {
+        // The prototype's setter, so frameworks that track the value see the change.
+        const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")?.set;
+        if (set) set.call(el, s.text); else el.value = s.text;
+      } else return `${s.at} is not a field`;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: s.text, inputType: "insertText" }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (s.do === "press") {
+      const o = { key: s.key, bubbles: true, cancelable: true, composed: true };
+      const go = el.dispatchEvent(new KeyboardEvent("keydown", o));
+      el.dispatchEvent(new KeyboardEvent("keyup", o));
+      // Enter in a form field submits its form, as it does for a person.
+      if (go && s.key === "Enter" && el.form && el.matches("input")) el.form.requestSubmit();
+    }
+  }
+  async function runTrial() {
+    let failed = null;
+    for (const [i, s] of trial.steps.entries()) {
+      let error;
+      try { error = doStep(s); } catch (e) { error = String(e?.message || e); }
+      if (error) { failed = { step: i, error }; break; }
+      // Let handlers start their calls, wait for the calls, then let the view redraw.
+      do { await pause(30); } while (trialCalls);
+    }
+    await pause(30);
+    await fetch(`/api/tries/${trial.token}`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, errors, failed }) }).catch(() => {});
+  }
+  if (trial) addEventListener("load", () => setTimeout(runTrial, 300));
   // Text a page fills in later (fetches, timers) counts too.
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 

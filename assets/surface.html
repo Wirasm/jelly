@@ -50,7 +50,9 @@
   .projects a:hover { color: var(--bar-ink); background: var(--brand-soft); }
   .projects a.on { color: var(--chip-on-ink); background: var(--chip-on); }
   .projects a span { opacity: .6; color: inherit; margin-left: 5px; font-variant-numeric: tabular-nums; }
-  .top .keys { margin-left: auto; color: var(--dark-faint); font-size: 11px; display: flex; gap: 10px; }
+  .top .me { margin-left: auto; border: 1px solid var(--bar-line); background: none; color: var(--bar-muted); border-radius: 7px; padding: 3px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .top .me:hover { color: var(--bar-ink); background: var(--brand-soft); }
+  .top .keys { margin-left: 10px; color: var(--dark-faint); font-size: 11px; display: flex; gap: 10px; }
   kbd { font: 10.5px ui-monospace, monospace; border: 1px solid var(--dark-line); border-radius: 4px; padding: 0 4px; color: var(--dark-muted); }
 
   /* stream */
@@ -187,6 +189,7 @@
 <div class="app" id="app">
   <div class="top">
     <svg class="logo" id="logo" width="28" height="28" viewBox="0 0 40 40" aria-label="jelly"><defs><radialGradient id="lg" cx="35%" cy="30%"><stop offset="0" stop-color="#ffb3cf"/><stop offset=".55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#d81b60"/></radialGradient></defs><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="url(#lg)"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><g class="eyes"><circle cx="16" cy="24" r="1.7" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.7" fill="#3b0a1e"/></g><path class="mouth" d="M18 27.5 Q20 29.3 22 27.5" stroke="#3b0a1e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg><b class="word">jelly</b><span class="dot" id="live" title="Connected"></span><nav class="projects" id="projects" aria-label="Projects"></nav>
+    <button class="me" id="me" title="Your name on what you do here, so others can tell who did what"></button>
     <span class="keys"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span><span><kbd>p</kbd> pinned</span><span><kbd>a</kbd> attention</span></span>
   </div>
   <div class="streamwrap">
@@ -238,7 +241,7 @@
   }
   // On a project page names show without their project; on All they show in full.
   const short = (n) => (PROJECT && n.startsWith(PROJECT + ":") ? n.slice(PROJECT.length + 1) : n);
-  const who = (by) => (by === "person" ? "you" : by || "?");
+  const who = (by) => (by ? jelly.who(by) : "?");
   let attentionItems = []; // open asks and looks across this page's jellies
   function flags(j) {
     const out = [];
@@ -279,11 +282,11 @@
   function freshness(j) {
     const v = seenVersion(j.name);
     if (!v) return "new";
-    return j.version > v && j.made_by !== "person" ? "updated" : "";
+    return j.version > v && !jelly.isPerson(j.made_by) ? "updated" : "";
   }
   function entryHead(j) {
     const last = lastEvent.get(j.name);
-    return `<span class="av ${j.made_by === "person" ? "person" : ""}">${esc(who(j.made_by)[0].toUpperCase())}</span>
+    return `<span class="av ${jelly.isPerson(j.made_by) ? "person" : ""}">${esc(who(j.made_by)[0].toUpperCase())}</span>
       <div class="who"><b>${esc(who(j.made_by))}</b><span>${ago(j.created_ms)}</span><code>${esc(short(j.name))}</code>${{ new: '<span class="badge-new">New</span>', updated: '<span class="badge-upd">Updated</span>' }[freshness(j)] || ""}${flags(j)}
         ${last ? `<span class="last">· ${esc(who(last.by))} ${esc(last.text)} ${ago(last.at)}</span>` : ""}</div>
       <h2>${esc(j.about || j.name)}</h2>
@@ -651,11 +654,11 @@
   // ---- actions --------------------------------------------------------------
 
   async function act(path, body, method = "POST") {
-    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: "person" }) });
+    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: jelly.by }) });
     if (!r.ok) alert((await r.json()).error);
   }
   const pin = (name) => act(`/api/jellies/${enc(name)}/pin`, { pinned: !byName(name).pinned });
-  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=person`, null, "DELETE"); };
+  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=${enc(jelly.by)}`, null, "DELETE"); };
 
   $("col").addEventListener("click", (e) => {
     const r = e.target.closest("[data-restore]");
@@ -744,7 +747,7 @@
     $("live").classList.add("live");
     if (ev.jelly === "surface") return;
     if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
-    if (ev.by !== "person") jiggle($("logo"));
+    if (!jelly.isPerson(ev.by)) jiggle($("logo"));
     if (ev.kind !== "remove") lastEvent.set(ev.jelly, { text: describe(ev), by: ev.by, at: ev.at_ms || Date.now() });
     const el = entries.get(ev.jelly);
     if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
@@ -763,6 +766,16 @@
     applyFocus(s);
   });
   setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
+  // Unnamed, everything this browser does is "person", as it always was.
+  const drawMe = () => { $("me").textContent = jelly.viewer ? `You: ${jelly.viewer}` : "Set your name"; };
+  $("me").onclick = () => {
+    const name = prompt("Your name, so others on these jellies can tell what you did. Leave it empty to stay unnamed.", jelly.viewer);
+    if (name === null) return;
+    jelly.viewer = name;
+    drawMe();
+    renderStream(); renderBoard();
+  };
+  drawMe();
   $("live").classList.add("live");
   refresh();
 </script>

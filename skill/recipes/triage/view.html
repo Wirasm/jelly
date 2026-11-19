@@ -161,7 +161,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const TONES = { accent: "var(--accent)", warn: "var(--warn)", idle: "var(--idle)", good: "var(--good)", bad: "var(--bad)" };
 const ORDER = ["accent", "warn", "idle", "good", "bad"];
-const who = (by) => (by === "person" ? "You" : by);
+const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const short = (it) => String(it.ref || it.id).replace(/^#/, "");
 const asksAt = (it) => (jelly.itemsAt?.(`#i-${it.id}`) || []).filter((a) => !a.answer).length;
 

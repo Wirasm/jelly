@@ -48,7 +48,12 @@ jelly.onState((state, event) => render(state)); // now, and after every change b
 jelly.call("add", { title });                   // runs a verb; rejects with its error
 jelly.watch("other", (state) => …);             // another jelly's state, live
 jelly.asset("shot.png");                        // URL of a file added with `jelly asset`
+jelly.who(vote.by);                             // "you", another person's name, or the agent's
 ```
+
+A person who sets a name on the jelly page writes as `person:<name>` instead of
+`person`, so several people on one jelly stay apart. `jelly.by` is this
+browser's `by`; in verbs, a person is `by === "person" || by.startsWith("person:")`.
 
 Keep data in state, not page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at
@@ -64,14 +69,17 @@ jelly see plan               # the page as text, its verbs and state, errors, wh
 jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
 jelly see plan --width 390   # phone width
 jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
+jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it, change nothing
 jelly focus plan             # open it full size on their screen; `jelly focus` closes it
 ```
 
 Always run `jelly see` and fix every `error` and `!` line before you focus a
 jelly or ask about it. `see` only looks: nothing in its render is recorded as the
-person. Clear your own test clicks with `jelly set`. `jelly see plan --poster` saves
-the screenshot as `assets/poster.png`, the jelly page's thumbnail; pick a moment
-that tells the story on its own.
+person. To check that buttons and fields work, use `jelly try`, not a browser
+driver: it does the steps in order, then prints the page, errors, and each verb
+that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
+`jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly
+page's thumbnail; pick a moment that tells the story on its own.
 
 While you rebuild a jelly the person is looking at, say so: `jelly working plan
 "rebuilding the header"`, then `jelly done plan`.

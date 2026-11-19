@@ -13,7 +13,9 @@ const words = (text, what) => {
   return t;
 };
 const quote = (note) => (note ? `: "${note.replace(/[.!\s]+$/, "")}"` : "");
-const who = (by) => (by === "person" ? "the person" : by);
+// A person writes as "person", or "person:<name>" once they named themselves.
+const isPerson = (by) => by === "person" || by.startsWith("person:");
+const who = (by) => (by === "person" ? "the person" : isPerson(by) ? by.slice(7) : by);
 const started = (s) => s.status !== "next";
 // Needs must exist, and nothing may need itself, directly or through others.
 const checkNeeds = (state, id, needs) => {
@@ -76,7 +78,7 @@ const verbs = {
   clear_gate(state, { step }, { by, at_ms }) {
     const s = find(state, step);
     if (!s.gate) throw new Error(`${name(s)} has no gate`);
-    if (by !== "person") throw new Error(`only the person clears a gate; ${name(s)} waits for them`);
+    if (!isPerson(by)) throw new Error(`only the person clears a gate; ${name(s)} waits for them`);
     s.gate.cleared = { by, at_ms };
   },
   // A word on a step, from anyone.
