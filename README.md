@@ -36,6 +36,7 @@ jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
 jelly see plan                                   # what is on screen, as text
+jelly undo plan                                  # undo the last change to its view, verbs or state
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
