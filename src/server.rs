@@ -1241,7 +1241,33 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
 
 /// Runs headless Chrome on `url` in a window of this size, light or dark. With
 /// `png`, writes a screenshot of the window there; otherwise dumps the DOM.
+/// Every jelly daemon on the machine shares a few browser slots. Without a cap,
+/// several agents (or the test suite) starting light and dark renders at once
+/// starve each other until renders hit their time limit. Each slot is a lock
+/// file in the temp dir, so the cap holds across processes; a crashed daemon's
+/// lock goes with it.
+async fn browser_slot() -> Result<std::fs::File, String> {
+    let slots = std::thread::available_parallelism().map_or(4, |n| n.get()).div_ceil(2).max(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        for i in 0..slots {
+            let path = std::env::temp_dir().join(format!("jelly-browser-slot-{i}.lock"));
+            if let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path) {
+                if file.try_lock().is_ok() {
+                    return Ok(file);
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("waited 60 s for a free browser: too many renders are running on this machine".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 async fn run_browser_at(bin: &str, url: &str, width: u32, height: u32, png: Option<&std::path::Path>, dark: bool, limit: std::time::Duration) -> Result<(), String> {
+    // The render's own time limit starts once it has a browser slot.
+    let _slot = browser_slot().await?;
     // Chrome refuses a profile another Chrome is using (exit 21), so each render
     // gets its own. A fresh profile starts as fast as a used one.
     static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
