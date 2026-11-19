@@ -129,24 +129,30 @@ own inbox and its changes are attributed.
 
 ## Recipes
 
-Starting points for jellies that are easy to get wrong. Each is a folder next to
-this file with `view.html`, `verbs.js`, an example `state.json` and a
-`RECIPE.md`. Read the `RECIPE.md`, copy the folder to a scratch place, write your
-own state, and change the view and verbs as the job needs.
+Starting points for jellies that are easy to get wrong, built into `jelly`: a
+view, verbs, an example state and a guide. Read the guide, make the jelly with
+your own state, and change the view and verbs as the job needs.
 
-- `recipes/review`: you changed code and the person must judge it. What they
+```bash
+jelly recipes                                  # each recipe and when to use it
+jelly recipes plan                             # its guide: the state it expects, its verbs
+jelly new plan --recipe plan --state my.json --about "Plan: …"
+jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly new plan --from /tmp/plan
+```
+
+- `review`: you changed code and the person must judge it. What they
   asked for, wired to the changes, before and after, approve or push back.
-- `recipes/plan`: work with more than three steps. A live track they can
+- `plan`: work with more than three steps. A live track they can
   reorder, veto or gate while you work.
-- `recipes/triage`: ten to a hundred items to agree on. You sort them into
+- `triage`: ten to a hundred items to agree on. You sort them into
   lanes; they correct the ones you were unsure of.
-- `recipes/map`: how a system fits together. Layers, nodes, wires and traces
+- `map`: how a system fits together. Layers, nodes, wires and traces
   that play step by step.
-- `recipes/scope`: a tradeoff between many parts. Items in or out, levers, and a
+- `scope`: a tradeoff between many parts. Items in or out, levers, and a
   date and capacity bar that move as they play.
-- `recipes/timeline`: why something happened. Evidence on a time axis,
+- `timeline`: why something happened. Evidence on a time axis,
   competing explanations, and they say which they believe.
-- `recipes/monitor`: something that runs for minutes or hours. Live charts fed by
+- `monitor`: something that runs for minutes or hours. Live charts fed by
   `jelly call`, with pause, stop and limits your loop obeys.
 
 ## More

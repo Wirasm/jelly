@@ -6,8 +6,8 @@ competing explanations beside it, and lets the person say which they believe.
 Start it as soon as you have two observations, and add to it as you go.
 
 ```bash
-cp -r <skill>/recipes/timeline /tmp/timeline   # then write your own state.json there
-jelly new timeline --from /tmp/timeline --about "Why <the thing> happened"
+# Write your own state.json. To change the view or verbs: jelly recipes timeline --out DIR
+jelly new timeline --recipe timeline --state state.json --about "Why <the thing> happened"
 jelly see timeline                             # fix every `!` and `error` line first
 jelly focus timeline
 ```

@@ -6,8 +6,8 @@ You sort them first; the person only corrects. It answers "is this the right
 pile for each, and where were you guessing?"
 
 ```bash
-cp -r <skill>/recipes/triage /tmp/triage      # then write your own state.json there
-jelly new triage --from /tmp/triage --about "Triage: <what is being sorted>"
+# Write your own state.json. To change the view or verbs: jelly recipes triage --out DIR
+jelly new triage --recipe triage --state state.json --about "Triage: <what is being sorted>"
 jelly see triage                              # fix every `!` and `error` line first
 jelly focus triage
 ```

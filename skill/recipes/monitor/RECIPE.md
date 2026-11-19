@@ -7,7 +7,7 @@ picture: one number, how far along, which phase, a square per item, a chart per
 metric.
 
 ```bash
-cp -r <skill>/recipes/monitor /tmp/monitor     # then edit start.json and driver.sh there
+jelly recipes monitor --out /tmp/monitor       # then edit start.json and driver.sh there
 jelly new monitor --from /tmp/monitor --state /tmp/monitor/start.json --about "Run: <what is running>"
 jelly see monitor                              # fix every `!` and `error` line first
 jelly focus monitor

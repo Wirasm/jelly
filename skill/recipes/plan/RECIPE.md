@@ -6,8 +6,8 @@ reorder what has not started, veto a step, or ask to be checked with before one.
 It answers "where are you, what is next, and can I still change it?"
 
 ```bash
-cp -r <skill>/recipes/plan /tmp/plan          # then write your own state.json there
-jelly new plan --from /tmp/plan --about "Plan: <what they asked for>"
+# Write your own state.json. To change the view or verbs: jelly recipes plan --out DIR
+jelly new plan --recipe plan --state state.json --about "Plan: <what they asked for>"
 jelly see plan                                # fix every `!` and `error` line first
 jelly focus plan
 jelly call plan start '{"step":"schema"}'     # before you touch anything
