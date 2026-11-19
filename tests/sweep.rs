@@ -1,3 +1,6 @@
+#[path = "../src/disk.rs"]
+#[allow(dead_code)]
+mod disk;
 mod common;
 
 use serde_json::{json, Value};
@@ -82,12 +85,12 @@ fn idle_jellies(home: &Path) {
     }
     drop(daemon);
     for name in ["a", "b"] {
-        let path = home.join(format!("jellies/test:{name}.json"));
+        let path = home.join("jellies").join(format!("{}.json", disk::name(&format!("test:{name}"))));
         let mut entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         entry["jelly"]["updated_ms"] = json!(0);
         std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
     }
-    std::fs::create_dir(home.join("jellies/test:a.json.tmp")).unwrap();
+    std::fs::create_dir(home.join("jellies").join(format!("{}.json.tmp", disk::name("test:a")))).unwrap();
 }
 
 fn archive_failure(closed_stderr: bool) {
@@ -121,7 +124,7 @@ fn archive_failure(closed_stderr: bool) {
         assert!(Instant::now() < deadline, "the sweep did not run");
         std::thread::sleep(Duration::from_millis(20));
     }
-    std::fs::remove_dir(home.path().join("jellies/test:a.json.tmp")).unwrap();
+    std::fs::remove_dir(home.path().join("jellies").join(format!("{}.json.tmp", disk::name("test:a")))).unwrap();
     agent
         .post(&format!("{url}/api/jellies/test:a/pin"))
         .send_json(json!({"pinned": true, "by": "test"}))
