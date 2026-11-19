@@ -12,7 +12,7 @@ getrandom = "0.3"
 lol_html = "2"
 rquickjs = "0.9"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 similar = "2"
 sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "fs", "process"] }
