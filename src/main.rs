@@ -212,12 +212,13 @@ enum Cmd {
         mine: bool,
     },
     /// See a jelly as an agent: what it is, its verbs and state, what waits on
-    /// the person, what they did lately, and what is on screen as text.
+    /// the person, what they did lately, what is on screen as text, and problems
+    /// the browser measured in light and dark mode.
     ///
     /// --json prints {jelly, version, summary, problems, png, outline}.
     See {
         name: String,
-        /// Render at this width (390 for a phone). Default: an open view, else 1280.
+        /// Render at this width (390 for a phone). Default: 1280.
         #[arg(long)]
         width: Option<u32>,
         /// Also save a screenshot and print its path.
