@@ -94,6 +94,27 @@ fn inbox_readers_are_independent_and_daemon_owned() {
     }
 }
 
+/// Two agents share a jelly page: `--mine` shows each the person's actions on its
+/// own jellies, and the agent's plain inbox still has everything afterwards.
+#[test]
+fn inbox_mine_splits_agents_and_keeps_the_full_inbox() {
+    let temp = tempfile::tempdir().unwrap();
+    let client = temp.path().join("client");
+    let daemon = Daemon::start(&temp.path().join("daemon"));
+    for (name, agent) in [("a", "ana"), ("b", "bo")] {
+        daemon.post("/api/jellies", json!({"name": name, "project": "p", "view": "<p>x</p>", "verbs": "const verbs = {click(s){s.n=(s.n||0)+1;}};", "state": {}, "by": agent}));
+        daemon.post(&format!("/api/jellies/p:{name}/call"), json!({"verb": "click", "args": {}, "by": "person"}));
+    }
+    let read = |agent: &str, args: &[&str]| stdout(daemon.command(&client).env("JELLY_AS", agent).arg("inbox").args(args).output().unwrap());
+    let ana = read("ana", &["--mine"]);
+    assert!(ana.contains("p:a: click") && !ana.contains("p:b:"), "{ana}");
+    let bo = read("bo", &["--mine"]);
+    assert!(bo.contains("p:b: click") && !bo.contains("p:a:"), "{bo}");
+    empty(&read("ana", &["--mine"]));
+    let all = read("ana", &[]);
+    assert!(all.contains("p:a: click") && all.contains("p:b: click"), "{all}");
+}
+
 #[test]
 fn inbox_conversations_resume_across_commands_and_hooks() {
     let temp = tempfile::tempdir().unwrap();

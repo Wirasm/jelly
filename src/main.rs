@@ -207,6 +207,9 @@ enum Cmd {
     Attention {
         #[arg(long)]
         all: bool,
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        #[arg(long)]
+        mine: bool,
         /// Print the full JSON.
         #[arg(long)]
         json: bool,
@@ -304,6 +307,9 @@ enum Cmd {
         /// Include resolved comments.
         #[arg(long)]
         all: bool,
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        #[arg(long)]
+        mine: bool,
         /// Print the full JSON.
         #[arg(long)]
         json: bool,
@@ -345,6 +351,9 @@ enum Cmd {
     Inbox {
         #[arg(long)]
         hook: bool,
+        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        #[arg(long)]
+        mine: bool,
         /// Stable conversation ID, shared by commands, hooks and resumed sessions.
         #[arg(long, env = "JELLY_SESSION_ID")]
         session_id: Option<String>,
@@ -679,9 +688,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
             report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
         }
-        Cmd::Attention { all, json } => {
+        Cmd::Attention { all, mine, json } => {
             let p = if all { String::new() } else { project() };
-            let list = get(&format!("{}/api/attention?project={}", cli.url, encode(&p)))?;
+            let only = mine_name(mine, &cli.by)?.map(|m| format!("&mine={}", encode(&m))).unwrap_or_default();
+            let list = get(&format!("{}/api/attention?project={}{only}", cli.url, encode(&p)))?;
             if json {
                 return print(list);
             }
@@ -768,14 +778,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Err("the event stream ended".into())
         }
-        Cmd::Comments { name, all, json } => {
+        Cmd::Comments { name, all, mine, json } => {
             let one = name.is_some();
+            let mine = mine_name(mine, &cli.by)?;
             let names: Vec<String> = match name {
                 Some(n) => vec![id(&n)?],
                 None => {
                     let p = project();
                     get(&api(""))?.as_array().into_iter().flatten()
                     .filter(|j| p.is_empty() || j["project"] == p.as_str())
+                    .filter(|j| mine.as_ref().is_none_or(|m| j["owner"] == m.as_str()))
                     .filter(|j| all || j["open_comments"].as_u64().unwrap_or(0) > 0)
                     .filter_map(|j| j["name"].as_str().map(String::from)).collect()
                 }
@@ -951,7 +963,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
         }
-        Cmd::Inbox { hook, session_id } => inbox(&cli.url, &project(), hook, cli.by, session_id),
+        Cmd::Inbox { hook, mine, session_id } => {
+            let mine = mine_name(mine, &cli.by)?;
+            inbox(&cli.url, &project(), hook, cli.by, mine, session_id)
+        }
         Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
@@ -1040,7 +1055,7 @@ fn parent_reader() -> Result<store::InboxReader, String> {
 }
 
 /// Prints what the person did since the last call, then moves the cursor.
-fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id: Option<String>) -> Result<(), CommandError> {
+fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, mine: Option<String>, session_id: Option<String>) -> Result<(), CommandError> {
     if hook && project.is_empty() {
         return Ok(()); // not in a repo: this session has no jellies of its own
     }
@@ -1054,18 +1069,28 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, session_id
         },
         parent_reader,
     );
-    deliver_inbox(url, project, hook, reader, &mut std::io::stdout().lock())
+    deliver_inbox(url, project, hook, reader.map(|reader| store::InboxRequest { project: project.into(), reader, mine }), &mut std::io::stdout().lock())
+}
+
+/// The owner name `--mine` filters by. Without a name every agent is "agent",
+/// so "mine" would mean every unnamed agent's jellies; refuse instead.
+fn mine_name(mine: bool, by: &Option<String>) -> Result<Option<String>, String> {
+    match (mine, by) {
+        (false, _) => Ok(None),
+        (true, Some(name)) => Ok(Some(name.clone())),
+        (true, None) => Err("--mine needs your name: --as NAME or JELLY_AS".into()),
+    }
 }
 
 fn deliver_inbox(
     url: &str,
     project: &str,
     hook: bool,
-    reader: Result<store::InboxReader, String>,
+    request: Result<store::InboxRequest, String>,
     output: &mut impl Write,
 ) -> Result<(), CommandError> {
     let result = (|| {
-        let request = store::InboxRequest { project: project.into(), reader: reader? };
+        let request = request?;
         let response = ureq::post(&format!("{url}/api/inbox"))
             .timeout(std::time::Duration::from_secs(1))
             .send_json(&request);
@@ -1482,8 +1507,8 @@ mod tests {
     fn inbox_undecodable_responses_do_not_commit() {
         for body in ["broken", "", "[]", r#"{"events":[{"jelly":"p:sample"}],"through":4}"#] {
             let (url, server) = inbox_response(body);
-            let reader = crate::store::InboxReader::Named { name: "a".into() };
-            assert!(super::deliver_inbox(&url, "p", false, Ok(reader), &mut Vec::new()).is_err());
+            let request = crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: "a".into() }, mine: None };
+            assert!(super::deliver_inbox(&url, "p", false, Ok(request), &mut Vec::new()).is_err());
             assert_no_inbox_commit(server);
         }
     }
@@ -1502,8 +1527,8 @@ mod tests {
             let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "call",
                 "by": "person", "version": 1, "view_rev": 1, "text": "click {}"}], "through": 4}).to_string();
             let (url, server) = inbox_response(&body);
-            let reader = crate::store::InboxReader::Named { name: "a".into() };
-            let error = super::deliver_inbox(&url, "p", false, Ok(reader), &mut FailingOutput { fail_write }).unwrap_err();
+            let request = crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: "a".into() }, mine: None };
+            let error = super::deliver_inbox(&url, "p", false, Ok(request), &mut FailingOutput { fail_write }).unwrap_err();
             assert_eq!(error.to_string(), if fail_write { "output failed" } else { "flush failed" });
             assert_no_inbox_commit(server);
         }

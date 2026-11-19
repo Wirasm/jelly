@@ -134,7 +134,10 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
 --since` to catch anything after your change. `wait` exits 2 on timeout. If
 several agents share the jelly page, set `JELLY_AS=<your name>` so each has its
-own inbox and its changes are attributed.
+own inbox and its changes are attributed. Add `--mine` to `inbox`, `attention`
+or `comments` to see only your jellies (made or last reshaped under your name).
+It is never the default: the plain inbox is where you hear the person act on a
+jelly another agent made.
 
 ## Recipes
 

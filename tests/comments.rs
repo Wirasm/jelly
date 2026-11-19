@@ -79,3 +79,24 @@ fn comments_lists_saved_comments_by_jelly_and_project() {
     assert_eq!(all, pairs(&[("t:a", "c1"), ("t:a", "c2"), ("t:b", "c1")]));
     assert_eq!(comments(&d, &[]), pairs(&[("t:a", "c1")]));
 }
+
+/// `--mine` keeps the jellies made, or last reshaped, under this agent's `--as` name.
+#[test]
+fn comments_mine_lists_only_this_agents_jellies() {
+    let d = daemon();
+    for (name, agent) in [("t:a", "ana"), ("t:b", "bo")] {
+        post(&d, "", json!({"name": name, "view": "<p>x</p>", "verbs": "const verbs = {};", "state": {}, "by": agent}));
+        post(&d, &format!("/{name}/comment"), json!({"text": "bigger", "by": "person"}));
+    }
+    assert_eq!(comments(&d, &["--as", "ana", "--mine"]), pairs(&[("t:a", "c1")]));
+    assert_eq!(comments(&d, &["--as", "bo", "--mine"]), pairs(&[("t:b", "c1")]));
+    assert_eq!(comments(&d, &["--as", "ana"]).len(), 2);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["--url", &d.url, "--project", "t", "comments", "--mine"])
+        .env_remove("JELLY_AS")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--mine needs your name"), "{out:?}");
+}
