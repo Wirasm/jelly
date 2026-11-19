@@ -21,7 +21,10 @@
   // Errors the page hits, so `jelly see` can tell the agent its page is broken.
   const errors = [];
   let snapT = null;
-  const agentMode = new URLSearchParams(location.search).has("agent");
+  // `jelly see` renders with ?agent=1. Jellies framed inside that render (the
+  // jelly page's tiles) are agent renders too.
+  const agentMode = new URLSearchParams(location.search).has("agent") ||
+    (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has("agent"); } catch { return false; } })();
   const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
   addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
@@ -68,6 +71,8 @@
   }
 
   async function post(path, body) {
+    // Nobody is at an agent render, so nothing it does may be recorded as the person.
+    if (agentMode) throw new Error("jelly see only looks; this change was not made");
     const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
