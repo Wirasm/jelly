@@ -132,7 +132,9 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 ```
 
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
---since` to catch anything after your change. `wait` exits 2 on timeout. If
+--since` to catch anything after your change. `wait` exits 2 on timeout.
+In a script, add `--json` instead of parsing the text: changes print their event
+(`seq`, `version`, `changed`, `args.id` for asks), `see` and `try` their parts. If
 several agents share the jelly page, set `JELLY_AS=<your name>` so each has its
 own inbox and its changes are attributed.
 
