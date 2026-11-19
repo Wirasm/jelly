@@ -37,6 +37,7 @@ jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
 jelly inbox                                      # what they did since you last looked
 jelly see plan                                   # what is on screen, as text
 jelly undo plan                                  # undo the last change to its view, verbs or state
+jelly pin plan                                   # keep it: a week untouched no longer archives it
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
