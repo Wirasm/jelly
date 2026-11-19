@@ -36,7 +36,7 @@ jelly new plan --view view.html --verbs verbs.js --state state.json --about "One
 jelly new plan --from ./folder        # the same three files (and assets/) from a folder
 jelly call plan add '{"title":"…"}'   # run a verb; '@args.json' or - for big args
 jelly set plan --at /title '"Fixed"'  # write state yourself; `jelly set plan @state.json` replaces it
-jelly reshape plan --view v2.html     # new view or verbs, same state; open pages reload
+jelly reshape plan --view v2.html     # new view or verbs, same state; open pages keep scroll and focus
 jelly undo plan                       # undo the last change to view, verbs or state
 jelly state plan /items               # read state, or the part at a JSON pointer
 ```
@@ -57,8 +57,9 @@ browser's `by`; in verbs, a person is `by === "person" || by.startsWith("person:
 
 Keep data in state, not page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at
-them. A standalone jelly has a Comment button 10px from the bottom right; if a
-fixed control sits there, move it with
+them, and a reshape keeps the focused field and scrolled boxes by id. A
+standalone jelly has a Comment button 10px from the bottom right; if a fixed
+control sits there, move it with
 `:root { --jelly-comment-inset: auto 10px 78px auto; }` (CSS `inset` order).
 
 ## Look before you show

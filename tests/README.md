@@ -167,3 +167,33 @@ the full view). The Escape-ends-commenting check fails on the runtime before the
 the editor check passes either way (the map ignores keys in the editor) and guards
 that editor cancellation keeps working.
 Stop the daemon afterward.
+
+# Reshape-in-place browser check
+
+Requires Cargo, Chrome and `playwright-cli`. Build from the checkout and start a
+fresh throwaway daemon (substitute your scratch paths and port):
+
+```sh
+cargo build --locked --target-dir /tmp/jelly-reshape-target
+/tmp/jelly-reshape-target/debug/jelly serve --port 17894 --home /tmp/jelly-reshape-home
+```
+
+From a scratch directory, run with an absolute path to the script:
+
+```sh
+playwright-cli -s=reshape open http://127.0.0.1:17894/
+playwright-cli -s=reshape resize 1280 900
+playwright-cli -s=reshape run-code --filename=/path/to/jelly/tests/reshape-in-place.js
+playwright-cli -s=reshape close
+```
+
+The script makes and removes its own jelly. Standalone, on the stream and full
+size, it scrolls the page and a box, types in a field, reshapes, and checks that
+the new version kept the scroll, the box's scroll, focus, the typed text and its
+selection. It also reshapes a pinned tile. On the jelly page a per-frame sampler
+fails the check if a visible frame reloads in place or shows an unloaded
+document, and verb calls during a swap must not stall it. Run against a jelly page
+from before the swap (`git show <old>:assets/surface.html`, then `jelly reshape
+surface`), the sampler and focus checks fail. Existing homes keep their stored
+jelly page; use a fresh home or reshape `surface` with `assets/surface.html`.
+Stop the daemon afterward.

@@ -136,6 +136,8 @@
     .factions { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
   }
   .full iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--card); }
+  /* A reshaped jelly's next version draws here, unseen, at the old frame's size. */
+  iframe.next { position: fixed !important; left: 0 !important; top: 0 !important; width: var(--w) !important; height: var(--h) !important; opacity: 0; pointer-events: none; }
 
   /* ---- brand and motion: calm base, jelly physics at key moments ---- */
   .logo { flex: none; transform-origin: 50% 90%; cursor: pointer; }
@@ -305,6 +307,7 @@
     const f = document.createElement("iframe");
     f.src = `/j/${enc(j.name)}/`;
     f.title = j.name;
+    f.dataset.jellySwap = "";
     autosize(f);
     a.querySelector(".frame").appendChild(f);
     a.querySelector(".frame").insertAdjacentHTML("beforeend", `<div class="more"><button class="btn" data-act="unfold">Show all</button><button class="btn quiet" data-act="open">Open full size</button></div>`);
@@ -518,7 +521,7 @@
         // A jelly's poster (assets/poster.*) stands in for the live thumbnail when it has one.
         t.innerHTML = j.poster
           ? `<div class="thumb"><img alt="" src="/j/${enc(j.name)}/assets/${enc(j.poster)}" style="width:100%;height:100%;object-fit:cover;object-position:top"></div><div class="cap"></div>`
-          : `<div class="thumb"><iframe tabindex="-1" src="/j/${enc(j.name)}/"></iframe></div><div class="cap"></div>`;
+          : `<div class="thumb"><iframe tabindex="-1" data-jelly-swap src="/j/${enc(j.name)}/"></iframe></div><div class="cap"></div>`;
         tiles.set(j.name, t);
       }
       t.querySelector(".cap").innerHTML = `<b>${esc(short(j.name))}<span class="n">${j.replies_waiting ? "reply for you" : j.open_comments ? j.open_comments + " open" : ""}</span></b><div>${esc(j.about)}</div>`;
@@ -550,10 +553,11 @@
     if (full !== name) {
       pendingAttend = null;
       full = name;
-      $("full").querySelector("iframe")?.remove();
+      for (const f of $("full").querySelectorAll("iframe")) f.remove();
       const f = document.createElement("iframe");
       f.src = `/j/${enc(name)}/`;
       f.title = name;
+      f.dataset.jellySwap = "";
       $("full").appendChild(f);
     }
     $("full").hidden = false;
@@ -575,7 +579,7 @@
     const was = full;
     full = null;
     $("full").hidden = true;
-    $("full").querySelector("iframe")?.remove();
+    for (const f of $("full").querySelectorAll("iframe")) f.remove();
     if (entries.has(was)) select(was, true);
     if (!fromAgent) writeFocus(null);
   }
@@ -602,7 +606,50 @@
     if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
     if (d?.type === "jelly:escape" && full) closeFull();
+    if (d?.type === "jelly:reload") {
+      const f = [...document.querySelectorAll("iframe[data-jelly-swap]")].find((f) => f.contentWindow === e.source);
+      if (f) swap(f.swapFor || f);
+    }
   });
+
+  // ---- reshape --------------------------------------------------------------
+
+  // A jelly whose view changed asks to reload (runtime.js). Its next version
+  // loads in a hidden copy of the frame and replaces the old one once it has
+  // drawn, with scroll and focus carried over, so the person never sees a blank
+  // frame. Moving an iframe reloads it, so the copy is placed beside the old one
+  // from the start and only its class changes.
+  const viewRevs = new Map(); // name -> newest view revision seen in events
+  function swap(old) {
+    old.next?.remove();
+    const f = old.cloneNode(false);
+    old.next = f;
+    f.swapFor = old;
+    f.classList.add("next");
+    f.style.setProperty("--w", old.offsetWidth + "px");
+    f.style.setProperty("--h", old.offsetHeight + "px");
+    if (old.parentElement.classList.contains("frame")) autosize(f);
+    f.addEventListener("load", () => {
+      const win = f.contentWindow;
+      win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
+        if (old.next !== f || !old.isConnected) return f.remove();
+        const name = win.__JELLY__?.name;
+        // Loaded just before a newer reshape it may never hear about: go again.
+        if (win.__JELLY__?.viewRev < (viewRevs.get(name) || 0)) return swap(old);
+        const kept = old.contentWindow?.__jellyCarry?.take();
+        const focused = document.activeElement === old;
+        old.remove();
+        f.classList.remove("next");
+        f.style.removeProperty("--w");
+        f.style.removeProperty("--h");
+        delete f.swapFor;
+        if (focused) f.focus();
+        win.__jellyCarry?.put(kept);
+        if (frameOf(name) === f && buttonOf(name)?.classList.contains("on")) win.postMessage({ type: "jelly:comment", on: true }, location.origin);
+      }));
+    }, { once: true });
+    old.after(f);
+  }
 
   // ---- actions --------------------------------------------------------------
 
@@ -699,6 +746,7 @@
   jelly.events((ev) => {
     $("live").classList.add("live");
     if (ev.jelly === "surface") return;
+    if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
     if (!jelly.isPerson(ev.by)) jiggle($("logo"));
     if (ev.kind !== "remove") lastEvent.set(ev.jelly, { text: describe(ev), by: ev.by, at: ev.at_ms || Date.now() });
     const el = entries.get(ev.jelly);
