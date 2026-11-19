@@ -74,8 +74,10 @@ jelly focus plan             # open it full size on their screen; `jelly focus` 
 ```
 
 Always run `jelly see` and fix every `error` and `!` line before you focus a
-jelly or ask about it. `see` only looks: nothing in its render is recorded as the
-person. To check that buttons and fields work, use `jelly try`, not a browser
+jelly or ask about it. It renders in light and dark mode and flags what the browser
+measured, such as text unreadable in one mode or a control too small to tap at
+`--width 390`, each with a selector for `try` and `--at`. `see` only looks: nothing
+in its render is recorded as the person. To check that buttons and fields work, use `jelly try`, not a browser
 driver: it does the steps in order, then prints the page, errors, and each verb
 that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
 `jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly

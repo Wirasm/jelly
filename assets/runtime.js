@@ -29,8 +29,12 @@
   let snapT = null;
   // `jelly see` renders with ?agent=1. Jellies framed inside that render (the
   // jelly page's tiles) are agent renders too.
-  const agentMode = new URLSearchParams(location.search).has("agent") ||
-    (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has("agent"); } catch { return false; } })();
+  const rendered = (key) => new URLSearchParams(location.search).has(key) ||
+    (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has(key); } catch { return false; } })();
+  const agentMode = rendered("agent");
+  // `jelly see` also renders with the dark color scheme (and `&dark`) to check
+  // contrast there; that render's snapshot is kept apart from the light one.
+  const darkRender = agentMode && rendered("dark");
   // `jelly try` renders carry steps to do as a person would. Their verb calls run
   // against a throwaway copy of the state in the daemon, so nothing is saved.
   const trial = agentMode ? boot.try : undefined;
@@ -928,6 +932,155 @@
     })(document.body, 0);
     return lines.join("\n");
   }
+  // ---- problems the browser measures, for `jelly see` ----------------------------
+  const CONTROL = "button, a[href], input:not([type=hidden]), textarea, select, [role=button]";
+  // The shortest selector an agent can paste into `jelly try` or `--at`: a unique
+  // id, test id, href, name, label or class before falling back to the element's path.
+  function shortSelector(el) {
+    const tag = el.tagName.toLowerCase(), q = (v) => JSON.stringify(v), unique = (s) => { try { return document.querySelectorAll(s).length === 1; } catch { return false; } };
+    const cls = [...el.classList].find((c) => !c.startsWith("jf-"));
+    const tries = [el.id && "#" + CSS.escape(el.id), el.dataset?.testid && `[data-testid=${q(el.dataset.testid)}]`,
+      tag === "a" && el.getAttribute("href") && `a[href=${q(el.getAttribute("href"))}]`, el.getAttribute("name") && `${tag}[name=${q(el.getAttribute("name"))}]`,
+      el.getAttribute("aria-label") && `${tag}[aria-label=${q(el.getAttribute("aria-label"))}]`,
+      el.type === "submit" && `${tag}[type=submit]`, cls && `${tag}.${CSS.escape(cls)}`];
+    for (const s of tries) if (s && unique(s)) return s;
+    // Unique within an id'd ancestor or a landmark, nearest first, when that is enough.
+    const SCOPE = "[id], header, nav, main, footer, form, aside";
+    for (let scope = el.parentElement?.closest(SCOPE); scope && scope !== document.body; scope = scope.parentElement?.closest(SCOPE)) {
+      const prefix = scope.id ? "#" + CSS.escape(scope.id) : scope.tagName.toLowerCase();
+      for (const s of tries.slice(2)) if (s && unique(`${prefix} ${s}`)) return `${prefix} ${s}`;
+    }
+    const path = selectorFor(el);
+    return path.startsWith("#") ? path : `body > ${path}`;
+  }
+  // Any CSS color as [r, g, b, a] (0-255, alpha 0-1): a canvas reads them all,
+  // including oklch() and color-mix().
+  let paint;
+  const colors = new Map();
+  function rgba(value) {
+    if (!colors.has(value)) {
+      paint ??= new OffscreenCanvas(1, 1).getContext("2d", { willReadFrequently: true });
+      paint.clearRect(0, 0, 1, 1);
+      paint.fillStyle = "#0000";
+      paint.fillStyle = value;
+      paint.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = paint.getImageData(0, 0, 1, 1).data;
+      colors.set(value, [r, g, b, a / 255]);
+    }
+    return colors.get(value);
+  }
+  const over = (top, under) => [0, 1, 2].map((i) => top[i] * top[3] + under[i] * (1 - top[3])).concat(1);
+  const luminance = (c) => { const [r, g, b] = c.slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const hex = (c) => "#" + c.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+  // The page's own background when nothing paints one: Chrome's dark canvas when
+  // the page opts into dark and the browser prefers it, white otherwise.
+  function canvasColor() {
+    const scheme = `${getComputedStyle(document.documentElement).colorScheme} ${document.querySelector('meta[name="color-scheme"]')?.content || ""}`;
+    const dark = /dark/.test(scheme) && (matchMedia("(prefers-color-scheme: dark)").matches || !/light/.test(scheme));
+    return dark ? [18, 18, 18, 1] : [255, 255, 255, 1];
+  }
+  // What a text element's ancestors paint behind it, or null under an image or
+  // gradient, which the check cannot read.
+  function backdrop(el, base) {
+    const layers = [];
+    for (let n = el; n; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.backgroundImage !== "none") return null;
+      const c = rgba(cs.backgroundColor);
+      if (c[3] > 0) { layers.push(c); if (c[3] >= 1) break; }
+    }
+    return layers.reduceRight((under, top) => over(top, under), base);
+  }
+  // Left out on purpose by apps, so never a problem: screen-reader-only text (a
+  // 1px box), aria-hidden parts, and controls kept out of the tab order (honeypots).
+  function measurable(el) {
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2 && el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      && !el.closest("[aria-hidden=true], [inert]") && !(el.matches(CONTROL) && el.tabIndex < 0) && !isOurs(el);
+  }
+  const named = (el) => `"${(el.getAttribute("aria-label") || el.innerText || el.value || el.placeholder || el.alt || "").trim().replace(/\s+/g, " ").slice(0, 30)}"`;
+  // Inside a box a person can scroll sideways, what is past the screen is reachable.
+  const scrolls = (el) => { for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) if (getComputedStyle(n).overflowX !== "visible") return true; return false; };
+  // A control under a fixed or sticky bar is fine when scrolling moves it clear
+  // of the bar while it stays on the screen.
+  function scrollsClear(r, cover) {
+    let bar = cover;
+    while (bar && !["fixed", "sticky"].includes(getComputedStyle(bar).position)) bar = bar.parentElement;
+    if (!bar) return false;
+    const b = bar.getBoundingClientRect(), down = document.documentElement.scrollHeight - innerHeight - scrollY;
+    return r.bottom - b.top <= Math.min(down, r.top) || b.bottom - r.top <= Math.min(scrollY, innerHeight - r.bottom);
+  }
+  // Text that does not reach WCAG AA contrast (4.5:1, or 3:1 for large text)
+  // against what is painted behind it.
+  function contrast() {
+    const base = canvasColor(), found = [];
+    for (const el of document.body.querySelectorAll("*")) {
+      if (found.length >= 100) break;
+      if (!ownText(el) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "OPTION"].includes(el.tagName) || !measurable(el)) continue;
+      // Disabled controls are exempt in WCAG.
+      if (el.closest(":disabled, [aria-disabled=true]")) continue;
+      const cs = getComputedStyle(el);
+      const fg = rgba(cs.webkitTextFillColor || cs.color);
+      if (fg[3] === 0) continue;
+      const bg = backdrop(el, base);
+      if (!bg) continue;
+      let alpha = fg[3];
+      for (let n = el; n; n = n.parentElement) alpha *= Number(getComputedStyle(n).opacity);
+      const text = over([...fg.slice(0, 3), alpha], bg);
+      const [hi, lo] = [luminance(text), luminance(bg)].sort((a, b) => b - a);
+      const ratio = (hi + 0.05) / (lo + 0.05), size = parseFloat(cs.fontSize);
+      const large = size >= 24 || (size >= 18.66 && Number(cs.fontWeight) >= 700);
+      if (ratio < (large ? 3 : 4.5)) found.push({ at: shortSelector(el), text: ownText(el).slice(0, 30), fg: hex(text), bg: hex(bg), ratio: Math.floor(ratio * 10) / 10 });
+    }
+    return found;
+  }
+  // Layout, control and loading problems, by kind.
+  function problems() {
+    const W = innerWidth, out = [], add = (kind, items) => { if (items.length) out.push({ kind, items: items.slice(0, 100) }); };
+    const all = [...document.body.querySelectorAll("*")].filter((e) => !isOurs(e));
+    const sw = document.documentElement.scrollWidth;
+    if (sw > W + 1) {
+      const wide = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > W + 1 && getComputedStyle(e).position !== "fixed"; });
+      add(`wider than the screen (${sw}px at ${W}px)`, wide.filter((e) => !wide.includes(e.parentElement)).map((e) => `${shortSelector(e)} reaches ${Math.round(e.getBoundingClientRect().right)}px`));
+    }
+    const controls = [...document.querySelectorAll(CONTROL)].filter(measurable);
+    const rects = new Map(controls.map((c) => [c, c.getBoundingClientRect()]));
+    const off = [], covered = [], small = [], unlabeled = [];
+    // Under 24px is fine when nothing else a person could tap is within 12px of its
+    // middle: WCAG 2.5.8's spacing exception.
+    const undersized = (r) => r.width < 24 || r.height < 24;
+    const spaced = (c, r) => controls.every((o) => {
+      if (o === c || o.contains(c) || c.contains(o)) return true;
+      const p = rects.get(o), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (undersized(p)) return Math.hypot(p.left + p.width / 2 - x, p.top + p.height / 2 - y) >= 24;
+      return Math.hypot(Math.max(p.left - x, 0, x - p.right), Math.max(p.top - y, 0, y - p.bottom)) >= 12;
+    });
+    for (const c of controls) {
+      const r = rects.get(c), name = `${c.tagName.toLowerCase()} ${named(c)} ${shortSelector(c)}`;
+      if ((r.right > W + 1 || r.left < -1) && !scrolls(c)) { off.push(name); continue; }
+      const p = r.top >= 0 && r.bottom <= innerHeight ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+      if (p && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p)) {
+        covered.push(`${name} under ${p.closest(".jf-btn") ? "jelly's Comment button (move it with --jelly-comment-inset)" : shortSelector(p)}`);
+      }
+      // A labelled checkbox or radio is tapped through its label; a link inside text is exempt.
+      const viaLabel = c.matches("input[type=checkbox], input[type=radio]") && c.labels?.length;
+      if (W < 600 && !viaLabel && getComputedStyle(c).display !== "inline" && undersized(r) && !spaced(c, r)) small.push(`${name} ${Math.round(r.width)}×${Math.round(r.height)}`);
+      if (c.matches("input:not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea")
+        && !c.labels?.length && !c.getAttribute("aria-label") && !c.getAttribute("aria-labelledby") && !c.title && !c.placeholder) unlabeled.push(name);
+    }
+    add("off the screen", off);
+    add("covered by another element", covered);
+    add("too small to tap (under 24px)", small);
+    add("field without a label", unlabeled);
+    add("image without alt", [...document.images].filter(measurable).filter((i) => !i.hasAttribute("alt") && !["presentation", "none"].includes(i.getAttribute("role"))).map((i) => `${shortSelector(i)} ${(i.currentSrc || i.src).split("/").pop().slice(0, 40)}`));
+    add("text cut off", all.filter((e) => !e.children.length && e.textContent.trim() && measurable(e) && e.scrollWidth > e.clientWidth + 1
+      && ["hidden", "clip"].includes(getComputedStyle(e).overflowX) && getComputedStyle(e).textOverflow !== "ellipsis").map((e) => `${shortSelector(e)} "${e.textContent.trim().slice(0, 30)}"`));
+    // A load that failed already shows as an error line.
+    add("failed request", performance.getEntriesByType("resource")
+      .filter((r) => r.responseStatus >= 400 && ![`${location.origin}${api}/screen`, `${location.origin}/favicon.ico`].includes(r.name) && !errors.includes(`could not load ${r.name}`))
+      .map((r) => `${r.responseStatus} ${r.name.replace(location.origin, "")}`));
+    return out;
+  }
   // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {
     // A trial's page is not what `jelly see` should show; it reports in `runTrial`.
@@ -936,6 +1089,8 @@
       snapT = null;
       fetch(`${api}/screen`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
+          // Only `jelly see`'s own renders measure problems; a person's browser does not pay for them.
+          ...(agentMode && { dark: darkRender, contrast: contrast(), problems: darkRender ? [] : problems() }),
           inline: inline(), page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
           fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) reload(); }).catch(() => {});

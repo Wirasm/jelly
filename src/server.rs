@@ -95,17 +95,23 @@ impl App {
             return Ok(entry.owner.clone());
         }
         let owner = random_token()?;
-        screens.insert(name.into(), ViewScreen { owner: owner.clone(), view_rev, screen: None });
+        screens.insert(name.into(), ViewScreen { owner: owner.clone(), view_rev, screen: None, dark: None });
         Ok(owner)
     }
 
     fn screen(&self, name: &str, owner: &str) -> Result<Option<Screen>, ApiError> {
+        self.screen_in(name, owner, false)
+    }
+
+    /// The latest snapshot from a light render (or a person's browser), or from
+    /// `jelly see`'s dark render.
+    fn screen_in(&self, name: &str, owner: &str, dark: bool) -> Result<Option<Screen>, ApiError> {
         let store = self.store.lock().expect("store lock");
         let j = store.get(name)?;
         let screens = self.screens.lock().expect("screens lock");
         let entry = screens.get(name).filter(|s| s.owner == owner && s.view_rev == j.view_rev)
             .ok_or_else(snapshot_changed)?;
-        Ok(entry.screen.clone())
+        Ok(if dark { entry.dark.clone() } else { entry.screen.clone() })
     }
 
     fn validate_see(&self, name: &str, owner: &str, version: u64) -> Result<(), ApiError> {
@@ -876,7 +882,7 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
         let j = store.get(name).map_err(|e| e.to_string())?;
         app.snapshot_owner(name, j.view_rev).map_err(|_| "could not issue snapshot owner".to_string())?
     };
-    let render = render(port, name, None, 1280, 900, None, ANCHOR_CHECK);
+    let render = render(port, name, None, 1280, 900, None, false, ANCHOR_CHECK);
     tokio::pin!(render);
     // The browser often posts its snapshot and then lingers, so answer as soon
     // as the snapshot is in; dropping the render stops the browser.
@@ -1075,6 +1081,33 @@ struct Screen {
     fallback: Vec<AnchorFallback>,
     #[serde(default)]
     below: Vec<String>,
+    /// Rendered with `prefers-color-scheme: dark` for `jelly see`'s contrast check.
+    #[serde(default)]
+    dark: bool,
+    /// Text below WCAG AA contrast against what is painted behind it.
+    #[serde(default)]
+    contrast: Vec<Contrast>,
+    /// Other measured problems by kind. Only `jelly see`'s renders measure them, so
+    /// `None` is a snapshot from a person's browser.
+    #[serde(default)]
+    problems: Option<Vec<Problem>>,
+}
+
+#[derive(Deserialize, Clone, PartialEq)]
+struct Contrast {
+    /// A selector for the element, for `jelly try` and `ask --at`.
+    at: String,
+    text: String,
+    /// The text and background colors as the page paints them, `#rrggbb`.
+    fg: String,
+    bg: String,
+    ratio: f64,
+}
+
+#[derive(Deserialize, Clone)]
+struct Problem {
+    kind: String,
+    items: Vec<String>,
 }
 
 impl Screen {
@@ -1094,6 +1127,7 @@ struct ViewScreen {
     owner: String,
     view_rev: u64,
     screen: Option<Screen>,
+    dark: Option<Screen>,
 }
 
 async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mut sc): Json<Screen>) -> Result<StatusCode, ApiError> {
@@ -1103,7 +1137,7 @@ async fn put_screen(State(app): State<Shared>, Path(name): Path<String>, Json(mu
     let entry = screens.get_mut(&name).filter(|s| s.owner == sc.owner && s.view_rev == j.view_rev)
         .ok_or_else(snapshot_changed)?;
     sc.at_ms = now_ms();
-    entry.screen = Some(sc);
+    if sc.dark { entry.dark = Some(sc) } else { entry.screen = Some(sc) }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1154,16 +1188,19 @@ const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Runs headless Chrome on a jelly at a given size. With `png`, writes a
 /// screenshot there; either way the page's runtime posts a fresh snapshot.
-/// With `trial`, the page runs that `jelly try`'s steps.
-async fn render(port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
+/// With `trial`, the page runs that `jelly try`'s steps. With `dark`, the page
+/// prefers the dark color scheme; otherwise light, whatever the machine uses.
+#[allow(clippy::too_many_arguments)]
+async fn render(port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, dark: bool, limit: std::time::Duration) -> Result<(), String> {
     let bin = chrome().ok_or("no Chrome, Chromium, Edge or Brave found; set JELLY_CHROME to a browser binary")?;
-    run_browser(&bin, port, name, trial, width, height, png, limit).await
+    run_browser(&bin, port, name, trial, width, height, png, dark, limit).await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, limit: std::time::Duration) -> Result<(), String> {
+async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, width: u32, height: u32, png: Option<&std::path::Path>, dark: bool, limit: std::time::Duration) -> Result<(), String> {
     // Trial tokens are URL-safe base64, so they go into the URL as they are.
-    let trial = trial.map(|t| format!("&try={t}")).unwrap_or_default();
+    // `&dark` tells the runtime its snapshot is the dark one.
+    let trial = format!("{}{}", trial.map(|t| format!("&try={t}")).unwrap_or_default(), if dark { "&dark=1" } else { "" });
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
     let url = if width < 500 {
@@ -1183,7 +1220,9 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
     // SwiftShader is Chrome's software GPU: WebGL views render without a real GPU.
     // `--disable-gpu` would leave them with no WebGL context at all.
     cmd.args(["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
-        .arg(format!("--user-data-dir={}", profile.display()));
+        .arg(format!("--user-data-dir={}", profile.display()))
+        // Headless Chrome follows the machine's appearance unless told; 0 is dark, 1 light.
+        .arg(format!("--blink-settings=preferredColorScheme={}", if dark { 0 } else { 1 }));
     if cfg!(windows) {
         // On Windows `--window-size` is the outer size, so the page comes out narrower than
         // asked and its snapshot is refused; a fullscreen window on a screen of that size is exact.
@@ -1227,15 +1266,15 @@ struct SeeQ {
 async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
     let render_name = name.clone();
-    see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>| {
+    see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>, dark| {
         let name = render_name.clone();
-        async move { render(port, &name, None, width, height, png.as_deref(), RENDER_LIMIT).await }
+        async move { render(port, &name, None, width, height, png.as_deref(), dark, RENDER_LIMIT).await }
     }).await
 }
 
 async fn see_with_renderer<F, Fut>(app: Shared, name: String, q: SeeQ, mut render_page: F) -> Result<Response, ApiError>
 where
-    F: FnMut(u32, u32, Option<std::path::PathBuf>) -> Fut,
+    F: FnMut(u32, u32, Option<std::path::PathBuf>, bool) -> Fut,
     Fut: std::future::Future<Output = Result<(), String>>,
 {
     let (j, home, owner) = {
@@ -1245,26 +1284,36 @@ where
     };
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
-    let fresh = |app: &App| -> Result<Option<Screen>, ApiError> {
-        Ok(app.screen(&name, &owner)?.filter(|s| s.version == j.version && s.width == width))
+    // Only see's own renders measure problems, so a person's snapshot does not count.
+    let fresh = |app: &App, dark: bool| -> Result<Option<Screen>, ApiError> {
+        Ok(app.screen_in(&name, &owner, dark)?.filter(|s| s.version == j.version && s.width == width && s.problems.is_some()))
     };
     let mut notes: Vec<String> = Vec::new();
-    let mut snap = fresh(&app)?;
-    if snap.is_none() {
+    let mut snap = fresh(&app, false)?;
+    // The dark render only checks contrast. It runs beside the light one, so it
+    // costs a second browser but little extra time.
+    let mut dark = fresh(&app, true)?;
+    if snap.is_none() || dark.is_none() {
         let asked = now_ms();
-        match render_page(width, height, None).await {
-            Ok(()) => {
-                for _ in 0..30 {
-                    if let Some(s) = fresh(&app)?.filter(|s| s.at_ms >= asked) {
-                        snap = Some(s);
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                if snap.is_none() { notes.push("The page rendered but sent no snapshot.".into()); }
-            }
-            Err(e) => notes.push(format!("No snapshot: {e}")),
+        let light_run = snap.is_none().then(|| render_page(width, height, None, false));
+        let dark_run = dark.is_none().then(|| render_page(width, height, None, true));
+        let (light_run, dark_run) = tokio::join!(maybe(light_run), maybe(dark_run));
+        let wait_light = match light_run {
+            Some(Err(e)) => { notes.push(format!("No snapshot: {e}")); false }
+            ran => ran.is_some(),
+        };
+        let wait_dark = match dark_run {
+            Some(Err(e)) => { notes.push(format!("No dark mode check: {e}")); false }
+            ran => ran.is_some(),
+        };
+        for _ in 0..30 {
+            if wait_light && snap.is_none() { snap = fresh(&app, false)?.filter(|s| s.at_ms >= asked); }
+            if wait_dark && dark.is_none() { dark = fresh(&app, true)?.filter(|s| s.at_ms >= asked); }
+            if (!wait_light || snap.is_some()) && (!wait_dark || dark.is_some()) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
+        if wait_light && snap.is_none() { notes.push("The page rendered but sent no snapshot.".into()); }
+        if wait_dark && dark.is_none() { notes.push("The dark mode render sent no snapshot.".into()); }
     }
     let png = if q.png {
         let dir = home.join("see");
@@ -1272,7 +1321,7 @@ where
         let path = dir.join(format!("{}-{width}.png", crate::disk::name(&name)));
         // The full page: as tall as the page said it was, within reason.
         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
-        match render_page(width, h, Some(path.clone())).await {
+        match render_page(width, h, Some(path.clone()), false).await {
             Ok(()) => Some(path),
             Err(e) => { notes.push(format!("No screenshot: {e}")); None }
         }
@@ -1334,6 +1383,7 @@ where
         }
         if sc.page_height > sc.height && !q.full && png.is_some() { line(&mut out, format!("!        the page is {}px tall and the png shows the first {}px; --full for all of it", sc.page_height, sc.height)); }
     }
+    for p in problem_lines(snap.as_ref(), dark.as_ref()) { line(&mut out, format!("!        {p}")); }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(s) = snap {
         line(&mut out, format!("\non screen at {}×{} (v{}):", s.width, s.height, s.version));
@@ -1341,6 +1391,47 @@ where
         out.push('\n');
     }
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
+}
+
+/// Awaits a render that may not have been started.
+async fn maybe<F: std::future::Future>(run: Option<F>) -> Option<F::Output> {
+    match run { Some(f) => Some(f.await), None => None }
+}
+
+/// How many of each kind of problem `jelly see` prints; the rest are counted.
+const PROBLEMS_SHOWN: usize = 3;
+
+/// The measured problems as `kind: item` lines, a few of each kind. Unreadable
+/// text says which color scheme it is unreadable in when it is only one of them,
+/// and gets one line per color pair, worst first: the fix is usually one color.
+fn problem_lines(light: Option<&Screen>, dark: Option<&Screen>) -> Vec<String> {
+    let none = Vec::new();
+    // Without a dark render there is nothing to tell the schemes apart by.
+    let l = light.map_or(&none, |s| &s.contrast);
+    let d = dark.map_or(l, |s| &s.contrast);
+    let mut out = Vec::new();
+    let mut add = |kind: &str, items: Vec<String>, unit: &str| {
+        out.extend(items.iter().take(PROBLEMS_SHOWN).map(|item| format!("{kind}: {item}")));
+        if items.len() > PROBLEMS_SHOWN { out.push(format!("{kind}: {} more{unit}", items.len() - PROBLEMS_SHOWN)); }
+    };
+    for (kind, found) in [
+        ("unreadable text", l.iter().filter(|c| d.contains(c)).collect::<Vec<_>>()),
+        ("unreadable text in light mode", l.iter().filter(|c| !d.contains(c)).collect()),
+        ("unreadable text in dark mode", d.iter().filter(|c| !l.contains(c)).collect()),
+    ] {
+        let mut pairs: Vec<(&Contrast, usize)> = Vec::new();
+        for c in found {
+            match pairs.iter_mut().find(|(p, _)| p.fg == c.fg && p.bg == c.bg) {
+                Some((_, more)) => *more += 1,
+                None => pairs.push((c, 0)),
+            }
+        }
+        pairs.sort_by(|a, b| a.0.ratio.total_cmp(&b.0.ratio));
+        add(kind, pairs.iter().map(|(c, more)| format!("{} on {} is {:.1}:1 at {} {:?}{}", c.fg, c.bg, c.ratio, c.at, c.text,
+            if *more > 0 { format!(" and {more} more like it") } else { String::new() })).collect(), " color pairs");
+    }
+    for p in light.and_then(|s| s.problems.as_ref()).into_iter().flatten() { add(&p.kind, p.items.clone(), ""); }
+    out
 }
 
 // ---- jelly try ---------------------------------------------------------------
@@ -1437,7 +1528,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     };
     let mut notes = Vec::new();
     let token = app.start_trial(&name, &r.steps)?;
-    match render(port, &name, Some(&token), width, height, None, RENDER_LIMIT).await {
+    match render(port, &name, Some(&token), width, height, None, false, RENDER_LIMIT).await {
         Ok(()) => {
             for _ in 0..30 {
                 if app.trials.lock().expect("trials lock").get(&token).is_some_and(|t| t.result.is_some()) { break; }
@@ -1453,7 +1544,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{}-try-{width}.png", crate::disk::name(&trial.name)));
         let token = app.start_trial(&name, &r.steps)?;
-        let shot = render(port, &name, Some(&token), width, height, Some(&path), RENDER_LIMIT).await;
+        let shot = render(port, &name, Some(&token), width, height, Some(&path), false, RENDER_LIMIT).await;
         app.trials.lock().expect("trials lock").remove(&token);
         match shot {
             Ok(()) => Some(path),
@@ -1614,13 +1705,16 @@ struct FrameQ {
     h: u32,
     #[serde(rename = "try")]
     trial: Option<String>,
+    /// `jelly see`'s dark render.
+    dark: Option<String>,
 }
 
 async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
     // Scaled up to fill the 500px window, so the screenshot is the phone layout and nothing else.
     let k = 500.0 / q.w.max(1) as f64;
     // Only a URL-safe token passes through, so it cannot break out of the attribute.
-    let trial = q.trial.filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).map(|t| format!("&try={t}")).unwrap_or_default();
+    let trial = q.trial.filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).map(|t| format!("&try={t}")).unwrap_or_default()
+        + if q.dark.is_some() { "&dark=1" } else { "" };
     Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1{trial}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
 }
 
@@ -2370,6 +2464,34 @@ mod placement_tests {
 }
 
 #[cfg(test)]
+mod problem_tests {
+    use super::*;
+
+    fn measured(contrast: Value, problems: Value) -> Screen {
+        serde_json::from_value(json!({"owner": "test", "text": "", "width": 1280, "height": 900, "version": 1, "contrast": contrast, "problems": problems})).unwrap()
+    }
+
+    /// Unreadable text is one line per color pair, worst first, and says which
+    /// scheme it is in; every kind shows a few items and counts the rest.
+    #[test]
+    fn problems_print_a_few_lines_per_kind() {
+        let text = |at: &str, fg: &str, ratio: f64| json!({"at": at, "text": "t", "fg": fg, "bg": "#ffffff", "ratio": ratio});
+        let light = measured(json!([text("#a", "#cccccc", 1.6), text("#b", "#cccccc", 1.6), text("#c", "#999999", 2.8), text("#d", "#eeeeee", 1.1)]),
+            json!([{"kind": "image without alt", "items": ["#1", "#2", "#3", "#4", "#5"]}]));
+        let dark = measured(json!([text("#d", "#eeeeee", 1.1), text("#e", "#ffffff", 1.0)]), json!([]));
+        assert_eq!(problem_lines(Some(&light), Some(&dark)), [
+            r##"unreadable text: #eeeeee on #ffffff is 1.1:1 at #d "t""##,
+            r##"unreadable text in light mode: #cccccc on #ffffff is 1.6:1 at #a "t" and 1 more like it"##,
+            r##"unreadable text in light mode: #999999 on #ffffff is 2.8:1 at #c "t""##,
+            r##"unreadable text in dark mode: #ffffff on #ffffff is 1.0:1 at #e "t""##,
+            "image without alt: #1", "image without alt: #2", "image without alt: #3", "image without alt: 2 more",
+        ]);
+        // Without a dark render, nothing is said about either scheme.
+        assert!(problem_lines(Some(&light), None).iter().all(|l| !l.contains(" mode")));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::PERSON;
@@ -2486,12 +2608,22 @@ mod tests {
         serde_json::from_str::<Value>(boot).unwrap()["snapshotOwner"].as_str().unwrap().into()
     }
 
+    /// A snapshot from one of `jelly see`'s own light renders.
     fn snapshot(owner: &str, text: &str, version: u64) -> Screen {
-        serde_json::from_value(json!({"owner": owner, "text": text, "width": 1280, "height": 900, "version": version})).unwrap()
+        serde_json::from_value(json!({"owner": owner, "text": text, "width": 1280, "height": 900, "version": version, "problems": []})).unwrap()
     }
 
     async fn post(app: &Shared, sc: Screen) -> Result<StatusCode, ApiError> {
         put_screen(State(app.clone()), Path("test:x".into()), Json(sc)).await
+    }
+
+    /// Posts the light snapshot and its dark twin, as `jelly see`'s two renders do,
+    /// so a later `see` needs no browser.
+    async fn post_both(app: &Shared, sc: Screen) -> Result<StatusCode, ApiError> {
+        let mut dark = sc.clone();
+        dark.dark = true;
+        post(app, dark).await?;
+        post(app, sc).await
     }
 
     async fn seen(app: &Shared) -> String {
@@ -2539,16 +2671,17 @@ mod tests {
                 let (_dir, app) = app();
                 create_page(&app, "OLD PAGE", false).await;
                 let current = owner(&app, "test:x").await;
-                if png { post(&app, snapshot(&current, "OLD PAGE", 1)).await.unwrap(); }
+                if png { post_both(&app, snapshot(&current, "OLD PAGE", 1)).await.unwrap(); }
                 let (started, suspended) = tokio::sync::oneshot::channel();
                 let (resume, resumed) = tokio::sync::oneshot::channel();
                 let mut rendezvous = Some((started, resumed));
                 let seeing = see_with_renderer(app.clone(), "test:x".into(),
                     SeeQ { width: None, height: None, png, full: false },
-                    move |_, _, path| {
+                    move |_, _, path, dark| {
                         assert_eq!(path.is_some(), png);
-                        let (started, resumed) = rendezvous.take().expect("one render");
+                        let light = (!dark).then(|| rendezvous.take().expect("one light render"));
                         async move {
+                            let Some((started, resumed)) = light else { return Err("no dark render here".into()) };
                             started.send(()).unwrap();
                             resumed.await.unwrap();
                             // A failed text render bypasses polling, so only the final
@@ -2577,7 +2710,7 @@ mod tests {
             let (dir, app) = app();
             create_page(&app, "PAGE", false).await;
             let current = owner(&app, "test:x").await;
-            post(&app, snapshot(&current, "PAGE", 1)).await.unwrap();
+            post_both(&app, snapshot(&current, "PAGE", 1)).await.unwrap();
             let png = dir.path().join("see").join(format!("{}-1280.png", crate::disk::name("test:x")));
             if old_png {
                 std::fs::create_dir_all(png.parent().unwrap()).unwrap();
@@ -2589,10 +2722,10 @@ mod tests {
             let browser = browser.to_str().unwrap().to_string();
             let response = see_with_renderer(app.clone(), "test:x".into(),
                 SeeQ { width: None, height: None, png: true, full: false },
-                move |width, height, path| {
+                move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
-                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), std::time::Duration::from_secs(5)).await
+                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), dark, std::time::Duration::from_secs(5)).await
                     }
                 }).await.unwrap();
             let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
@@ -2612,14 +2745,17 @@ mod tests {
             let (_dir, app) = app();
             create_page(&app, "PAGE", false).await;
             let current = owner(&app, "test:x").await;
+            let mut dark = snapshot(&current, "DARK", 1);
+            dark.dark = true;
+            post(&app, dark).await.unwrap();
             let (rendered, polling) = tokio::sync::oneshot::channel();
             let mut rendered = Some(rendered);
             let posting_app = app.clone();
             let posting_owner = current.clone();
             let seeing = see_with_renderer(app.clone(), "test:x".into(),
                 SeeQ { width: None, height: None, png: false, full: false },
-                move |_, _, path| {
-                    assert!(path.is_none());
+                move |_, _, path, dark| {
+                    assert!(path.is_none() && !dark);
                     let app = posting_app.clone();
                     let owner = posting_owner.clone();
                     let rendered = rendered.take().expect("one render");
@@ -2649,7 +2785,7 @@ mod tests {
         let (_dir, app) = app();
         create_page(&app, "OLD PAGE", false).await;
         let old = owner(&app, "test:x").await;
-        assert_eq!(post(&app, snapshot(&old, "OLD PAGE", 1)).await.unwrap(), StatusCode::NO_CONTENT);
+        assert_eq!(post_both(&app, snapshot(&old, "OLD PAGE", 1)).await.unwrap(), StatusCode::NO_CONTENT);
         assert!(seen(&app).await.contains("OLD PAGE"));
         for (text, remove_first) in [("NEW PAGE", false), ("RECREATED PAGE", true)] {
             let previous = owner(&app, "test:x").await;
@@ -2667,7 +2803,7 @@ mod tests {
                 assert_eq!(post(&app, snapshot(invalid, "OLD PAGE", 1)).await.unwrap_err().into_response().status(), StatusCode::CONFLICT);
             }
             assert!(app.screen("test:x", &current).unwrap().is_none());
-            post(&app, snapshot(&current, text, 1)).await.unwrap();
+            post_both(&app, snapshot(&current, text, 1)).await.unwrap();
             assert!(post(&app, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
             let output = seen(&app).await;
             assert!(output.contains(text), "{output}");
@@ -2689,7 +2825,7 @@ mod tests {
         let (_dir, app) = app();
         create_page(&app, "OLD PAGE", false).await;
         let first = owner(&app, "test:x").await;
-        post(&app, snapshot(&first, "OLD PAGE", 1)).await.unwrap();
+        post_both(&app, snapshot(&first, "OLD PAGE", 1)).await.unwrap();
         assert!(app.change(|s| s.create("test:x", "bad".into(), "invalid JS!".into(), json!({}), "test", true, "", "")).is_err());
         assert!(app.change(|s| s.reshape("test:x", Some("bad".into()), Some("invalid JS!".into()), None, "test")).is_err());
         assert!(seen(&app).await.contains("OLD PAGE"));
@@ -2879,10 +3015,10 @@ mod tests {
         }
         let version = app.store.lock().unwrap().get("test:x").unwrap().version;
         let current = owner(&app, "test:x").await;
-        post(&app, snapshot(&current, "PAGE", version)).await.unwrap();
+        post_both(&app, snapshot(&current, "PAGE", version)).await.unwrap();
         let see_x = || async {
             let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false },
-                |_, _, _| async { Err("no browser".to_string()) }).await.unwrap();
+                |_, _, _, _| async { Err("no browser".to_string()) }).await.unwrap();
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };
         let header = |out: &str| out.lines().next().unwrap().to_string();

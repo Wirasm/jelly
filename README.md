@@ -23,7 +23,8 @@ prose, and whenever you need them to choose.
 - **Get choices made.** `jelly ask --spec` lays out options with live previews,
   gains, costs and your recommendation. They pick, add a note, or add their own question.
 - **See what you made.** `jelly see NAME` prints the page as text, with everything
-  waiting on them and what they did lately. `--png` when layout matters.
+  waiting on them, what they did lately, and problems the browser measured, such as
+  text unreadable in dark mode. `--png` when layout matters.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
