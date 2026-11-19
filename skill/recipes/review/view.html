@@ -149,7 +149,7 @@ const diffHtml = (diff, id) => `<pre class="diff">${String(diff || "").replace(/
   return `<span id="${id}-L${i + 1}"${c ? ` class="${c}"` : ""}>${esc(l) || " "}</span>`;
 }).join("")}</pre>`;
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
-const who = (by) => (by === "person" ? "You" : by);
+const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const st = (g) => g.verdict?.kind || (g.mechanical ? "mech" : "open");
 const serves = (g) => [].concat(g.outcome || []); // one outcome id, or several
 const asksAt = (g) => (jelly.itemsAt?.(`#g-${g.id}`) || []).filter((a) => !a.answer).length;

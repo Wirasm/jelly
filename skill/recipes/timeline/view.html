@@ -163,7 +163,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
-const who = (by) => (by === "person" ? "You" : by);
+const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
 const VERDICT = { confirmed: "✓ Confirmed", ruled_out: "✕ Ruled out", next: "→ Check this next" };
 const GLYPH = { ok: "✓", bad: "×", info: "" };
 
@@ -275,7 +275,7 @@ function drawAxis(state) {
       const p = placed[m.id], cy = y + HEAD + p.r * ROW + ROW / 2;
       p.cy = cy;
       const side = h ? ((h.supports || []).includes(m.id) ? " sup" : (h.contradicts || []).includes(m.id) ? " con" : "") : "";
-      const cls = `mark k-${GLYPH[m.kind] != null ? m.kind : "info"}${side}${m.id === selMark ? " sel" : ""}${m.by === "person" ? " person" : ""}${arrived.has(m.id) ? " new" : ""}`;
+      const cls = `mark k-${GLYPH[m.kind] != null ? m.kind : "info"}${side}${m.id === selMark ? " sel" : ""}${jelly.isPerson(m.by) ? " person" : ""}${arrived.has(m.id) ? " new" : ""}`;
       out.push(`<g class="${cls}" id="e-${esc(m.id)}" data-mark="${esc(m.id)}" transform="translate(${p.x.toFixed(1)},${cy})" tabindex="0" role="button" aria-label="${esc(m.label)}, ${esc(whenOf(state, m))}">
         <title>${esc(m.label)} · ${esc(whenOf(state, m))}</title>
         <rect class="hit" x="${p.left ? -p.lw - 4 : -4}" y="${-ROW / 2}" width="${p.w + p.lw + 8}" height="${ROW}"/>
@@ -343,13 +343,13 @@ function drawDetail(state) {
   const marks = marksOf(state), m = marks.find((m) => m.id === selMark);
   if (!m) { $("detail").innerHTML = `<p class="why">Nothing has been seen yet.</p>`; return; }
   const i = marks.indexOf(m), lane = (state.lanes || []).find((l) => l.id === m.lane), { sup, con } = hypsWith(state, m.id);
-  $("detail").innerHTML = `<div class="crumbs"><span>${i + 1} of ${marks.length}</span><span class="chip">${esc(lane?.label || m.lane)}</span><span>${esc(whenOf(state, m))}${m.dur ? ` · took ${dur(m.dur)}` : ""}</span>${m.by === "person" ? `<span class="chip">you added this</span>` : ""}
+  $("detail").innerHTML = `<div class="crumbs"><span>${i + 1} of ${marks.length}</span><span class="chip">${esc(lane?.label || m.lane)}</span><span>${esc(whenOf(state, m))}${m.dur ? ` · took ${dur(m.dur)}` : ""}</span>${jelly.isPerson(m.by) ? `<span class="chip">${esc(m.by === jelly.by ? "you" : jelly.who(m.by))} added this</span>` : ""}
       <span class="nav"><button data-step="-1" aria-label="Earlier">‹</button><button data-step="1" aria-label="Later">›</button></span></div>
     <h2>${esc(m.label)}</h2>
     ${m.detail ? `<p class="why">${esc(m.detail)}</p>` : ""}
     ${hero(m.show, `e-${m.id}-show`)}
     ${sup.length + con.length ? `<div class="links">${sup.map((h) => `<button class="chip sup" data-hyp="${esc(h.id)}">+ for: ${esc(h.text)}</button>`).join("")}${con.map((h) => `<button class="chip con" data-hyp="${esc(h.id)}">− against: ${esc(h.text)}</button>`).join("")}</div>` : ""}
-    <div class="act"><button data-pin class="${m.pinned ? "on" : ""}">${m.pinned ? `★ This matters${m.pinned.by === "person" ? "" : ` (${esc(m.pinned.by)})`}` : "☆ This matters"}</button>${m.pinned ? `<button class="undo" data-unpin>Unpin</button>` : ""}</div>`;
+    <div class="act"><button data-pin class="${m.pinned ? "on" : ""}">${m.pinned ? `★ This matters${m.pinned.by === jelly.by ? "" : ` (${esc(jelly.who(m.pinned.by))})`}` : "☆ This matters"}</button>${m.pinned ? `<button class="undo" data-unpin>Unpin</button>` : ""}</div>`;
 }
 
 // ---- the explanations ----

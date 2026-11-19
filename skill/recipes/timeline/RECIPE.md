@@ -63,7 +63,7 @@ mark to see the evidence, and reacts. It arrives in `jelly inbox` as:
   ("check this next": do that before anything else). `take_back` undoes it.
 - `pin` `{mark}`: "this matters". Explain it, or build the next check on it.
 - `know` `{lane, rel, mark, text, kind}`: something they saw, placed before,
-  with or after one of your marks. It becomes a mark with `by: "person"`; link
+  with or after one of your marks. It becomes a mark with the person's `by`; link
   it to the hypotheses it bears on.
 
 ```bash

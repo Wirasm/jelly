@@ -283,6 +283,11 @@
   window.jelly = {
     name: boot.name,
     about: boot.about,
+    // A shared file reads as the unnamed person, as the live runtime does before naming.
+    viewer: "",
+    by: "person",
+    who: (by) => (by === "person" ? "you" : String(by).startsWith("person:") ? by.slice(7) : by),
+    isPerson: (by) => by === "person" || String(by).startsWith("person:"),
     get state() { return boot.state; },
     asset: (file) => resource(`assets/${encodeURIComponent(file)}`),
     get items() { return boot.attention; },
