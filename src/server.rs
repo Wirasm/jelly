@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -145,7 +145,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener) -> std::io::
     });
 
     let port = listener.local_addr()?.port();
-    eprintln!("jelly on http://127.0.0.1:{port}");
+    let _ = writeln!(std::io::stderr().lock(), "jelly on http://127.0.0.1:{port}");
     axum::serve(listener, router(app)).await
 }
 
@@ -467,11 +467,38 @@ fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Option<Event>
     Ok(None)
 }
 
-fn open_history(store: &Store) -> Result<Option<BufReader<File>>, Error> {
-    match File::open(store.events_path()) {
-        Ok(file) => Ok(Some(BufReader::new(file))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && store.sequence() == 0 => Ok(None),
-        Err(e) => Err(history_error(e)),
+/// `events.jsonl` as an open wait reads it. A trim replaces the file, so the
+/// wait first reads the rest of the old file, whose tail the trim may have
+/// dropped, then reopens and reads the new one from the start. That cannot
+/// report an event twice, because the wait returns on the first event that matches.
+struct History {
+    reader: Option<BufReader<File>>,
+    trims: u64,
+}
+
+impl History {
+    fn open(store: &Store) -> Result<History, Error> {
+        let reader = match File::open(store.events_path()) {
+            Ok(file) => Some(BufReader::new(file)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && store.sequence() == 0 => None,
+            Err(e) => return Err(history_error(e)),
+        };
+        Ok(History { reader, trims: store.trims() })
+    }
+
+    fn next_change(&mut self, store: &Store, q: &WaitQ) -> Result<Option<Event>, Error> {
+        if self.trims != store.trims() {
+            if let Some(reader) = &mut self.reader {
+                if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
+            }
+            *self = History::open(store)?;
+        } else if self.reader.is_none() {
+            *self = History::open(store)?;
+        }
+        match &mut self.reader {
+            Some(reader) => recorded_change(reader, q),
+            None => Ok(None),
+        }
     }
 }
 
@@ -484,10 +511,10 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
     let rx = app.events.subscribe();
     let deadline = q.timeout.map(|t| Instant::now().checked_add(Duration::from_secs(t))
         .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
-    let mut reader = {
+    let history = {
         let mut store = app.store.lock().expect("store lock");
-        let mut reader = open_history(&store)?;
-        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut reader) {
+        let mut history = History::open(&store)?;
+        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut history.reader) {
             let (project, short) = preferred.split_once(':').unwrap_or(("", preferred));
             let mut identities = std::collections::BTreeSet::new();
             let mut line = String::new();
@@ -513,20 +540,18 @@ async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl FnOnce(&mu
             }
             std::io::Seek::rewind(reader).map_err(history_error)?;
         }
-        if let Some(reader) = &mut reader {
-            if let Some(ev) = recorded_change(reader, &q)? { return Ok(Some(ev)); }
-        }
+        if let Some(ev) = history.next_change(&store, &q)? { return Ok(Some(ev)); }
         if let Some(name) = &q.jelly { store.get(name)?; }
         after_scan(&mut store);
-        reader
+        history
     };
-    wait_for_record(app, &q, &mut reader, rx, deadline).await
+    wait_for_record(app, &q, history, rx, deadline).await
 }
 
 async fn wait_for_record(
     app: &App,
     q: &WaitQ,
-    reader: &mut Option<BufReader<File>>,
+    mut history: History,
     mut rx: broadcast::Receiver<Event>,
     deadline: Option<Instant>,
 ) -> Result<Option<Event>, Error> {
@@ -543,10 +568,7 @@ async fn wait_for_record(
         // Commits are ordered under the store lock; broadcasts happen after it
         // is released, so notifications only wake the reader, never choose a result.
         let store = app.store.lock().expect("store lock");
-        if reader.is_none() { *reader = open_history(&store)?; }
-        if let Some(reader) = reader {
-            if let Some(ev) = recorded_change(reader, q)? { return Ok(Some(ev)); }
-        }
+        if let Some(ev) = history.next_change(&store, q)? { return Ok(Some(ev)); }
         if matches!(notification, Err(broadcast::error::RecvError::Closed)) {
             return Err(Error::Invalid("the event stream ended".into()));
         }
@@ -1128,9 +1150,15 @@ async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, 
     // The phone frame is scaled up to 500px wide, so the window grows with it.
     let height = if width < 500 { (height as f64 * 500.0 / width.max(1) as f64).ceil() as u32 } else { height };
     let width = width.max(500);
-    let profile = std::env::temp_dir().join("jelly-chrome");
+    // Chrome refuses a profile another Chrome is using (exit 21), so each render
+    // gets its own. A fresh profile starts as fast as a used one.
+    static RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let profile = std::env::temp_dir().join(format!("jelly-chrome-{}-{n}", std::process::id()));
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.args(["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
+    // SwiftShader is Chrome's software GPU: WebGL views render without a real GPU.
+    // `--disable-gpu` would leave them with no WebGL context at all.
+    cmd.args(["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         .arg(format!("--user-data-dir={}", profile.display()));
     if cfg!(windows) {
         // On Windows `--window-size` is the outer size, so the page comes out narrower than
@@ -1148,7 +1176,10 @@ async fn run_browser(bin: &str, port: u16, name: &str, width: u32, height: u32, 
         None => { cmd.arg("--dump-dom"); }
     }
     let run = cmd.arg(url).status();
-    match tokio::time::timeout(limit, run).await {
+    let result = tokio::time::timeout(limit, run).await;
+    // Best effort: a leftover folder in the temp dir harms nothing.
+    let _ = tokio::fs::remove_dir_all(&profile).await;
+    match result {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => Err(format!("the browser failed ({status})")),
         Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
@@ -1753,14 +1784,14 @@ mod wait_tests {
         let (_dir, app) = fixture(4);
         let rx = app.events.subscribe();
         let q = query(Some("j"), 0);
-        let mut reader = BufReader::new(File::open(app.store.lock().unwrap().events_path()).unwrap());
-        assert!(recorded_change(&mut reader, &q).unwrap().is_none());
+        let mut history = History::open(&app.store.lock().unwrap()).unwrap();
+        assert!(history.next_change(&app.store.lock().unwrap(), &q).unwrap().is_none());
         let (first, second) = {
             let mut s = app.store.lock().unwrap();
             (s.note("j", "first", "helper").unwrap(), s.note("j", "second", "person").unwrap())
         };
         app.events.send(second).unwrap();
-        let result = wait_for_record(&app, &q, &mut Some(reader), rx, None).await.unwrap().unwrap();
+        let result = wait_for_record(&app, &q, history, rx, None).await.unwrap().unwrap();
         assert_eq!(result.seq, first.seq);
     }
 
@@ -1776,6 +1807,34 @@ mod wait_tests {
         note(&app, "other", "person");
         assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
         let expected = note(&app, "j", "helper");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
+    }
+
+    #[tokio::test]
+    async fn an_open_wait_hears_events_after_the_log_is_trimmed() {
+        let (_dir, app) = fixture(8);
+        let start = note(&app, "j", "person");
+        let q = WaitQ { timeout: Some(5), ..query(Some("j"), start.seq) };
+        let future = wait_since(&app, &q);
+        tokio::pin!(future);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        note(&app, "j", "agent");
+        app.store.lock().unwrap().trim_events(1, 1 << 20).unwrap();
+        let expected = note(&app, "j", "helper");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
+    }
+
+    #[tokio::test]
+    async fn an_open_wait_hears_an_unread_event_the_trim_dropped() {
+        let (_dir, app) = fixture(8);
+        let start = note(&app, "j", "person");
+        let q = WaitQ { timeout: Some(5), ..query(Some("j"), start.seq) };
+        let future = wait_since(&app, &q);
+        tokio::pin!(future);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut future).await.is_err());
+        let expected = note(&app, "j", "helper");
+        note(&app, "j", "agent");
+        app.store.lock().unwrap().trim_events(1, 0).unwrap();
         assert_eq!(tokio::time::timeout(Duration::from_secs(1), future).await.unwrap().unwrap().unwrap().seq, expected.seq);
     }
 

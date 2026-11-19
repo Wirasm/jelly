@@ -28,13 +28,20 @@ prose, and whenever you need them to choose.
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
 
 ```bash
-jelly ls                                         # list jellies; starts the daemon on first use
+jelly ls                                         # this project's jellies; starts the daemon on first use
+jelly ls --all                                   # every project's jellies, archived ones included
 jelly new plan --view view.html --verbs verbs.js --about "One line: why this exists"
 jelly focus plan                                 # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
 jelly see plan                                   # what is on screen, as text
+jelly show plan                                  # the full jelly: view, verbs, state
+jelly state plan /labels                         # its state, or the part at a JSON pointer
+jelly events plan                                # stream its events as JSON lines; no name streams every jelly's
+jelly undo plan                                  # undo the last change to its view, verbs or state
+jelly pin plan                                   # keep it: a week untouched no longer archives it
+jelly rm plan                                    # remove it with its undo history and assets; cannot be undone
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.

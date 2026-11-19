@@ -1,12 +1,12 @@
 #[path = "../src/disk.rs"]
 #[allow(dead_code)]
 mod disk;
+mod common;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const LIMIT: Duration = Duration::from_secs(10);
 
@@ -32,32 +32,23 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
     } else {
         std::fs::File::create(&warnings).unwrap().into()
     };
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
     let mut daemon = Daemon(
         Command::new(env!("CARGO_BIN_EXE_jelly"))
-            .args(["serve", "--port", &port.to_string(), "--home"])
+            .args(["serve", "--port", "0", "--home"])
             .arg(home.path())
             .stdout(Stdio::null())
             .stderr(stderr)
             .spawn()
             .unwrap(),
     );
-    let url = format!("http://127.0.0.1:{port}");
+    // A closed stderr is closed only after the banner: event-log failures must not
+    // depend on the startup diagnostic.
+    let url = if closed_stderr {
+        common::served_url(&mut daemon.0)
+    } else {
+        common::served_url_in(&mut daemon.0, &warnings)
+    };
     let agent = ureq::AgentBuilder::new().timeout(LIMIT).build();
-    let deadline = Instant::now() + LIMIT;
-    loop {
-        if agent.get(&format!("{url}/api/jellies")).call().is_ok() {
-            break;
-        }
-        assert!(
-            daemon.0.try_wait().unwrap().is_none(),
-            "daemon exited during startup"
-        );
-        assert!(Instant::now() < deadline, "daemon did not start");
-        std::thread::sleep(Duration::from_millis(20));
-    }
     let post = |path: &str, body: Value| -> Value {
         agent
             .post(&format!("{url}{path}"))
@@ -74,10 +65,6 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
             "state": {"count": 0}, "by": "test"
         }),
     );
-    // Close only after startup: event-log failures must not depend on the startup diagnostic.
-    if closed_stderr {
-        drop(daemon.0.stderr.take().unwrap());
-    }
     let log = home.path().join("events.jsonl");
     let history = std::fs::read(&log).unwrap();
     match failure {

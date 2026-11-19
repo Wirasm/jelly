@@ -21,7 +21,10 @@
   // Errors the page hits, so `jelly see` can tell the agent its page is broken.
   const errors = [];
   let snapT = null;
-  const agentMode = new URLSearchParams(location.search).has("agent");
+  // `jelly see` renders with ?agent=1. Jellies framed inside that render (the
+  // jelly page's tiles) are agent renders too.
+  const agentMode = new URLSearchParams(location.search).has("agent") ||
+    (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has("agent"); } catch { return false; } })();
   const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
   addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
@@ -68,6 +71,8 @@
   }
 
   async function post(path, body) {
+    // Nobody is at an agent render, so nothing it does may be recorded as the person.
+    if (agentMode) throw new Error("jelly see only looks; this change was not made");
     const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -810,6 +815,8 @@
   // ---- agent view: what is on screen, as text, for `jelly see` ----------------
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
   const GROUP = new Set(["section", "article", "nav", "header", "footer", "main", "aside", "form", "table", "ul", "ol", "dialog", "details", "figure"]);
+  const ACTIVE = "button, a, input, textarea, select, [role=button], img, canvas, svg, video, iframe";
+  const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim().replace(/\s+/g, " ").slice(0, 120);
   function agentSnapshot() {
     const lines = [];
     const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
@@ -827,9 +834,17 @@
         else if (tag === "select") add(depth, `select = "${c.options[c.selectedIndex]?.text || ""}"`, c);
         else if (tag === "img") add(depth, `img "${c.alt || ""}"`, c);
         else if (["canvas", "svg", "video", "iframe"].includes(tag)) { const r = c.getBoundingClientRect(); add(depth, `${tag} ${Math.round(r.width)}×${Math.round(r.height)}${c.title ? ` "${c.title}"` : ""}${tag === "svg" && label(c) ? ` "${label(c).slice(0, 60)}"` : ""}`, c); }
-        else if (LEAF.has(tag)) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (LEAF.has(tag) || (ownText(c) && !GROUP.has(tag) && !role)) {
+          // One line of text stays whole, so `<span>p50 <b>6.5</b></span>` keeps its label.
+          // When a control or an id sits inside (`<p>Then <button>Go</button></p>`), or the
+          // text spans lines, the outline also walks inside.
+          const one = LEAF.has(tag) || !c.innerText.trim().includes("\n"), inside = c.querySelector(`${ACTIVE}, [id]`);
+          const t = inside && !ownText(c) ? "" : one ? label(c) : ownText(c);
+          if (t) add(depth, `text "${t}"`, c);
+          if (!one || inside) walk(c, depth + (t ? 1 : 0));
+        }
         else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
-        else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); walk(c, depth + 1); continue; }
+        else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); const own = ownText(c); if (own) add(depth + 1, `text "${own}"`, {}); walk(c, depth + 1); continue; }
         else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else walk(c, depth);
       }
@@ -895,6 +910,13 @@
   });
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
+  // Esc that ends comment mode is spent: the view never sees it, so it does not also
+  // close what the person was commenting on. Window capture runs before any view listener.
+  addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !commenting || e.target.closest?.(".jf-pop")) return;
+    e.stopPropagation();
+    setMode(false);
+  }, true);
   addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     // Esc inside a jelly closes the comment mode first, then reaches the jelly page.
