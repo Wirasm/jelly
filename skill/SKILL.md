@@ -48,7 +48,12 @@ jelly.onState((state, event) => render(state)); // now, and after every change b
 jelly.call("add", { title });                   // runs a verb; rejects with its error
 jelly.watch("other", (state) => …);             // another jelly's state, live
 jelly.asset("shot.png");                        // URL of a file added with `jelly asset`
+jelly.who(vote.by);                             // "you", another person's name, or the agent's
 ```
+
+A person who sets a name on the jelly page writes as `person:<name>` instead of
+`person`, so several people on one jelly stay apart. `jelly.by` is this
+browser's `by`; in verbs, a person is `by === "person" || by.startsWith("person:")`.
 
 Keep data in state, not page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at
@@ -62,6 +67,7 @@ fixed control sits there, move it with
 jelly see plan               # the page as text, its verbs and state, errors, what waits on the person
 jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
 jelly see plan --width 390   # phone width
+jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
 jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it, change nothing
 jelly focus plan             # open it full size on their screen; `jelly focus` closes it
 ```
@@ -70,8 +76,9 @@ Always run `jelly see` and fix every `error` and `!` line before you focus a
 jelly or ask about it. `see` only looks: nothing in its render is recorded as the
 person. To check that buttons and fields work, use `jelly try`, not a browser
 driver: it does the steps in order, then prints the page, errors, and each verb
-that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`. Add an `assets/poster.png`
-that tells the story on its own, and the jelly page uses it as the thumbnail.
+that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
+`jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly
+page's thumbnail; pick a moment that tells the story on its own.
 
 While you rebuild a jelly the person is looking at, say so: `jelly working plan
 "rebuilding the header"`, then `jelly done plan`.
@@ -130,24 +137,30 @@ own inbox and its changes are attributed.
 
 ## Recipes
 
-Starting points for jellies that are easy to get wrong. Each is a folder next to
-this file with `view.html`, `verbs.js`, an example `state.json` and a
-`RECIPE.md`. Read the `RECIPE.md`, copy the folder to a scratch place, write your
-own state, and change the view and verbs as the job needs.
+Starting points for jellies that are easy to get wrong, built into `jelly`: a
+view, verbs, an example state and a guide. Read the guide, make the jelly with
+your own state, and change the view and verbs as the job needs.
 
-- `recipes/review`: you changed code and the person must judge it. What they
+```bash
+jelly recipes                                  # each recipe and when to use it
+jelly recipes plan                             # its guide: the state it expects, its verbs
+jelly new plan --recipe plan --state my.json --about "Plan: …"
+jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly new plan --from /tmp/plan
+```
+
+- `review`: you changed code and the person must judge it. What they
   asked for, wired to the changes, before and after, approve or push back.
-- `recipes/plan`: work with more than three steps. A live track they can
+- `plan`: work with more than three steps. A live track they can
   reorder, veto or gate while you work.
-- `recipes/triage`: ten to a hundred items to agree on. You sort them into
+- `triage`: ten to a hundred items to agree on. You sort them into
   lanes; they correct the ones you were unsure of.
-- `recipes/map`: how a system fits together. Layers, nodes, wires and traces
+- `map`: how a system fits together. Layers, nodes, wires and traces
   that play step by step.
-- `recipes/scope`: a tradeoff between many parts. Items in or out, levers, and a
+- `scope`: a tradeoff between many parts. Items in or out, levers, and a
   date and capacity bar that move as they play.
-- `recipes/timeline`: why something happened. Evidence on a time axis,
+- `timeline`: why something happened. Evidence on a time axis,
   competing explanations, and they say which they believe.
-- `recipes/monitor`: something that runs for minutes or hours. Live charts fed by
+- `monitor`: something that runs for minutes or hours. Live charts fed by
   `jelly call`, with pause, stop and limits your loop obeys.
 
 ## More
@@ -157,8 +170,9 @@ jelly ls                         # this project's jellies; --all for every proje
 jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into a folder
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
+jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
-jelly share plan --out /tmp/plan.html   # one read-only HTML file, state and assets baked in
+jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly pin plan                   # keep it; unpinned jellies archive after a quiet week
 jelly rm plan

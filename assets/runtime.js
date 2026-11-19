@@ -8,6 +8,10 @@
 //   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
 //   jelly.onAttend(fn)          fn(item) when the dock opens a question; returns unsubscribe
 //   jelly.itemsAt("#thumbs")    questions asked about that element; .answer.option is the pick
+//   jelly.viewer                this browser's name, "" if unset; assign to rename (kept per browser)
+//   jelly.by                    what this browser writes as: "person", or "person:<name>" once named
+//   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
+//   jelly.isPerson(by)          true for "person" and "person:<name>"
 //
 // Comments anywhere: hold Option (Alt) and click any element, or press the
 // Comment button, to pin a comment to it. The agent gets a `comment` event that
@@ -73,13 +77,21 @@
     return { selector: selectorFor(el), text: text.trim().replace(/\s+/g, " ").slice(0, 80) };
   }
 
+  // A person may name themselves, so two people on one jelly can tell who did
+  // what. The name is per browser (every jelly shares this origin) and read on
+  // each write, so renaming on the jelly page applies to open jellies at once.
+  const viewer = () => { try { return localStorage.getItem("jelly.viewer") || ""; } catch { return ""; } };
+  const me = () => (viewer() ? `person:${viewer()}` : "person");
+  const isPerson = (by) => by === "person" || String(by).startsWith("person:");
+  const who = (by) => (by === me() ? "you" : isPerson(by) ? by.slice(7) || "someone" : by);
+
   async function post(path, body) {
     // Nobody is at an agent render, so nothing it does may be recorded as the person.
     if (agentMode) throw new Error("jelly see only looks; this change was not made");
     const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, by: "person" }),
+      body: JSON.stringify({ ...body, by: me() }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.statusText);
@@ -120,6 +132,14 @@
   window.jelly = {
     name: boot.name,
     about: boot.about,
+    get viewer() { return viewer(); },
+    set viewer(name) {
+      name = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+      try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
+    },
+    get by() { return me(); },
+    who,
+    isPerson,
     get state() { return state; },
     /** Every event from every jelly. Returns a function that stops listening. */
     events(fn) { listeners.add(fn); return () => listeners.delete(fn); },
@@ -261,8 +281,6 @@
   const lastAt = (f) => Math.max(f.at_ms, ...(f.replies || []).map((r) => r.at_ms));
   // Open threads, plus resolved ones from the last day so the person sees the answer.
   const visible = () => comments.filter((f) => !f.resolved || Date.now() - lastAt(f) < DAY);
-  const who = (by) => (by === "person" ? "you" : by);
-
   function thread(f, x, y) {
     const msgs = [{ by: f.by, text: f.text, at_ms: f.at_ms }, ...(f.replies || [])];
     const p = openPop(x, y, `<div class="jf-on"></div><div class="jf-thread"></div>
@@ -272,7 +290,7 @@
     const t = p.querySelector(".jf-thread");
     for (const m of msgs) {
       const d = document.createElement("div");
-      d.className = "jf-msg" + (m.by === "person" ? "" : " agent");
+      d.className = "jf-msg" + (isPerson(m.by) ? "" : " agent");
       d.innerHTML = '<div class="jf-by"></div><div class="jf-text"></div>';
       d.querySelector(".jf-by").textContent = who(m.by);
       d.querySelector(".jf-text").textContent = m.text;
@@ -302,7 +320,7 @@
       const last = f.replies?.at(-1);
       const pin = document.createElement("div");
       // Amber: waiting on the agent. Teal: the agent answered. Faded: resolved.
-      pin.className = "jf-marker" + (last && last.by !== "person" ? " agent" : "") + (f.resolved ? " done" : "");
+      pin.className = "jf-marker" + (last && !isPerson(last.by) ? " agent" : "") + (f.resolved ? " done" : "");
       pin.textContent = f.resolved ? "✓" : i + 1;
       pin.title = last ? `${who(last.by)}: ${last.text}` : f.text;
       // In the margin left of the element, pointing at it.

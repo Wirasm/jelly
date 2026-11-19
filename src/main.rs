@@ -2,6 +2,7 @@
 
 mod design;
 mod disk;
+mod recipes;
 mod server;
 mod store;
 mod startup;
@@ -53,14 +54,19 @@ enum Cmd {
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
     New {
         name: String,
-        /// Start from a folder with view.html, verbs.js, state.json and assets/:
-        /// a recipe, or what `jelly pull` wrote. --view, --verbs and --state
-        /// replace the folder's own.
-        #[arg(long)]
+        /// Start from a folder with view.html, verbs.js, state.json and assets/,
+        /// such as what `jelly pull` or `jelly recipes NAME --out` wrote.
+        /// --view, --verbs and --state replace the folder's own.
+        #[arg(long, conflicts_with = "recipe")]
         from: Option<PathBuf>,
-        #[arg(long, required_unless_present = "from")]
+        /// Start from a built-in recipe (see `jelly recipes`). --view, --verbs and
+        /// --state replace the recipe's own; its example assets come only with
+        /// its example state.
+        #[arg(long)]
+        recipe: Option<String>,
+        #[arg(long, required_unless_present_any = ["from", "recipe"])]
         view: Option<PathBuf>,
-        #[arg(long, required_unless_present = "from")]
+        #[arg(long, required_unless_present_any = ["from", "recipe"])]
         verbs: Option<PathBuf>,
         /// Starting state as a JSON file.
         #[arg(long)]
@@ -71,6 +77,14 @@ enum Cmd {
         /// One line on what this jelly is for, shown above it on the jelly page.
         #[arg(long, default_value = "")]
         about: String,
+    },
+    /// List the built-in recipes: starting points for jellies that are easy to
+    /// get wrong. With a NAME, print its RECIPE.md; with --out, write its files.
+    Recipes {
+        name: Option<String>,
+        /// Write the recipe's files into this folder to edit, then `jelly new NAME --from DIR`.
+        #[arg(long, requires = "name")]
+        out: Option<PathBuf>,
     },
     /// Call a verb, exactly as a button in the view would.
     Call {
@@ -205,6 +219,12 @@ enum Cmd {
         /// Screenshot the whole page, not just the first screen (implies --png).
         #[arg(long)]
         full: bool,
+        /// Print only what needs fixing: errors the page threw and `!` warnings.
+        #[arg(long)]
+        problems: bool,
+        /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
+        #[arg(long)]
+        poster: bool,
     },
     /// Use a jelly as the person would, without changing it: do the steps in
     /// order, then print what is on screen, the verbs that ran and what they
@@ -298,12 +318,15 @@ enum Cmd {
         name: String,
         #[arg(required = true)]
         files: Vec<PathBuf>,
+        /// Remove these assets (by name) instead of adding files.
+        #[arg(long)]
+        rm: bool,
     },
     /// Write a read-only snapshot of a jelly as one HTML file you can send
     /// anyone: state baked in, assets inlined.
     Share {
         name: String,
-        /// Where to write it (default: ./<name>.html).
+        /// Where to write it (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -449,7 +472,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. }) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. }) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -507,28 +530,59 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::New { name, from, view, verbs, state, replace, about } => {
+        Cmd::New { name, from, recipe, view, verbs, state, replace, about } => {
+            let recipe = recipe.map(|r| recipes::get(&r)).transpose()?;
             sync_design(&cli.url, &project());
             let in_from = |file: &str| from.as_ref().map(|d| d.join(file));
-            let view = view.or_else(|| in_from("view.html")).ok_or("give --view or --from")?;
-            let verbs = verbs.or_else(|| in_from("verbs.js")).ok_or("give --verbs or --from")?;
-            let state: Value = match state.or_else(|| in_from("state.json").filter(|p| p.exists())) {
-                Some(p) => serde_json::from_str(&read(&p)?).map_err(|e| format!("{}: {e}", p.display()))?,
+            // A flag wins, then the folder, then the recipe. Only state.json is optional.
+            let text = |flag: Option<PathBuf>, file: &str| -> Result<Option<String>, String> {
+                match flag.or_else(|| in_from(file).filter(|p| file != "state.json" || p.exists())) {
+                    Some(p) => read(&p).map(Some),
+                    None => Ok(recipe.and_then(|r| r.text(file)).map(String::from)),
+                }
+            };
+            let view = text(view, "view.html")?.ok_or("give --view, --from or --recipe")?;
+            let verbs = text(verbs, "verbs.js")?.ok_or("give --verbs, --from or --recipe")?;
+            // A recipe's assets belong to its example state: the review recipe's
+            // full.diff would otherwise show beside your own review.
+            let recipe_assets = recipe.filter(|_| state.is_none()).into_iter().flat_map(|r| r.assets());
+            let state: Value = match text(state, "state.json")? {
+                Some(s) => serde_json::from_str(&s).map_err(|e| format!("state is not JSON: {e}"))?,
                 None => json!({}),
             };
-            let body = json!({"name": name, "view": read(&view)?, "verbs": read(&verbs)?, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
+            let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
             let ev = send("POST", &api(""), body)?;
-            // The folder's assets come along, as `jelly asset` would add them.
+            // The folder's or recipe's assets come along, as `jelly asset` would add them.
             let made = ev["jelly"].as_str().unwrap_or(&name).to_string();
+            let jelly = api(&format!("/{made}"));
             let mut assets: Vec<PathBuf> = in_from("assets").and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten()
                 .map(|f| f.path()).filter(|p| p.is_file()).collect();
             assets.sort();
-            let added = add_assets(&api(&format!("/{made}")), &assets, &by)?;
+            let mut added = add_assets(&jelly, &assets, &by)?;
+            for (file, bytes) in recipe_assets {
+                added.push(upload_asset(&jelly, file, bytes, &by)?);
+            }
             report(ev)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
             }
             Ok(())
+        }
+        Cmd::Recipes { name: None, .. } => {
+            for r in recipes::RECIPES {
+                output(format_args!("{:<9} {}\n", r.name, r.use_when()))?;
+            }
+            output(format_args!("\nRead one: jelly recipes plan. Make a jelly from it: jelly new NAME --recipe plan.\n"))
+        }
+        Cmd::Recipes { name: Some(name), out: None } => {
+            output(format_args!("{}", recipes::get(&name)?.text("RECIPE.md").unwrap_or("")))
+        }
+        Cmd::Recipes { name: Some(name), out: Some(dir) } => {
+            let r = recipes::get(&name)?;
+            r.write(&dir)?;
+            let files: Vec<&str> = r.files.iter().map(|(p, _)| *p).filter(|p| !p.starts_with("assets/")).collect();
+            output(format_args!("{}/  {}  assets/ ({})\nEdit, then: jelly new {name} --from {}\n",
+                dir.display(), files.join("  "), r.assets().count(), dir.display()))
         }
         Cmd::Call { name, verb, args } => {
             let args = json_arg(&args, "args")?;
@@ -632,7 +686,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let round = &r["state"]["round"];
             let since = format!("seq:{}", r["seq"]);
             if json {
-                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json: the answers arrive as answer events")}));
+                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json")}));
             }
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
@@ -730,14 +784,37 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
-        Cmd::See { name, width, png, full } => {
+        Cmd::See { name, width, png, full, problems, poster } => {
             let mut q = vec![];
             if let Some(w) = width { q.push(format!("width={w}")); }
-            if png || full { q.push("png=true".into()); }
+            if png || full || poster { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
             let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
-            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
-            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))?;
+            // A jelly that changes while it renders (a live log, a monitor) answers 409;
+            // a fresh render usually lands between changes.
+            let mut tries = 0;
+            let resp = loop {
+                match ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call() {
+                    Err(ureq::Error::Status(409, _)) if tries < 2 => tries += 1,
+                    other => break other.map_err(describe)?,
+                }
+            };
+            let text = resp.into_string().map_err(|e| e.to_string())?;
+            if poster {
+                let shot = text.lines().find_map(|l| l.strip_prefix("png ")).map(str::trim)
+                    .ok_or("no screenshot to use as the poster; see the `!` lines")?;
+                let bytes = std::fs::read(shot).map_err(|e| format!("{shot}: {e}"))?;
+                ureq::post(&api(&format!("/{}/assets/poster.png?by={}", id(&name)?, encode(&by))))
+                    .set("content-type", "application/octet-stream")
+                    .send_bytes(&bytes)
+                    .map_err(describe)?;
+            }
+            if problems {
+                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
+                output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
+            } else {
+                output(format_args!("{text}"))?;
+            }
             Ok(())
         }
         Cmd::Try { name, width, png, steps, .. } => {
@@ -818,7 +895,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name)?)), json!({"by": by}))?),
         Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name)?)), json!({"by": by}))?),
-        Cmd::Asset { name, files } => {
+        Cmd::Asset { name, files, rm: true } => {
+            for f in files {
+                let file = f.to_string_lossy();
+                ureq::delete(&api(&format!("/{}/assets/{}?by={}", id(&name)?, encode(&file), encode(&by)))).call().map_err(describe)?;
+                output(format_args!("removed assets/{file}\n"))?;
+            }
+            Ok(())
+        }
+        Cmd::Asset { name, files, rm: false } => {
             let added = add_assets(&api(&format!("/{}", id(&name)?)), &files, &by)?;
             for line in added {
                 output(format_args!("{line}\n"))?;
@@ -831,7 +916,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);
-            let out = out.unwrap_or_else(|| PathBuf::from(format!("{short}.html")));
+            let out = match out {
+                Some(out) => out,
+                None => {
+                    let dir = std::env::temp_dir().join("jelly-share");
+                    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                    dir.join(format!("{short}.html"))
+                }
+            };
             std::fs::write(&out, &html).map_err(|e| format!("{}: {e}", out.display()))?;
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
@@ -1086,7 +1178,7 @@ fn ask_line(jelly: &str, round: &Value, questions: usize, since: &str) -> String
 /// One comment and its thread, for an agent's to-do list.
 fn comment_line(jelly: &str, c: &store::Comment) -> String {
     let thread = c.replies.last().map(|last| format!(" · {} repl{}, last by {}: {:?}", c.replies.len(), if c.replies.len() == 1 { "y" } else { "ies" }, last.by, last.text)).unwrap_or_default();
-    format!("{jelly}  {} on {}: {:?}{thread}{}", c.id, c.anchor["selector"].as_str().unwrap_or("the page"), c.text, if c.resolved { " (resolved)" } else { "" })
+    format!("{jelly}  {} on {}{}: {:?}{thread}{}", c.id, c.anchor["selector"].as_str().unwrap_or("the page"), store::named(&c.by), c.text, if c.resolved { " (resolved)" } else { "" })
 }
 
 /// The change that ended `jelly wait`, in one line.
@@ -1142,17 +1234,19 @@ fn read(p: &PathBuf) -> Result<String, String> {
 
 /// Adds files beside a jelly; `jelly` is its API address.
 fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<Vec<String>, String> {
-    let mut added = Vec::new();
-    for f in files {
-        let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?.to_string();
+    files.iter().map(|f| {
+        let file = f.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{}: not a file name", f.display()))?;
         let bytes = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
-        ureq::post(&format!("{jelly}/assets/{}?by={}", encode(&file), encode(by)))
-            .set("content-type", "application/octet-stream")
-            .send_bytes(&bytes)
-            .map_err(describe)?;
-        added.push(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)));
-    }
-    Ok(added)
+        upload_asset(jelly, file, &bytes, by)
+    }).collect()
+}
+
+fn upload_asset(jelly: &str, file: &str, bytes: &[u8], by: &str) -> Result<String, String> {
+    ureq::post(&format!("{jelly}/assets/{}?by={}", encode(file), encode(by)))
+        .set("content-type", "application/octet-stream")
+        .send_bytes(bytes)
+        .map_err(describe)?;
+    Ok(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)))
 }
 
 fn get(url: &str) -> Result<Value, String> {
@@ -1275,6 +1369,14 @@ mod tests {
         let ev: crate::store::Event = serde_json::from_value(json!({"seq": 9, "at_ms": 1, "jelly": "p:x", "kind": "answer", "by": "person", "version": 4, "view_rev": 1,
             "args": {"id": "a1", "title": "Which order?", "option": "b", "text": "keep it"}, "state": {"big": "state"}})).unwrap();
         assert_eq!(wait_line(&ev), "p:x v4: person answered a1 \"Which order?\" → b: \"keep it\"");
+    }
+
+    #[test]
+    fn comments_name_a_person_who_named_themselves() {
+        let comment = |by: &str| serde_json::from_value::<crate::store::Comment>(json!({"id": "c1", "anchor": {"selector": "#a"}, "text": "bigger",
+            "by": by, "at_ms": 1, "resolved": false})).unwrap();
+        assert_eq!(super::comment_line("p:x", &comment("person:ana")), r#"p:x  c1 on #a by ana: "bigger""#);
+        assert_eq!(super::comment_line("p:x", &comment("person")), r#"p:x  c1 on #a: "bigger""#);
     }
 
     fn inbox_response(body: &str) -> (String, std::thread::JoinHandle<std::net::TcpListener>) {
