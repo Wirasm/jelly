@@ -70,6 +70,8 @@ jelly see plan               # the page as text, its verbs and state, errors, wh
 jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
 jelly see plan --width 390   # phone width
 jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
+jelly see plan --compare v12 # what changed since v12: outline, problems new or fixed, one before/after png
+jelly see plan --save before # keep this version by name; later: jelly see plan --compare before
 jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it, change nothing
 jelly focus plan             # open it full size on their screen; `jelly focus` closes it
 ```
@@ -84,6 +86,11 @@ text or one width. `look` and `see` only look: nothing in their renders is recor
 To check that buttons and fields work, use `jelly try`, not a browser
 driver: it does the steps in order, then prints the page, errors, and each verb
 that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
+After you change a jelly, check what the change did with `--compare` against the
+version you started from (`v` and the number `see` printed). It lists the outline
+lines added, removed or changed, marks problems your change made as `new:`, and
+says which it `fixed`. Earlier versions come from the undo history, which ends at
+the last undo; `--save NAME` keeps one for longer.
 `jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly
 page's thumbnail; pick a moment that tells the story on its own.
 
