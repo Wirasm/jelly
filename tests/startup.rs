@@ -386,6 +386,14 @@ fn daemon_survives_hangup_of_originating_shell() {
         .args(base.get_args())
         .current_dir(s.0.path())
         .process_group(0);
+    // Under nohup (and some CI or agent shells) SIGHUP is ignored, and an ignored
+    // signal stays ignored in the shell, so the hangup below would not end it.
+    unsafe {
+        shell.pre_exec(|| {
+            libc::signal(libc::SIGHUP, libc::SIG_DFL);
+            Ok(())
+        });
+    }
     for (key, value) in base.get_envs() {
         if let Some(value) = value {
             shell.env(key, value);
