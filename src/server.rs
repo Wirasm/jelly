@@ -214,6 +214,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/assets", get(list_assets))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).delete(remove_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share).post(share_live).delete(unshare_live))
+        .route("/api/jellies/{name}/share/pin", post(pin_live).delete(unpin_live))
         .route("/api/inbox", get(inbox).post(read_inbox))
         .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
@@ -955,7 +956,29 @@ struct UnshareQ {
 }
 
 async fn unshare_live(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<UnshareQ>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(share::unshare(&app, &name, q.to.as_deref().map(str::trim)).await?))
+    let stop = q.to.as_deref().map(str::trim).map_or(share::Stop::Share, share::Stop::Link);
+    Ok(Json(share::unshare(&app, &name, stop).await?))
+}
+
+#[derive(Deserialize)]
+struct PinReq {
+    hours: u64,
+    days: u64,
+}
+
+/// A new PIN for a room on the jelly, sharing it first if needed.
+async fn pin_live(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<PinReq>) -> Result<Json<Value>, ApiError> {
+    if !(1..=24).contains(&r.hours) {
+        return Err(Error::Invalid("a PIN lasts 1 to 24 hours".into()).into());
+    }
+    if !(1..=365).contains(&r.days) {
+        return Err(Error::Invalid("a share lasts 1 to 365 days".into()).into());
+    }
+    Ok(Json(share::pin(&app, &name, r.hours, r.days).await?))
+}
+
+async fn unpin_live(State(app): State<Shared>, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(share::unshare(&app, &name, share::Stop::Pin).await?))
 }
 
 #[derive(Deserialize)]

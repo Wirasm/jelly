@@ -6,8 +6,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": true,
-  // One Durable Object per shared jelly, with SQLite storage (on the free plan too).
-  "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "Live" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Live"] }]
+  // One Durable Object per shared jelly (Live), and one for every PIN on the
+  // relay (Pins), with SQLite storage (on the free plan too).
+  "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "Live" }, { "name": "PINS", "class_name": "Pins" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Live"] }, { "tag": "v2", "new_sqlite_classes": ["Pins"] }]
   // RELAY_SECRET is a secret: `npx wrangler secret put RELAY_SECRET`. Only its holder can publish.
 }

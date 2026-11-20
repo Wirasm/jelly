@@ -32,7 +32,9 @@ prose, and whenever you need them to choose.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
   state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file, or live through your own relay
   (`relay/`): `jelly share plan --to ana@example.com` gives Ana a link she can use
-  from her phone, and you hear her in `jelly inbox`.
+  from her phone, and you hear her in `jelly inbox`. For a room on a call,
+  `jelly share quiz --pin` prints a 6-digit PIN: each person types it with
+  their email at the relay's `/pin` page and joins as that email.
 
 ```bash
 jelly ls                                         # this project's jellies; starts the daemon on first use

@@ -364,6 +364,13 @@ enum Cmd {
     /// `--link` prints a view-only link: anyone with it watches the jelly change
     /// live, but cannot change it.
     ///
+    /// `--pin` is for a room on a call: it prints a 6-digit PIN and the relay's
+    /// join page. Each person opens the page and types the PIN with their email,
+    /// and gets their own link, as with `--to`: you hear them as
+    /// person:<email>, and `jelly unshare NAME --to <email>` stops them. The PIN
+    /// works a few hours (`--hours`) and locks after a few wrong tries; running
+    /// `--pin` again makes a new one and the old one stops.
+    ///
     /// While a jelly is shared, the relay holds the live copy: it keeps working
     /// while this machine sleeps, and your changes (call, set, reshape, ask,
     /// withdraw, reply) go there. Undo, move, rm and a new ask round wait until
@@ -371,28 +378,39 @@ enum Cmd {
     Share {
         name: String,
         /// Where to write the file (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
-        #[arg(long, conflicts_with_all = ["link", "to"])]
+        #[arg(long, conflicts_with_all = ["link", "to", "pin"])]
         out: Option<PathBuf>,
         /// A view-only live link.
-        #[arg(long, conflicts_with = "to")]
+        #[arg(long, conflicts_with_all = ["to", "pin"])]
         link: bool,
         /// A live link for this person, who can use the jelly through it.
-        #[arg(long, value_name = "EMAIL")]
+        #[arg(long, value_name = "EMAIL", conflicts_with = "pin")]
         to: Option<String>,
+        /// A PIN people type with their email to join, for a room on a call.
+        #[arg(long)]
+        pin: bool,
+        /// Hours until the PIN stops letting people join (default 3, at most 24).
+        /// People already in keep their links.
+        #[arg(long, requires = "pin", value_parser = clap::value_parser!(u64).range(1..=24))]
+        hours: Option<u64>,
         /// Days until the share stops working (default 30, at most 365). A share
         /// lasts as long as its longest link.
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=365))]
         days: Option<u64>,
     },
-    /// Stop sharing a jelly. `--to ana@example.com` stops only Ana's link, and
-    /// her open pages close; `--link` stops the view-only link. With neither,
-    /// every link stops and the jelly's final state stays here.
+    /// Stop sharing a jelly. `--to ana@example.com` stops only Ana's links
+    /// (from `--to` or from joining with the PIN), and her open pages close;
+    /// `--link` stops the view-only link; `--pin` ends the PIN, so nobody new
+    /// joins, and everyone in stays. With none, every link stops and the
+    /// jelly's final state stays here.
     Unshare {
         name: String,
-        #[arg(long, value_name = "EMAIL", conflicts_with = "link")]
+        #[arg(long, value_name = "EMAIL", conflicts_with_all = ["link", "pin"])]
         to: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "pin")]
         link: bool,
+        #[arg(long)]
+        pin: bool,
     },
     /// Use the relay you deployed (relay/ in the jelly repo) for share links.
     /// Saves the URL with a new publish secret in $JELLY_HOME/relay.json and
@@ -1042,8 +1060,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Share { name, out, link, to, days } => {
+        Cmd::Share { name, out, link, to, pin, hours, days } => {
             let name = id(&name)?;
+            if pin {
+                let hours = hours.unwrap_or(3);
+                let made = send("POST", &api(&format!("/{name}/share/pin")), json!({"hours": hours, "days": days.unwrap_or(30)}))?;
+                let (code, url) = (made["pin"].as_str().ok_or("the daemon did not say the PIN")?, made["url"].as_str().unwrap_or(""));
+                let s = if hours == 1 { "" } else { "s" };
+                return output(format_args!("PIN {code} at {url}\n  for a room: each person opens that page and types the PIN with their email; you hear them as person:<email>. The PIN lets people join for {hours} hour{s} and locks after {} wrong tries. `jelly unshare {name} --pin` ends it; people already in stay.\n", made["tries"]));
+            }
             if link || to.is_some() {
                 let days = days.unwrap_or(30);
                 let made = send("POST", &api(&format!("/{name}/share")), json!({"to": to, "days": days}))?;
@@ -1056,7 +1081,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 };
             }
             if days.is_some() {
-                return Err("--days is for live links: add --to EMAIL or --link".into());
+                return Err("--days is for live shares: add --to EMAIL, --link or --pin".into());
             }
             let resp = ureq::get(&api(&format!("/{name}/share"))).call().map_err(describe)?;
             let mut html = String::new();
@@ -1074,8 +1099,12 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
         }
-        Cmd::Unshare { name, to, link } => {
+        Cmd::Unshare { name, to, link, pin } => {
             let name = id(&name)?;
+            if pin {
+                send("DELETE", &api(&format!("/{name}/share/pin")), Value::Null)?;
+                return output(format_args!("the PIN for {name} no longer works; people who joined with it stay\n"));
+            }
             let q = match (&to, link) {
                 (Some(who), _) => format!("?to={}", encode(who)),
                 (None, true) => "?to=".into(),
@@ -1083,7 +1112,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             };
             send("DELETE", &api(&format!("/{name}/share{q}")), Value::Null)?;
             match (to, link) {
-                (Some(who), _) => output(format_args!("{who}'s link to {name} no longer works\n")),
+                (Some(who), _) => output(format_args!("{who} can no longer use {name}; their open pages closed\n")),
                 (None, true) => output(format_args!("the view-only link to {name} no longer works\n")),
                 (None, false) => output(format_args!("{name} is no longer shared: every link stopped, and its final state is here\n")),
             }

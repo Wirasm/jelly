@@ -518,6 +518,8 @@ pub enum EventKind {
     Answer,
     Withdraw,
     Set,
+    /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
+    Lock,
 }
 
 impl EventKind {
@@ -550,8 +552,8 @@ pub const PAGE: &str = "page";
 
 impl Event {
     pub fn is_inbox_item(&self, project: &str) -> bool {
-        is_person(&self.by) && self.jelly != PAGE && self.kind.is_for_agent()
-            && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
+        let heard = self.kind == EventKind::Lock || is_person(&self.by) && self.kind.is_for_agent();
+        heard && self.jelly != PAGE && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
     }
 
     /// One line on what happened, for agents: the inbox and `jelly look` both use it.
@@ -588,6 +590,8 @@ impl Event {
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
+            EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join; people already in stay. `jelly share {} --pin` makes a new one",
+                a["tries"], self.jelly),
         }
     }
 }
@@ -2570,6 +2574,16 @@ mod tests {
         // v2 only ever existed on the relay, so it cannot be rebuilt here.
         assert!(s.at_version("p:j", 2).is_err());
         assert_eq!(s.at_version("p:j", 3).unwrap().state, json!({"labels": {"a": 1, "b": 2}}));
+    }
+
+    #[test]
+    fn a_locked_pin_reaches_the_inbox() {
+        let (_d, mut s) = store();
+        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let ev: Mirrored = serde_json::from_value(json!({"seq": 1, "at_ms": now_ms(), "kind": "lock", "by": "relay", "args": {"tries": 10}, "version": 1, "view_rev": 1})).unwrap();
+        s.mirror("p:j", &ev, None).unwrap();
+        let heard: Vec<String> = consume_inbox(&mut s, "p", InboxReader::Named { name: "r".into() }).unwrap().into_iter().map(|e| InboxItem::from(e).text).collect();
+        assert_eq!(heard, ["the PIN locked after 10 wrong tries, so nobody new can join; people already in stay. `jelly share p:j --pin` makes a new one"]);
     }
 
     #[test]

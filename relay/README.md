@@ -29,11 +29,35 @@ again with that URL and set the new secret.
 jelly share plan --to ana@example.com   # Ana's link; again prints the same one
 jelly share plan --to bo@example.com    # Bo gets his own
 jelly share plan --link                 # view only: anyone with it watches, nobody acts
-jelly unshare plan --to bo@example.com  # Bo's link stops; his open page closes
+jelly share quiz --pin                  # a PIN for a room on a call (below)
+jelly unshare quiz --pin                # the PIN stops; people already in stay
+jelly unshare plan --to bo@example.com  # Bo's links stop; his open pages close
 jelly unshare plan                      # every link stops; the final state is at home
 ```
 
 Shares last 30 days (`--days 1..365`). jelly sends no email: pass the link on.
+
+## PIN rooms
+
+Nobody can type a 44-character link off a shared screen. `jelly share quiz
+--pin` prints a 6-digit PIN and `https://<your relay>/pin`. Each person opens
+that page and types the PIN with their email. They land in the jelly on their
+own link, exactly as if you had run `--to` with their email: you hear them as
+`person:<email>`, and `jelly unshare quiz --to <email>` stops them. The same
+email on another device is the same person. Their link keeps working after the
+PIN ends, until the share does.
+
+- A PIN lets people join for 3 hours (`--hours 1..24`). `--pin` again makes a
+  new PIN and the old one stops.
+- 10 wrong PINs, from anyone, lock every PIN live on the relay: a wrong guess
+  is a guess at all of them. That bounds a guesser's chance at 10 in a million
+  per PIN. You hear the lock in `jelly inbox`; run `--pin` again for a new one.
+- One IP gets 5 wrong tries per 10 minutes. That is fewer than 10, so one
+  person or script cannot lock a room alone. Right PINs never count.
+- Expired, ended and locked PINs all answer the same "does not work", and
+  every guess passes the throttle before any lookup.
+- The email is whatever the person types; the PIN proves only that they were
+  told it. Anyone with the PIN can join under any email, someone else's too.
 
 ## How it works
 
@@ -51,7 +75,8 @@ Shares last 30 days (`--days 1..365`). jelly sends no email: pass the link on.
 
 - A link is 44 random characters: the share's id, then a secret of about 131
   bits. The relay stores only a SHA-256 hash of each secret, so its storage
-  never holds a working link.
+  never holds a working link. A PIN is stored as an HMAC keyed with the relay's
+  secret, since a plain hash of 6 digits is reversed in a moment.
 - Only the holder of the publish secret (in `$JELLY_HOME/relay.json`) can
   publish, reshape, mint or revoke. Links can call verbs, answer and comment,
   nothing else; view-only links can do none of that.

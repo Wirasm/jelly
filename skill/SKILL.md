@@ -191,7 +191,9 @@ jelly note plan "Cards move next→doing→done; the person decides."   # for th
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly share plan --to ana@example.com   # a live link for Ana: she uses it from her phone, you hear person:ana@example.com
 jelly share plan --link          # a live view-only link: anyone watches, nobody acts
-jelly unshare plan --to ana@example.com # only Ana's link stops; `jelly unshare plan` stops them all
+jelly share quiz --pin           # a room on a call: a 6-digit PIN and a join page; people type it with their email
+jelly unshare quiz --pin         # nobody new joins; people already in stay
+jelly unshare plan --to ana@example.com # only Ana's links stop (PIN joiners too); `jelly unshare plan` stops them all
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly pin plan                   # keep it; unpinned jellies archive after a quiet week
 jelly rm plan
