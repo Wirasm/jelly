@@ -912,8 +912,12 @@ impl Store {
     }
 
     /// Where a project keeps its DESIGN.md.
-    pub fn project_dir(&self, project: &str) -> PathBuf {
-        self.dir.join("projects").join(project)
+    /// A project's folder. The name is checked first, so a request cannot reach
+    /// outside the home with `..` or a path.
+    pub fn project_dir(&self, project: &str) -> Result<PathBuf, Error> {
+        if project.contains(':') { return Err(Error::Invalid(format!("bad project {project:?}"))); }
+        valid_name(project)?;
+        Ok(self.dir.join("projects").join(project))
     }
 
     pub fn home(&self) -> &Path {
@@ -1564,7 +1568,7 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
 }
 
 /// `name` or `project:name`, each part 1-64 of a-z, 0-9, - and _.
-fn valid_name(name: &str) -> Result<(), Error> {
+pub(crate) fn valid_name(name: &str) -> Result<(), Error> {
     let part = |p: &str| !p.is_empty() && p.len() <= 64 && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
     let ok = match name.split_once(':') {
         Some((project, rest)) => part(project) && part(rest),

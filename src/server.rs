@@ -213,7 +213,39 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
         .route("/api/jellies/{name}/reply", post(reply))
+        .layer(axum::middleware::from_fn(local_only))
         .with_state(app)
+}
+
+/// jelly has no login, so only this machine may use it (#8, #66). A request's
+/// `Host` must be a loopback address, which stops DNS rebinding. A browser's
+/// `Origin`, when it sends one (every WebSocket and cross-site request does), must
+/// be the daemon itself, so another site cannot read events or call verbs. The CLI
+/// sends no `Origin` and passes. Pages may be framed only by the daemon's own pages.
+async fn local_only(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let allowed = {
+        let text = |name| req.headers().get(name).and_then(|v: &axum::http::HeaderValue| v.to_str().ok());
+        same_local_origin(text(header::HOST), text(header::ORIGIN))
+    };
+    if !allowed {
+        return (StatusCode::FORBIDDEN, "jelly accepts requests from this machine only").into_response();
+    }
+    let mut resp = next.run(req).await;
+    resp.headers_mut().insert(header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_static("frame-ancestors 'self'"));
+    resp
+}
+
+fn same_local_origin(host: Option<&str>, origin: Option<&str>) -> bool {
+    let Some(host) = host else { return false };
+    local_authority(host) && origin.is_none_or(|o| o.strip_prefix("http://").is_some_and(|a| a.eq_ignore_ascii_case(host)))
+}
+
+fn local_authority(authority: &str) -> bool {
+    let host = match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+    };
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 #[derive(Debug)]
@@ -1462,7 +1494,7 @@ fn summary(app: &App, j: &crate::store::Jelly) -> String {
         line(&mut out, format!("person   {} {}{}", ago(e.at_ms), viewer(&e.by).map(|n| format!("{n} ")).unwrap_or_default(), e.describe()));
     }
     let project = j.project();
-    if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).join("DESIGN.md").exists() {
+    if !project.is_empty() && app.store.lock().expect("store lock").project_dir(project).is_ok_and(|d| d.join("DESIGN.md").exists()) {
         line(&mut out, format!("design   project {project} has a DESIGN.md: jelly design · CSS variables at /p/{project}/design.css"));
     }
     out
@@ -2189,14 +2221,14 @@ fn shape(v: &Value) -> String {
 // ---- DESIGN.md per project --------------------------------------------------
 
 async fn put_design(State(app): State<Shared>, Path(project): Path<String>, body: String) -> Result<StatusCode, ApiError> {
-    let dir = app.store.lock().expect("store lock").project_dir(&project);
+    let dir = app.store.lock().expect("store lock").project_dir(&project)?;
     std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join("DESIGN.md"), body)).map_err(|e| Error::Invalid(format!("could not save DESIGN.md: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_design(State(app): State<Shared>, Path(project): Path<String>) -> Response {
-    let path = app.store.lock().expect("store lock").project_dir(&project).join("DESIGN.md");
-    match std::fs::read_to_string(path) {
+    let Ok(dir) = app.store.lock().expect("store lock").project_dir(&project) else { return StatusCode::NOT_FOUND.into_response() };
+    match std::fs::read_to_string(dir.join("DESIGN.md")) {
         Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, format!("project {project} has no DESIGN.md")).into_response(),
     }
@@ -2205,8 +2237,8 @@ async fn get_design(State(app): State<Shared>, Path(project): Path<String>) -> R
 /// The DESIGN.md tokens as CSS variables: `--color-primary`, `--rounded-md`,
 /// `--spacing-sm`, `--typography-h1-font-size`, …
 async fn design_css(State(app): State<Shared>, Path(project): Path<String>) -> Response {
-    let path = app.store.lock().expect("store lock").project_dir(&project).join("DESIGN.md");
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let Ok(dir) = app.store.lock().expect("store lock").project_dir(&project) else { return StatusCode::NOT_FOUND.into_response() };
+    let text = std::fs::read_to_string(dir.join("DESIGN.md")).unwrap_or_default();
     let css = format!(":root {{\n{}}}\n", crate::design::css_vars(&text));
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], css).into_response()
 }
@@ -2221,13 +2253,15 @@ struct FrameQ {
     dark: Option<String>,
 }
 
-async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Html<String> {
+async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Result<Html<String>, ApiError> {
+    // The name goes into the page, so only a valid jelly name may (#66).
+    crate::store::valid_name(&name)?;
     // Scaled up to fill the 500px window, so the screenshot is the phone layout and nothing else.
     let k = 500.0 / q.w.max(1) as f64;
     // Only a URL-safe token passes through, so it cannot break out of the attribute.
     let trial = q.trial.filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).map(|t| format!("&try={t}")).unwrap_or_default()
         + if q.dark.is_some() { "&dark=1" } else { "" };
-    Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1{trial}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h))
+    Ok(Html(format!("<!doctype html><body style=\"margin:0;overflow:hidden\"><iframe src=\"/j/{name}/?agent=1{trial}\" style=\"display:block;border:0;width:{w}px;height:{h}px;background:#fff;transform:scale({k});transform-origin:0 0\"></iframe></body>", w = q.w, h = q.h)))
 }
 
 #[derive(Deserialize)]
