@@ -9,13 +9,21 @@
 // only SHA-256(secret) with whose it is ("ana@example.com", or "" for the
 // view-only link), so its storage never holds a working link. Only the holder of
 // RELAY_SECRET, the owner's daemon, can publish, reshape, mint or revoke links.
+//
+// A PIN room: the owner makes a 6-digit PIN for a share, and anyone who types
+// it at /pin with their email gets their own link, like one minted with `--to`.
+// One Pins object per relay maps PINs to shares. It stores only
+// HMAC(RELAY_SECRET, PIN), throttles wrong tries per IP, and locks PINs after a
+// few wrong tries.
 
 import { DurableObject } from "cloudflare:workers";
 import { engine, run, Refusal } from "./verbs";
 import { shell } from "./shell";
+import { joinPage } from "./join";
 
 interface Env {
   LIVE: DurableObjectNamespace<Live>;
+  PINS: DurableObjectNamespace<Pins>;
   RELAY_SECRET: string;
 }
 
@@ -37,6 +45,14 @@ const PERSON_OPS = ["call", "comment", "reply", "resolve", "answer"];
 /** SQLite rows hold at most 2 MB, so assets are kept in parts. */
 const PART = 1 << 20;
 const MAX_DAYS = 365;
+const MAX_HOURS = 24;
+/** Wrong tries, by anyone, before every live PIN locks. With one PIN live, a
+ *  guesser gets in before the lock with a chance of 10 in a million. */
+const PIN_TRIES = 10;
+/** Wrong tries from one IP per window. Fewer than PIN_TRIES, so one person or
+ *  one script cannot lock a room alone. Right PINs never count. */
+const IP_TRIES = 5;
+const IP_WINDOW = 10 * 60_000;
 
 const HEADERS = {
   "Referrer-Policy": "no-referrer",
@@ -54,9 +70,25 @@ const notFound = () =>
     { status: 404, headers: { "Content-Type": "text/html; charset=utf-8", ...HEADERS } },
   );
 
+const hex = (d: ArrayBuffer) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
 async function sha256(s: string): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+}
+
+/** A uniformly random integer below `n`. */
+function below(n: number): number {
+  const top = Math.floor(2 ** 32 / n) * n;
+  for (;;) {
+    const [x] = crypto.getRandomValues(new Uint32Array(1));
+    if (x < top) return x % n;
+  }
+}
+
+/** A link secret like the daemon's (`relay::token`): `len` of [A-Za-z0-9]. */
+function token(len: number): string {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: len }, () => abc[below(62)]).join("");
 }
 
 // Constant-time compare of the bearer secret.
@@ -209,6 +241,9 @@ export class Live extends DurableObject<Env> {
         comment(op.id).resolved = true;
         args = op.id;
         break;
+      case "lock":
+        args = { tries: op.tries };
+        break;
       default:
         throw new Refusal(`no such change: ${op.op}`);
     }
@@ -245,6 +280,7 @@ export class Live extends DurableObject<Env> {
   /** Ends the share: everyone's socket closes and the storage is gone. */
   private async end(code: number, reason: string) {
     for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
+    await this.env.PINS.getByName("pins").drop(this.share);
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     this.doc = undefined;
@@ -253,6 +289,36 @@ export class Live extends DurableObject<Env> {
 
   async alarm() {
     await this.end(4404, "expired");
+  }
+
+  /** Lets the holder of a link in as `who`. Both `--to` and the PIN mint through here. */
+  private admit(hash: string, who: string, canAct: boolean) {
+    this.ctx.storage.sql.exec("INSERT INTO people (hash, who, can_act) VALUES (?, ?, ?) ON CONFLICT(hash) DO UPDATE SET who = excluded.who, can_act = excluded.can_act",
+      hash, who, canAct ? 1 : 0);
+  }
+
+  /** Makes the share last at least `days` from now; returns when it expires. */
+  private async extend(days: number): Promise<number> {
+    const until = Date.now() + Math.min(Math.max(days, 1), MAX_DAYS) * 86_400_000;
+    const current = await this.ctx.storage.getAlarm();
+    if (!current || current < until) await this.ctx.storage.setAlarm(until);
+    return Math.max(current ?? 0, until);
+  }
+
+  /** Someone typed this share's PIN with their email: their own link, returned
+   *  as its secret. The same email again (another device) is the same person
+   *  with one more link; revoking that person stops them all. */
+  async join(email: string): Promise<string | null> {
+    const secret = token(22);
+    const hash = await sha256(secret);
+    if (!this.doc) return null;
+    this.admit(hash, email, true);
+    return secret;
+  }
+
+  /** The PIN locked: an event, so the owner hears it in the inbox. */
+  async locked(tries: number) {
+    try { await this.change({ op: "lock", tries }, "relay"); } catch { /* unshared meanwhile */ }
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -335,18 +401,27 @@ export class Live extends DurableObject<Env> {
       if (path === "people" && req.method === "POST") {
         const p = await json<{ secret: string; who: string; can_act: boolean; days: number }>();
         if (!/^[A-Za-z0-9]{22}$/.test(p.secret)) return text("bad secret\n", 400);
-        sql.exec("INSERT INTO people (hash, who, can_act) VALUES (?, ?, ?) ON CONFLICT(hash) DO UPDATE SET who = excluded.who, can_act = excluded.can_act",
-          await sha256(p.secret), p.who, p.can_act ? 1 : 0);
+        this.admit(await sha256(p.secret), p.who, p.can_act);
         // A share lasts as long as its longest link.
-        const until = Date.now() + Math.min(Math.max(p.days, 1), MAX_DAYS) * 86_400_000;
-        const current = await this.ctx.storage.getAlarm();
-        if (!current || current < until) await this.ctx.storage.setAlarm(until);
-        return Response.json({ expires_at: Math.max(current ?? 0, until) });
+        return Response.json({ expires_at: await this.extend(p.days) });
       }
       if (path === "people" && req.method === "DELETE") {
         const who = url.searchParams.get("who") ?? "";
-        sql.exec("DELETE FROM people WHERE who = ?", who);
+        // Every link of `who`'s: minted with --to, or made by joining with the PIN.
+        if (!sql.exec("DELETE FROM people WHERE who = ?", who).rowsWritten) {
+          throw new Refusal(`${this.doc.name} has no ${who ? `link for ${who}` : "view-only link"}`);
+        }
         for (const ws of this.ctx.getWebSockets(`p:${who}`)) ws.close(4403, "revoked");
+        return new Response(null, { status: 204 });
+      }
+      if (path === "pin" && req.method === "POST") {
+        const p = await json<{ hours: number; days: number }>();
+        const share_expires_at = await this.extend(p.days);
+        const made = await this.env.PINS.getByName("pins").make(share, Math.min(Math.max(p.hours, 1), MAX_HOURS));
+        return Response.json({ ...made, tries: PIN_TRIES, share_expires_at });
+      }
+      if (path === "pin" && req.method === "DELETE") {
+        if (!(await this.env.PINS.getByName("pins").drop(share))) throw new Refusal(`${this.doc.name} has no PIN`);
         return new Response(null, { status: 204 });
       }
       if (path === "op" && req.method === "POST") {
@@ -385,6 +460,92 @@ export class Live extends DurableObject<Env> {
   }
 }
 
+/** Every live PIN on this relay, and the wrong tries against them. One object,
+ *  so every guess passes the same throttle before any lookup. */
+export class Pins extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pins (hash TEXT PRIMARY KEY, share TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS misses (ip TEXT NOT NULL, at_ms INTEGER NOT NULL);`);
+  }
+
+  /** A plain hash of a 6-digit PIN is reversed in a moment, so it is keyed with the relay's secret. */
+  private async hash(pin: string): Promise<string> {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", enc.encode(this.env.RELAY_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return hex(await crypto.subtle.sign("HMAC", key, enc.encode(pin)));
+  }
+
+  private prune(now: number) {
+    this.ctx.storage.sql.exec("DELETE FROM pins WHERE expires_at <= ?", now);
+    this.ctx.storage.sql.exec("DELETE FROM misses WHERE at_ms <= ?", now - IP_WINDOW);
+  }
+
+  /** A new PIN for `share`; its previous one stops. */
+  async make(share: string, hours: number): Promise<{ pin: string; expires_at: number }> {
+    const sql = this.ctx.storage.sql;
+    for (;;) {
+      const pin = String(below(1_000_000)).padStart(6, "0");
+      const hash = await this.hash(pin);
+      const now = Date.now();
+      this.prune(now);
+      if (sql.exec("SELECT 1 FROM pins WHERE hash = ?", hash).toArray().length) continue;
+      const expires_at = now + hours * 3_600_000;
+      sql.exec("DELETE FROM pins WHERE share = ?", share);
+      sql.exec("INSERT INTO pins (hash, share, expires_at, misses) VALUES (?, ?, ?, 0)", hash, share, expires_at);
+      return { pin, expires_at };
+    }
+  }
+
+  /** Ends `share`'s PIN; false when it had none. */
+  async drop(share: string): Promise<boolean> {
+    this.prune(Date.now());
+    return this.ctx.storage.sql.exec("DELETE FROM pins WHERE share = ?", share).rowsWritten > 0;
+  }
+
+  /** The share a PIN opens. A wrong PIN counts against the IP and against every
+   *  live PIN, since a guess is a guess at all of them; a PIN that reaches
+   *  PIN_TRIES is gone. Expired, ended and locked PINs are all just wrong. */
+  async open(pin: string, ip: string): Promise<{ share: string } | { wait: number } | { wrong: true }> {
+    const hash = await this.hash(pin);
+    const sql = this.ctx.storage.sql;
+    const now = Date.now();
+    this.prune(now);
+    const tried = sql.exec<{ n: number; first: number | null }>("SELECT COUNT(*) AS n, MIN(at_ms) AS first FROM misses WHERE ip = ?", ip).one();
+    if (tried.n >= IP_TRIES) return { wait: Math.max(1, Math.ceil((tried.first! + IP_WINDOW - now) / 60_000)) };
+    const row = sql.exec<{ share: string }>("SELECT share FROM pins WHERE hash = ?", hash).toArray()[0];
+    if (row) return { share: row.share };
+    sql.exec("INSERT INTO misses (ip, at_ms) VALUES (?, ?)", ip, now);
+    sql.exec("UPDATE pins SET misses = misses + 1");
+    const locked = sql.exec<{ share: string }>("DELETE FROM pins WHERE misses >= ? RETURNING share", PIN_TRIES).toArray();
+    for (const { share } of locked) await this.env.LIVE.getByName(share).locked(PIN_TRIES);
+    return { wrong: true };
+  }
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** POST /pin: a PIN and an email in, that person's own link out. */
+async function enter(req: Request, env: Env): Promise<Response> {
+  const no = (error: string, status: number) => Response.json({ error }, { status, headers: HEADERS });
+  // JSON only: a page on another site cannot send it without a preflight, which this relay never allows.
+  if (!req.headers.get("Content-Type")?.startsWith("application/json")) return no("expected JSON", 415);
+  const body: { pin?: unknown; email?: unknown } = await req.json<object>().catch(() => ({}));
+  const pin = String(body.pin ?? "").replace(/\s/g, "");
+  const email = String(body.email ?? "").trim().toLowerCase();
+  // Checked before the PIN is looked up, so these answers say nothing about it.
+  if (!/^\d{6}$/.test(pin)) return no("A PIN is 6 digits.", 400);
+  if (email.length > 254 || !EMAIL.test(email)) return no("Type your email, like ana@example.com.", 400);
+  const wrong = () => no("That PIN does not work. Check it with whoever gave it to you.", 403);
+  const found = await env.PINS.getByName("pins").open(pin, req.headers.get("CF-Connecting-IP") ?? "unknown");
+  if ("wait" in found) return no(`Too many wrong PINs from here. Try again in ${found.wait} minute${found.wait === 1 ? "" : "s"}.`, 429);
+  if ("wrong" in found) return wrong();
+  const secret = await env.LIVE.getByName(found.share).join(email);
+  return secret ? Response.json({ link: `/j/${found.share}${secret}` }, { headers: HEADERS }) : wrong();
+}
+
+const JOIN_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -392,6 +553,11 @@ export default {
     const live = (share: string, rest: string) => env.LIVE.getByName(share).fetch(new Request(`https://live/${share}/${rest}${url.search}`, req));
 
     if (path === "/robots.txt") return text("User-agent: *\nDisallow: /\n");
+
+    if (path === "/pin" && req.method === "GET") {
+      return new Response(joinPage, { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": JOIN_CSP, ...HEADERS } });
+    }
+    if (path === "/pin" && req.method === "POST") return enter(req, env);
 
     const link = path.match(LINK);
     if (link && req.method === "GET") return live(link[1], `link/${link[2]}${link[3] ?? ""}`);
@@ -405,7 +571,7 @@ export default {
       return live(owner[1], `owner${owner[2] ?? ""}`);
     }
 
-    if (path === "/") return text("A jelly relay. Shared jellies open at /j/<link>.\n");
+    if (path === "/") return text("A jelly relay. Shared jellies open at /j/<link>, or with a PIN at /pin.\n");
     return notFound();
   },
 } satisfies ExportedHandler<Env>;

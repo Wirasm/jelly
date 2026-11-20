@@ -154,10 +154,7 @@ pub(crate) async fn forward(app: &Shared, live: &Live, op: Value) -> Result<Json
 pub(crate) async fn share(app: &Shared, name: &str, who: &str, days: u64) -> Result<Value, ApiError> {
     let relay = home(app).relay()?;
     let _one = app.sharing.lock().await;
-    let live = match app.live(name) {
-        Some(live) => live,
-        None => publish(app, &relay, name).await?,
-    };
+    let live = live_or_publish(app, &relay, name).await?;
     let mut record = live.record.lock().await;
     let secret = match record.links.get(who) {
         Some(s) => s.clone(),
@@ -168,6 +165,26 @@ pub(crate) async fn share(app: &Shared, name: &str, who: &str, days: u64) -> Res
     record.links.insert(who.into(), secret.clone());
     home(app).save(&record)?;
     Ok(json!({"jelly": name, "url": relay.link(&record.share, &secret), "who": who, "expires_at": expires_at}))
+}
+
+/// Makes a new PIN for a room, sharing the jelly first if it is not shared yet.
+/// People type it at the relay's join page with their email and get their own
+/// link, so they act as `person:<email>` exactly as with `--to`.
+pub(crate) async fn pin(app: &Shared, name: &str, hours: u64, days: u64) -> Result<Value, ApiError> {
+    let relay = home(app).relay()?;
+    let _one = app.sharing.lock().await;
+    let live = live_or_publish(app, &relay, name).await?;
+    let share = live.record.lock().await.share.clone();
+    let r = relay.clone();
+    let made = blocking(move || r.pin(&share, hours, days)).await.map_err(api)?;
+    Ok(json!({"jelly": name, "pin": made["pin"], "url": relay.join_page(), "expires_at": made["expires_at"], "tries": made["tries"]}))
+}
+
+async fn live_or_publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, ApiError> {
+    match app.live(name) {
+        Some(live) => Ok(live),
+        None => publish(app, relay, name).await,
+    }
 }
 
 /// Puts the jelly on the relay. Local changes wait for this to finish (they
@@ -220,24 +237,37 @@ pub(crate) async fn remove_asset(app: &Shared, live: &Live, file: &str) -> Resul
     blocking(move || relay.remove_asset(&share, &file)).await.map_err(api)
 }
 
-/// Revokes one link (`who`), or with None ends the share and keeps its last
-/// changes here.
-pub(crate) async fn unshare(app: &Shared, name: &str, who: Option<&str>) -> Result<Value, ApiError> {
+/// What `jelly unshare` stops.
+pub(crate) enum Stop<'a> {
+    /// The whole share; its last changes stay here.
+    Share,
+    /// Every link of this person's ("" is the view-only link), whether minted
+    /// here or made by joining with the PIN, which the relay alone knows about.
+    Link(&'a str),
+    /// The PIN: nobody new can join, and everyone in stays.
+    Pin,
+}
+
+pub(crate) async fn unshare(app: &Shared, name: &str, what: Stop<'_>) -> Result<Value, ApiError> {
     let _one = app.sharing.lock().await;
     let live = app.live(name).ok_or_else(|| Error::Invalid(format!("{name} is not shared")))?;
     let relay = home(app).relay()?;
     let mut record = live.record.lock().await;
     let share = record.share.clone();
-    if let Some(who) = who {
-        if !record.links.contains_key(who) {
-            let what = if who.is_empty() { "view-only link".into() } else { format!("link for {who}") };
-            return Err(Error::Invalid(format!("{name} has no {what}")).into());
+    match what {
+        Stop::Link(who) => {
+            let w = who.to_string();
+            blocking(move || relay.revoke(&share, &w)).await.map_err(api)?;
+            if record.links.remove(who).is_some() {
+                home(app).save(&record)?;
+            }
+            return Ok(json!({"jelly": name, "revoked": who}));
         }
-        let w = who.to_string();
-        blocking(move || relay.revoke(&share, &w)).await.map_err(api)?;
-        record.links.remove(who);
-        home(app).save(&record)?;
-        return Ok(json!({"jelly": name, "revoked": who}));
+        Stop::Pin => {
+            blocking(move || relay.unpin(&share)).await.map_err(api)?;
+            return Ok(json!({"jelly": name, "pin": "ended"}));
+        }
+        Stop::Share => {}
     }
     let since = record.seq;
     let last = match blocking(move || relay.end(&share, since)).await {

@@ -164,7 +164,20 @@ impl Relay {
         resp["expires_at"].as_u64().ok_or_else(|| Fail::Other(format!("{}: unexpected answer {resp}", self.url)))
     }
 
-    /// Stops `who`'s link; their open pages close at once.
+    /// A new PIN for the share, working `hours`; its previous PIN stops. The
+    /// share lasts at least `days`. Returns the PIN, when it expires (ms) and
+    /// how many wrong tries lock it.
+    pub fn pin(&self, share: &str, hours: u64, days: u64) -> Result<Value, Fail> {
+        self.json(self.at("POST", share, "/pin"), Some(&serde_json::json!({"hours": hours, "days": days})))
+    }
+
+    /// Ends the share's PIN; people who joined with it keep their links.
+    pub fn unpin(&self, share: &str) -> Result<(), Fail> {
+        self.json(self.at("DELETE", share, "/pin"), None).map(drop)
+    }
+
+    /// Stops every link of `who`'s, minted with `--to` or made by joining with
+    /// the PIN; their open pages close at once.
     pub fn revoke(&self, share: &str, who: &str) -> Result<(), Fail> {
         self.json(self.at("DELETE", share, &format!("/people?who={}", encode(who))), None).map(drop)
     }
@@ -191,6 +204,11 @@ impl Relay {
 
     pub fn link(&self, share: &str, secret: &str) -> String {
         format!("{}/j/{share}{secret}", self.url)
+    }
+
+    /// Where people type a PIN.
+    pub fn join_page(&self) -> String {
+        format!("{}/pin", self.url)
     }
 }
 

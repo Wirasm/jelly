@@ -4,7 +4,7 @@
 // jelly only through postMessage, which this page turns into the few things a
 // link may do. The view runs the daemon's own runtime.js, sent by the daemon.
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const FAVICON = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="#ff4f8b"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><circle cx="16" cy="24" r="1.9" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.9" fill="#3b0a1e"/></svg>`);
+export const FAVICON = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="#ff4f8b"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><circle cx="16" cy="24" r="1.9" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.9" fill="#3b0a1e"/></svg>`);
 
 /** The link page, titled with the jelly's about line so a pasted link previews as what it is. */
 export const shell = (about: string) => SHELL.replace("<title>jelly</title>", `<title>${esc(about ? `${about} · jelly` : "jelly")}</title>
