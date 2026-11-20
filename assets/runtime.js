@@ -902,6 +902,15 @@
     if (embedded && !commenting && !inPop && !pop?.isConnected) parent.postMessage({ type: "jelly:escape", name: boot.name }, location.origin);
     setMode(false);
   });
+  // The jelly page's letter shortcuts, typed while a jelly has focus. A view keeps a key by
+  // calling preventDefault(); the check waits a tick because this listener runs before the view's.
+  addEventListener("keydown", (e) => {
+    if (!embedded || e.metaKey || e.ctrlKey || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key.length !== 1 || !"acjkp".includes(key)) return;
+    if (e.target.closest?.("input, textarea, select, [contenteditable], .jf-pop") || e.target.isContentEditable || pop?.isConnected) return;
+    setTimeout(() => { if (!e.defaultPrevented) parent.postMessage({ type: "jelly:key", name: boot.name, key }, location.origin); }, 0);
+  });
   addEventListener("mouseover", (e) => {
     if (!(commenting || e.altKey) || isOurs(e.target)) return;
     hovered?.classList.remove("jf-hover");
