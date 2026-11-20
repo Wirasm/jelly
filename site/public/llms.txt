@@ -1,0 +1,7 @@
+# jelly
+
+> jelly lets an AI agent show the person it works for a live page instead of a wall of text: a prototype to click, options side by side, a plan, a dashboard, a question answered in one tap. The person uses it and comments on it, and the agent hears everything they did. It runs on the person's machine and works with any agent that has a shell.
+
+- [README](https://github.com/Wirasm/jelly/blob/development/README.md): what jelly is, install, the main commands
+- [Agent guide (SKILL.md)](https://raw.githubusercontent.com/Wirasm/jelly/development/skill/SKILL.md): everything an agent needs to use jelly well
+- [Source](https://github.com/Wirasm/jelly)

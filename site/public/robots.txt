@@ -1,0 +1,6 @@
+# Search and AI training are welcome here: this site explains jelly.
+# Shared jellies live on app.getjellyware.com, which has its own rules.
+User-agent: *
+Allow: /
+
+Sitemap: https://getjellyware.com/sitemap.txt
