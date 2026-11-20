@@ -53,6 +53,7 @@ jelly state plan /labels                         # its state, or the part at a J
 jelly events plan                                # stream its events as JSON lines; no name streams every jelly's
 jelly undo plan                                  # undo the last change to its view, verbs or state
 jelly pin plan                                   # keep it: a week untouched no longer archives it
+jelly restore plan                               # bring an archived jelly back to the jelly page
 jelly rm plan                                    # remove it with its undo history and assets; cannot be undone
 ```
 
