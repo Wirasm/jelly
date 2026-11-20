@@ -2173,7 +2173,7 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
 }
 
-fn ago(ms: u64) -> String {
+pub(crate) fn ago(ms: u64) -> String {
     let s = now_ms().saturating_sub(ms) / 1000;
     match s { 0..=59 => "just now".into(), 60..=3599 => format!("{}m ago", s / 60), 3600..=86399 => format!("{}h ago", s / 3600), _ => format!("{}d ago", s / 86400) }
 }

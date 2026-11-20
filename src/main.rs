@@ -52,6 +52,13 @@ enum Cmd {
         #[arg(long, conflicts_with = "home")]
         temp: bool,
     },
+    /// Find jellies by words in their name or about line, in every project, archived
+    /// ones included. Prints a short reference for each: what it is, who made it and
+    /// when, and what waits on the person. Use it when someone names a jelly loosely.
+    Find {
+        #[arg(required = true)]
+        words: Vec<String>,
+    },
     /// List this project's jellies, one per line (all projects outside a repo).
     Ls {
         /// Every project, archived jellies included.
@@ -567,6 +574,26 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 });
                 server::serve(store, listener, note).await.map_err(|e| e.to_string().into())
             })
+        }
+        Cmd::Find { words } => {
+            let words: Vec<String> = words.iter().flat_map(|w| w.split_whitespace()).map(str::to_lowercase).collect();
+            let hay = |j: &Value| format!("{} {}", j["name"].as_str().unwrap_or(""), j["about"].as_str().unwrap_or("")).to_lowercase();
+            let mut found: Vec<Value> = get(&api(""))?.as_array().cloned().unwrap_or_default().into_iter()
+                .filter(|j| j["name"].as_str() != Some(store::PAGE))
+                .filter(|j| { let h = hay(j); words.iter().all(|w| h.contains(w.as_str())) })
+                .collect();
+            // Live jellies first, then the most recently changed.
+            found.sort_by_key(|j| (j["archived"].as_bool() == Some(true), std::cmp::Reverse(j["updated_ms"].as_u64().unwrap_or(0))));
+            if json {
+                return print(json!(found));
+            }
+            if found.is_empty() {
+                return Err(format!("no jelly matches {:?}; `jelly ls --all` lists them all", words.join(" ")).into());
+            }
+            for j in &found {
+                output(format_args!("{}\n", reference(j)))?;
+            }
+            Ok(())
         }
         Cmd::Ls { all } => {
             let p = if all { String::new() } else { project() };
@@ -1363,6 +1390,22 @@ fn lock_home(home: &Path, port: u16) -> Result<std::fs::File, String> {
     file.set_len(0).and_then(|()| file.write_all(format!("http://127.0.0.1:{port}\n").as_bytes()))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(file)
+}
+
+/// A jelly in two lines: which one, then its state. The same block the person can
+/// copy from the jelly page, so either side can point at a jelly exactly.
+fn reference(j: &Value) -> String {
+    let n = |k: &str| j[k].as_u64().unwrap_or(0);
+    let mut facts = vec![
+        format!("made by {} {}", j["made_by"].as_str().unwrap_or("?"), server::ago(n("created_ms"))),
+        format!("updated {}", server::ago(n("updated_ms"))),
+        format!("v{}", n("version")),
+    ];
+    if n("attention") > 0 { facts.push(format!("{} waiting on the person", n("attention"))); }
+    if n("open_comments") > 0 { facts.push(format!("{} open comments", n("open_comments"))); }
+    if j["pinned"].as_bool() == Some(true) { facts.push("pinned".into()); }
+    if j["archived"].as_bool() == Some(true) { facts.push("archived".into()); }
+    format!("{} · {}\n  {}", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), facts.join(" · "))
 }
 
 fn add_assets(jelly: &str, files: &[PathBuf], by: &str) -> Result<Vec<String>, String> {
