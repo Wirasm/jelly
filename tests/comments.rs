@@ -100,3 +100,45 @@ fn comments_mine_lists_only_this_agents_jellies() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--mine needs your name"), "{out:?}");
 }
+
+/// A comment with no anchor is about the whole jelly: the agent hears it as
+/// such in the inbox (the hook too) and `jelly comments`, and the jelly page
+/// gets its thread from the list rather than pinning it in the view.
+#[test]
+fn a_whole_jelly_comment_reaches_the_agent_and_its_reply_reaches_the_page() {
+    let d = daemon();
+    let client = tempfile::tempdir().unwrap();
+    let jelly = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
+            .args(["--url", &d.url, "--project", "t", "--as", "claude"])
+            .args(args)
+            .env("JELLY_HOME", client.path())
+            .env("HOME", client.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    new_jelly(&d, "t:a");
+    post(&d, "/t:a/comment", json!({"anchor": {"selector": "#hero", "quote": "Hero"}, "text": "bigger", "by": "person"}));
+    post(&d, "/t:a/comment", json!({"anchor": null, "text": "Why three steps?", "by": "person"}));
+    let hook = jelly(&["inbox", "--hook"]);
+    assert!(hook.contains(r#"t:a: commented on "Hero": bigger"#), "{hook}");
+    assert!(hook.contains("t:a: commented on the whole jelly, not one part: Why three steps?"), "{hook}");
+
+    post(&d, "/t:a/comment", json!({"text": "Can it be two?", "by": "person"}));
+    let inbox = jelly(&["inbox"]);
+    assert!(inbox.contains("t:a: commented on the whole jelly, not one part: Can it be two?"), "{inbox}");
+
+    let listed = jelly(&["comments", "a"]);
+    assert!(listed.contains(r#"t:a  c1 on #hero: "bigger""#), "{listed}");
+    assert!(listed.contains(r#"t:a  c2 on the whole jelly: "Why three steps?""#), "{listed}");
+
+    jelly(&["reply", "a", "c2", "Each step is one PR."]);
+    let list: Value = ureq::get(&format!("{}/api/jellies", d.url)).call().unwrap().into_json().unwrap();
+    let whole = &list[0]["whole_jelly_comments"];
+    let ids: Vec<&str> = whole.as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["c2", "c3"], "element comments stay out: {whole}");
+    assert_eq!(whole[0]["replies"][0]["text"], "Each step is one PR.");
+    assert_eq!(list[0]["replies_waiting"], 1);
+}

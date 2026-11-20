@@ -1278,7 +1278,7 @@ fn ask_line(jelly: &str, round: &Value, questions: usize, since: &str) -> String
 /// One comment and its thread, for an agent's to-do list.
 fn comment_line(jelly: &str, c: &store::Comment) -> String {
     let thread = c.replies.last().map(|last| format!(" · {} repl{}, last by {}: {:?}", c.replies.len(), if c.replies.len() == 1 { "y" } else { "ies" }, last.by, last.text)).unwrap_or_default();
-    format!("{jelly}  {} on {}{}: {:?}{thread}{}", c.id, c.anchor["selector"].as_str().unwrap_or("the page"), store::named(&c.by), c.text, if c.resolved { " (resolved)" } else { "" })
+    format!("{jelly}  {} on {}{}: {:?}{thread}{}", c.id, store::comment_place(&c.anchor), store::named(&c.by), c.text, if c.resolved { " (resolved)" } else { "" })
 }
 
 /// The change that ended `jelly wait`, in one line.

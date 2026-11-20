@@ -119,7 +119,18 @@ pub struct Attention {
     pub withdrawn: Option<Stamp>,
 }
 
+/// Where a comment points, in words: its element's selector, or "the whole
+/// jelly" for one with no selector, which the person asks from the jelly
+/// page's header about the jelly as a whole.
+pub fn comment_place(anchor: &Value) -> &str {
+    anchor["selector"].as_str().unwrap_or("the whole jelly")
+}
+
 impl Comment {
+    pub fn is_whole_jelly(&self) -> bool {
+        !self.anchor["selector"].is_string()
+    }
+
     /// The agent replied last on an open thread: the person has something to read.
     pub fn awaiting_person(&self) -> bool {
         !self.resolved && self.replies.last().is_some_and(|r| !is_person(&r.by))
@@ -531,8 +542,9 @@ impl Event {
                 let seen = if pick.is_empty() && text.is_empty() { " → seen" } else { "" };
                 format!("answered {} {:?}{pick}{seen}{text}", s(&a["id"]), s(&a["title"]))
             }
-            EventKind::Comment => format!("commented on {:?}: {}", s(&a["anchor"]["quote"]), clip(s(&a["text"]))),
-            EventKind::Reply => format!("replied on comment {}: {}", s(&a["id"]), clip(s(&a["text"]))),
+            EventKind::Comment if a["anchor"]["selector"].is_string() => format!("commented on {:?}: {}", s(&a["anchor"]["quote"]), clip(s(&a["text"]))),
+            EventKind::Comment => format!("commented on the whole jelly, not one part: {}", clip(s(&a["text"]))),
+            EventKind::Reply => format!("replied on comment {}{}: {}", s(&a["id"]), if a["anchor"]["selector"].is_string() { "" } else { " (about the whole jelly)" }, clip(s(&a["text"]))),
             EventKind::Resolve => format!("resolved comment {}", s(&a)),
             EventKind::Undo => "undid the last state change".into(),
             EventKind::Attention => format!("asked {:?}", s(&a["title"])),

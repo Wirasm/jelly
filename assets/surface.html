@@ -74,13 +74,35 @@
   .tag { font: 600 10.5px -apple-system, sans-serif; border-radius: 999px; padding: 1px 8px; background: var(--sun); color: var(--sun-ink); }
   .tag.soft { background: var(--brand-soft); color: var(--brand-soft-ink); }
   .acts { grid-row: 1 / span 2; grid-column: 3; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
-  .entry:hover .acts, .entry.sel .acts, .acts:focus-within, .acts:has(.on) { opacity: 1; }
+  .entry:hover .acts, .entry.sel .acts, .acts:focus-within, .acts:has(.on), .acts:has(.has) { opacity: 1; }
   .btn { font-size: 12.5px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
   .btn:hover { border-color: var(--line-2); }
   .btn.on { background: var(--sun); border-color: var(--sun); color: var(--sun-ink); }
   .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
   .btn.quiet:hover { background: var(--card); border-color: var(--line); color: var(--ink); }
   .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn.waiting { background: var(--brand-soft); border-color: var(--brand-soft); color: var(--brand-soft-ink); }
+  /* Copy reference: a small icon beside the jelly's name. */
+  .cp { display: inline-flex; align-items: center; gap: 4px; align-self: center; border: 0; background: none; color: var(--muted); padding: 2px 4px; border-radius: 5px; cursor: pointer; font-size: 11px; }
+  .cp:hover, .cp.ok { color: var(--ink); background: var(--brand-soft); }
+  .cp:focus-visible { outline: 2px solid var(--accent); }
+  /* Ask about the whole jelly: its threads and a field for a new question. */
+  .askpop { position: fixed; z-index: 25; display: grid; gap: 8px; overflow-y: auto; background: var(--card); color: var(--ink); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 18px 40px -18px var(--shadow); padding: 10px; }
+  .ap-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ap-list { display: grid; gap: 8px; }
+  .ap-list:empty { display: none; }
+  .ap-t { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; }
+  .ap-m { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ap-m b { font-weight: 600; margin-right: 4px; }
+  .ap-m.agent b { color: var(--accent-ink); }
+  .ap-done { color: var(--muted); font-size: 12px; }
+  .ap-reply { display: flex; gap: 6px; }
+  .askpop textarea, .ap-reply input { font: inherit; color: var(--ink); background: var(--page); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+  .ap-reply input { flex: 1; }
+  .askpop textarea { resize: vertical; min-height: 64px; }
+  .askpop textarea:focus, .ap-reply input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .ap-row { display: flex; align-items: center; gap: 8px; }
+  .ap-row span { flex: 1; color: var(--muted); font-size: 12px; }
   .frame { position: relative; border-radius: 12px; overflow: hidden; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px -18px rgba(16,24,23,.25); transition: box-shadow .2s, border-color .2s; }
   .entry.sel .frame { border-color: var(--line-2); box-shadow: 0 0 0 3px var(--brand-glow), 0 12px 32px -18px var(--shadow); }
   .entry.pulse .frame { animation: pulse 1.2s ease-out; }
@@ -210,6 +232,7 @@
     <button class="btn" id="back" title="Back to the stream (Esc)">← Back</button>
     <div class="title"><h1 id="ftitle"></h1><div class="who" id="fmeta"></div></div>
     <div class="factions">
+      <span id="fask"></span>
       <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
       <button class="btn quiet" id="fundo">Undo</button>
       <button class="btn quiet" id="fpin"></button>
@@ -289,10 +312,11 @@
   function entryHead(j) {
     const last = lastEvent.get(j.name);
     return `<span class="av ${jelly.isPerson(j.made_by) ? "person" : ""}">${esc(who(j.made_by)[0].toUpperCase())}</span>
-      <div class="who"><b>${esc(who(j.made_by))}</b><span>${ago(j.created_ms)}</span><code>${esc(short(j.name))}</code>${{ new: '<span class="badge-new">New</span>', updated: '<span class="badge-upd">Updated</span>' }[freshness(j)] || ""}${flags(j)}
+      <div class="who"><b>${esc(who(j.made_by))}</b><span>${ago(j.created_ms)}</span><code>${esc(short(j.name))}</code>${COPY}${{ new: '<span class="badge-new">New</span>', updated: '<span class="badge-upd">Updated</span>' }[freshness(j)] || ""}${flags(j)}
         ${last ? `<span class="last">· ${esc(who(last.by))} ${esc(last.text)} ${ago(last.at)}</span>` : ""}</div>
       <h2>${esc(j.about || j.name)}</h2>
       <div class="acts">
+        ${askButton(j)}
         <button class="btn" data-act="comment">Comment</button>
         <button class="btn quiet" data-act="open" title="Open full size (↵)">Open</button>
         <button class="btn quiet" data-act="pin" title="Keep it pinned beside the stream">Pin</button>
@@ -334,7 +358,7 @@
         if (booted) { el.classList.add("arrive"); fresh.push(el); }
       } else {
         const head = el.querySelector("header");
-        const on = head.querySelector(".on"); // keep comment mode across a re-render
+        const on = head.querySelector('[data-act="comment"].on'); // keep comment mode across a re-render
         head.innerHTML = entryHead(j);
         if (on) setCommenting(head.querySelector('[data-act="comment"]'), true);
       }
@@ -552,6 +576,7 @@
   }
   function openFull(name, fromAgent) {
     if (!byName(name)) return;
+    closeAsk();
     if (full !== name) {
       pendingAttend = null;
       full = name;
@@ -572,12 +597,14 @@
     const j = byName(full);
     if (!j) return closeFull();
     $("ftitle").textContent = j.about || j.name;
-    $("fmeta").innerHTML = `<code>${esc(short(j.name))}</code><span>by ${esc(who(j.made_by))}</span><span>v${j.version}</span><span>${ago(j.updated_ms)}</span>${flags(j)}`;
+    $("fask").innerHTML = askButton(j);
+    $("fmeta").innerHTML = `<code>${esc(short(j.name))}</code>${COPY}<span>by ${esc(who(j.made_by))}</span><span>v${j.version}</span><span>${ago(j.updated_ms)}</span>${flags(j)}`;
     $("fpin").textContent = j.pinned ? "Unpin" : "Pin";
   }
   function closeFull(fromAgent) {
     pendingAttend = null;
     if (!full) return;
+    closeAsk();
     const was = full;
     full = null;
     $("full").hidden = true;
@@ -613,6 +640,119 @@
       if (f) swap(f.swapFor || f);
     }
   });
+
+  // ---- copy reference ---------------------------------------------------------
+
+  // Two lines the person pastes into a chat so their agent knows which jelly
+  // they mean and where it stands.
+  const COPY = `<button class="cp" data-act="copy" title="Copy a reference to this jelly, to paste to your agent" aria-label="Copy reference"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg></button>`;
+  function reference(j) {
+    const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
+    const maker = jelly.isPerson(j.made_by) ? j.made_by.slice(7) || "the person" : j.made_by;
+    const asks = [j.attention && n(j.attention, "open question"), j.answered && `${j.answered} answered`].filter(Boolean).join(", ");
+    const state = [`made by ${maker} ${ago(j.created_ms)}`, `updated ${ago(j.updated_ms)}`, `v${j.version}`, asks, j.open_comments && n(j.open_comments, "open comment")];
+    const about = (j.about || "").replace(/\s+/g, " ").trim();
+    return `${j.name}${about ? ` · ${about}` : ""}\n${state.filter(Boolean).join(" · ")}`;
+  }
+  async function copyRef(name, button) {
+    const text = reference(byName(name));
+    try { await navigator.clipboard.writeText(text); } catch { prompt("Copy this reference:", text); return; }
+    button.classList.add("ok");
+    button.insertAdjacentHTML("beforeend", "<span>Copied</span>");
+    setTimeout(() => { button.classList.remove("ok"); button.querySelector("span")?.remove(); }, 1500);
+  }
+
+  // ---- asking about the whole jelly ------------------------------------------
+
+  // A comment without an anchor is about the whole jelly. It reaches the agent
+  // like any comment (inbox, `jelly comments`); its thread shows here, beside
+  // the Ask button, because there is no element in the view to pin it to.
+  const DAY = 86400000;
+  const lastAt = (c) => Math.max(c.at_ms, ...(c.replies || []).map((r) => r.at_ms));
+  // Open threads, plus resolved ones from the last day so the person sees the answer.
+  const wholeThreads = (j) => (j?.whole_jelly_comments || []).filter((c) => !c.resolved || Date.now() - lastAt(c) < DAY);
+  const agentLast = (c) => !c.resolved && c.replies?.length && !jelly.isPerson(c.replies.at(-1).by);
+  function askButton(j) {
+    const t = wholeThreads(j), waiting = t.some(agentLast);
+    const cls = (t.length ? " has" : "") + (waiting ? " waiting" : "") + (ask?.name === j.name && ask.full === !!full ? " on" : "");
+    const title = waiting ? "Your agent replied about this jelly" : "Ask your agent about this whole jelly";
+    return `<button class="btn${cls}" data-act="ask" title="${title}">Ask agent${t.length ? ` · ${t.length}` : ""}</button>`;
+  }
+
+  let ask = null; // the open panel: { name, full, el }
+  function openAsk(name) {
+    if (ask?.name === name && ask.full === !!full) return closeAsk();
+    closeAsk();
+    const el = document.createElement("div");
+    el.className = "askpop";
+    el.innerHTML = `<div class="ap-h"><b>About this whole jelly</b><button class="btn quiet" data-ap="close" title="Close (Esc)">✕</button></div>
+      <div class="ap-list"></div>
+      <textarea class="ap-new" rows="3" placeholder="Ask your agent about this jelly"></textarea>
+      <div class="ap-row"><span>Your agent gets it like a comment. Replies show here.</span><button class="btn" data-ap="send">Send</button></div>`;
+    document.body.appendChild(el);
+    ask = { name, full: !!full, el };
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ap]");
+      if (!b) return;
+      if (b.dataset.ap === "close") closeAsk();
+      if (b.dataset.ap === "send") sendAsk(el.querySelector(".ap-new"));
+      if (b.dataset.ap === "resolve") act(`/api/jellies/${enc(name)}/resolve`, { id: b.dataset.id });
+    });
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing || !e.target.matches("textarea, input")) return;
+      e.preventDefault();
+      sendAsk(e.target);
+    });
+    redrawAsk();
+    el.querySelector(".ap-new").focus();
+  }
+  function closeAsk() {
+    if (!ask) return;
+    ask.el.remove();
+    ask = null;
+    redrawAskButtons();
+  }
+  // A field with data-id replies on that thread; the new-question field starts one.
+  async function sendAsk(field) {
+    const text = field.value.trim();
+    if (!text || !ask) return;
+    const id = field.dataset.id;
+    const ok = await act(`/api/jellies/${enc(ask.name)}/${id ? "reply" : "comment"}`, id ? { id, text } : { anchor: null, text });
+    if (ok) field.value = "";
+  }
+  // Under its button, inside the window; hidden while the button is scrolled away.
+  function placeAsk() {
+    if (!ask) return;
+    const b = ask.full ? $("fask").querySelector("button") : entries.get(ask.name)?.querySelector('[data-act="ask"]');
+    if (!b) return closeAsk();
+    const r = b.getBoundingClientRect(), w = Math.min(360, innerWidth - 16), el = ask.el;
+    el.hidden = r.bottom < 44 || r.top > innerHeight;
+    el.style.width = w + "px";
+    el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
+    el.style.top = r.bottom + 6 + "px";
+    el.style.maxHeight = Math.max(160, innerHeight - r.bottom - 18) + "px";
+  }
+  function redrawAskButtons() {
+    for (const [name, el] of entries) { const b = el.querySelector('[data-act="ask"]'); if (b && byName(name)) b.outerHTML = askButton(byName(name)); }
+    if (full && byName(full)) $("fask").innerHTML = askButton(byName(full));
+  }
+  // Threads change under an open panel; drafts in its reply fields survive.
+  function redrawAsk() {
+    if (!ask) return;
+    const j = byName(ask.name);
+    if (!j) return closeAsk();
+    const list = ask.el.querySelector(".ap-list");
+    const drafts = new Map([...list.querySelectorAll("input[data-id]")].map((i) => [i.dataset.id, i.value]));
+    const focused = document.activeElement?.dataset?.id;
+    list.innerHTML = wholeThreads(j).map((c) => `<div class="ap-t">${[c, ...(c.replies || [])].map((m) => `<div class="ap-m${jelly.isPerson(m.by) ? "" : " agent"}"><b>${esc(who(m.by))}</b>${esc(m.text)}</div>`).join("")}
+      ${c.resolved ? '<div class="ap-done">Resolved</div>' : `<div class="ap-reply"><input data-id="${esc(c.id)}" placeholder="Reply" aria-label="Reply"><button class="btn quiet" data-ap="resolve" data-id="${esc(c.id)}">Resolve</button></div>`}</div>`).join("");
+    for (const i of list.querySelectorAll("input[data-id]")) { i.value = drafts.get(i.dataset.id) || ""; if (i.dataset.id === focused) i.focus(); }
+    redrawAskButtons();
+    placeAsk();
+  }
+  addEventListener("pointerdown", (e) => { if (ask && !ask.el.contains(e.target) && !e.target.closest('[data-act="ask"]')) closeAsk(); });
+  addEventListener("resize", placeAsk);
+  $("stream").addEventListener("scroll", placeAsk, { passive: true });
 
   // ---- reshape --------------------------------------------------------------
 
@@ -658,6 +798,7 @@
   async function act(path, body, method = "POST") {
     const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: jelly.by }) });
     if (!r.ok) alert((await r.json()).error);
+    return r.ok;
   }
   const pin = (name) => act(`/api/jellies/${enc(name)}/pin`, { pinned: !byName(name).pinned });
   const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=${enc(jelly.by)}`, null, "DELETE"); };
@@ -670,13 +811,18 @@
     if (!name) return;
     select(name);
     const b = e.target.closest("[data-act]");
-    if (b) ({ comment: () => toggleComment(name), open: () => openFull(name), unfold: () => { const fr = b.closest(".frame"); fr.dataset.open = 1; fr.classList.remove("tall"); }, pin: () => pin(name), rm: () => remove(name) })[b.dataset.act]();
+    if (b) ({ ask: () => openAsk(name), copy: () => copyRef(name, b), comment: () => toggleComment(name), open: () => openFull(name), unfold: () => { const fr = b.closest(".frame"); fr.dataset.open = 1; fr.classList.remove("tall"); }, pin: () => pin(name), rm: () => remove(name) })[b.dataset.act]();
   });
   $("board").addEventListener("click", (e) => {
 
     const name = e.target.closest("[data-name]")?.dataset.name;
     if (!name) return;
     if (entries.has(name) && !full) select(name, true); else openFull(name);
+  });
+  document.querySelector(".fbar").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    if (b?.dataset.act === "ask") openAsk(full);
+    if (b?.dataset.act === "copy") copyRef(full, b);
   });
   $("back").onclick = () => closeFull();
   $("fcomment").onclick = () => toggleComment(full);
@@ -689,6 +835,7 @@
   });
 
   addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && ask) return closeAsk();
     if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape" && dockOpen) return setDock(false);
     if (e.key === "a") return setDock(!dockOpen);
@@ -749,6 +896,7 @@
     renderStream();
     renderBoard();
     if (full) renderFull();
+    redrawAsk();
     if (!booted) {
       booted = true;
       // Newest is at the top, so the page opens there.
