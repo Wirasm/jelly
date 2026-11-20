@@ -30,8 +30,9 @@ prose, and whenever you need them to choose.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
-  state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file, or as a read-only link through
-  your own relay (`relay/`).
+  state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file, or live through your own relay
+  (`relay/`): `jelly share plan --to ana@example.com` gives Ana a link she can use
+  from her phone, and you hear her in `jelly inbox`.
 
 ```bash
 jelly ls                                         # this project's jellies; starts the daemon on first use

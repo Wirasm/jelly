@@ -353,25 +353,46 @@ enum Cmd {
         #[arg(long)]
         rm: bool,
     },
-    /// Write a read-only snapshot of a jelly as one HTML file you can send
-    /// anyone: state baked in, assets inlined. With --link, publish it to your
-    /// relay instead and print an unguessable link; sharing again updates the
-    /// same link with the jelly as it is now.
+    /// Share a jelly. Without flags, write a read-only snapshot as one HTML file
+    /// you can send anyone: state baked in, assets inlined.
+    ///
+    /// `--to ana@example.com` shares it live through your relay (`jelly relay`)
+    /// and prints a link for Ana. She can use the jelly from any device: click,
+    /// answer, comment. You hear her in `jelly inbox` and `jelly wait` as
+    /// person:ana@example.com. Each person gets their own link; asking again
+    /// prints the same one. jelly sends no email: pass the link on yourself.
+    /// `--link` prints a view-only link: anyone with it watches the jelly change
+    /// live, but cannot change it.
+    ///
+    /// While a jelly is shared, the relay holds the live copy: it keeps working
+    /// while this machine sleeps, and your changes (call, set, reshape, ask,
+    /// withdraw, reply) go there. Undo, move, rm and a new ask round wait until
+    /// `jelly unshare`.
     Share {
         name: String,
-        /// Where to write it (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
-        #[arg(long, conflicts_with = "link")]
+        /// Where to write the file (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
+        #[arg(long, conflicts_with_all = ["link", "to"])]
         out: Option<PathBuf>,
-        /// Publish to your relay (`jelly relay URL`) and print a read-only link.
-        #[arg(long)]
+        /// A view-only live link.
+        #[arg(long, conflicts_with = "to")]
         link: bool,
-        /// Days until the link stops working (default 30, at most 365).
-        #[arg(long, requires = "link", default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=365))]
-        days: u64,
+        /// A live link for this person, who can use the jelly through it.
+        #[arg(long, value_name = "EMAIL")]
+        to: Option<String>,
+        /// Days until the share stops working (default 30, at most 365). A share
+        /// lasts as long as its longest link.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=365))]
+        days: Option<u64>,
     },
-    /// Stop a jelly's link from working, now.
+    /// Stop sharing a jelly. `--to ana@example.com` stops only Ana's link, and
+    /// her open pages close; `--link` stops the view-only link. With neither,
+    /// every link stops and the jelly's final state stays here.
     Unshare {
         name: String,
+        #[arg(long, value_name = "EMAIL", conflicts_with = "link")]
+        to: Option<String>,
+        #[arg(long)]
+        link: bool,
     },
     /// Use the relay you deployed (relay/ in the jelly repo) for share links.
     /// Saves the URL with a new publish secret in $JELLY_HOME/relay.json and
@@ -1021,25 +1042,25 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Share { name, out, link, days } => {
+        Cmd::Share { name, out, link, to, days } => {
             let name = id(&name)?;
+            if link || to.is_some() {
+                let days = days.unwrap_or(30);
+                let made = send("POST", &api(&format!("/{name}/share")), json!({"to": to, "days": days}))?;
+                let url = made["url"].as_str().ok_or("the daemon did not say the link")?;
+                let s = if days == 1 { "" } else { "s" };
+                let who = made["who"].as_str().unwrap_or("");
+                return match to {
+                    Some(_) => output(format_args!("{url}\n  for {who}: they can use {name} through it, and you hear them as person:{who}. Works {days} day{s}. `jelly unshare {name} --to {who}` stops it.\n")),
+                    None => output(format_args!("{url}\n  view only: anyone with it watches {name} live but cannot change it. Works {days} day{s}. `jelly unshare {name} --link` stops it.\n")),
+                };
+            }
+            if days.is_some() {
+                return Err("--days is for live links: add --to EMAIL or --link".into());
+            }
             let resp = ureq::get(&api(&format!("/{name}/share"))).call().map_err(describe)?;
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
-            if link {
-                let home = relay::Home(default_home()?);
-                let relay = home.relay()?;
-                // Sharing again keeps the link, so people who have it see the update.
-                let token = match home.link(&name)? {
-                    Some(l) if l.url.starts_with(&relay.url) => l.token,
-                    _ => relay::token(22)?,
-                };
-                let expires_at = relay::publish(&relay, &token, &html, days * 86_400)?;
-                let url = format!("{}/j/{token}", relay.url);
-                home.save_link(&name, Some(relay::Link { token, url: url.clone(), expires_at }))?;
-                output(format_args!("{url}\n  read-only snapshot of {name}, works for {days} day{}; anyone with the link can open it. `jelly unshare {name}` stops it.\n", if days == 1 { "" } else { "s" }))?;
-                return Ok(());
-            }
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);
             let out = match out {
                 Some(out) => out,
@@ -1053,14 +1074,19 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
         }
-        Cmd::Unshare { name } => {
+        Cmd::Unshare { name, to, link } => {
             let name = id(&name)?;
-            let home = relay::Home(default_home()?);
-            let Some(link) = home.link(&name)? else { return Err(format!("{name} has no link to stop").into()) };
-            relay::revoke(&home.relay()?, &link.token)?;
-            home.save_link(&name, None)?;
-            output(format_args!("{} no longer works\n", link.url))?;
-            Ok(())
+            let q = match (&to, link) {
+                (Some(who), _) => format!("?to={}", encode(who)),
+                (None, true) => "?to=".into(),
+                (None, false) => String::new(),
+            };
+            send("DELETE", &api(&format!("/{name}/share{q}")), Value::Null)?;
+            match (to, link) {
+                (Some(who), _) => output(format_args!("{who}'s link to {name} no longer works\n")),
+                (None, true) => output(format_args!("the view-only link to {name} no longer works\n")),
+                (None, false) => output(format_args!("{name} is no longer shared: every link stopped, and its final state is here\n")),
+            }
         }
         Cmd::Relay { address } => {
             let home = relay::Home(default_home()?);

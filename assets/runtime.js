@@ -30,12 +30,26 @@
 // names the element. Give elements an `id` so comments survive a reshape.
 // Agents answer on the pin (`jelly reply`); the thread shows when you click it.
 //
+// On a share link (`jelly share --to`) the same runtime runs, with a few
+// differences: jelly.other() is not available, jelly.person.name is whom the
+// link is for and cannot be changed, and a view-only link refuses changes.
+//
 // A reshape or an undo that changes the view reloads the page. State lives in
 // the daemon, so nothing is lost; scroll and the focused field (by id) carry
 // over. On the jelly page the new version loads unseen and replaces the old
 // one once it has drawn.
 (() => {
   const boot = window.__JELLY__;
+  // On a share link the view runs in a sandboxed frame with no origin of its
+  // own. The relay's page around it holds the link's connection; requests and
+  // events pass through that page by postMessage.
+  const share = boot.share;
+  const pending = new Map();
+  let asked = 0;
+  const viaShare = (op, body) => new Promise((ok, no) => {
+    pending.set(++asked, { ok, no });
+    parent.postMessage({ jelly: "rpc", id: asked, op, body }, "*");
+  });
   // Errors the page hits, so `jelly look` can tell the agent its page is broken.
   const errors = [];
   let snapT = null;
@@ -100,15 +114,16 @@
   // A person may name themselves, so two people on one jelly can tell who did
   // what. The name is per browser (every jelly shares this origin) and read on
   // each write, so renaming on the jelly page applies to open jellies at once.
-  const viewer = () => { try { return localStorage.getItem("jelly.viewer") || ""; } catch { return ""; } };
-  const me = () => (viewer() ? `person:${viewer()}` : "person");
+  const viewer = () => { if (share) return share.who; try { return localStorage.getItem("jelly.viewer") || ""; } catch { return ""; } };
+  const me = () => (share ? share.by : viewer() ? `person:${viewer()}` : "person");
   const isPerson = (by) => by === "person" || String(by).startsWith("person:");
   const who = (by) => (by === me() ? "you" : isPerson(by) ? by.slice(7) || "someone" : by);
 
-  async function post(path, body) {
+  async function post(op, body) {
     // Nobody is at an agent render, so nothing it does may be recorded as the person.
     if (agentMode) throw new Error("jelly look only looks; this change was not made");
-    const r = await fetch(path, {
+    if (share) return viaShare(op, body);
+    const r = await fetch(`${api}/${op === "answer" ? `attention/${enc(body.id)}/answer` : op}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...body, by: me() }),
@@ -149,6 +164,7 @@
   const carryKey = `jelly:carry:${boot.name}`;
   let swapAsked = false;
   function reload() {
+    if (share) return parent.postMessage({ jelly: "rpc", op: "reload" }, "*");
     try {
       // The jelly page swaps in a fresh copy of this frame once that has drawn.
       // Asked once: later events must not restart a swap that is loading.
@@ -172,7 +188,19 @@
   // One WebSocket per page carries every event; handlers filter by jelly.
   const listeners = new Set();
   let dropped = false;
-  (function connect() {
+  if (share) addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== parent || !m) return;
+    if (m.jelly === "reply") {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (p) m.ok ? p.ok(m.value) : p.no(new Error(m.error));
+    }
+    if (m.jelly === "event") for (const fn of listeners) {
+      try { fn(m.ev); } catch (err) { console.error(err); }
+    }
+  });
+  else (function connect() {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
     ws.onopen = () => { if (dropped) reload(); };
     ws.onmessage = (m) => {
@@ -203,6 +231,7 @@
 
   const events = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
   const readState = async (name) => {
+    if (share) throw new Error("other jellies are not available on a shared link");
     const r = await fetch(`/api/jellies/${enc(name)}/state`);
     if (!r.ok) throw new Error((await r.json()).error);
     return r.json();
@@ -214,11 +243,11 @@
     get state() { return state; },
     onState(fn) { subs.push(fn); fn(state, null); },
     async call(verb, args = {}) {
-      const ev = trial ? await trialCall(verb, args) : await post(`${api}/call`, { verb, args, source: source() });
+      const ev = trial ? await trialCall(verb, args) : await post("call", { verb, args, source: source() });
       apply(ev);
       return ev;
     },
-    asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
+    asset: (file) => (share ? `assets/${enc(file)}` : `/j/${enc(boot.name)}/assets/${enc(file)}`),
     events,
     other(name) {
       name = full(name);
@@ -233,6 +262,7 @@
           });
         },
         open() {
+          if (share) return;
           if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
           else location.href = `/j/${enc(name)}/`;
         },
@@ -241,6 +271,7 @@
     person: {
       get name() { return viewer(); },
       set name(name) {
+        if (share) return;
         name = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
         try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
       },
@@ -250,10 +281,10 @@
       onOpen(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
       get comments() { return comments; },
       /** An option id, text, or both. A seen ask takes nothing ("seen"). */
-      answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
-      comment: (anchor, text) => post(`${api}/comment`, { anchor, text }),
-      reply: (id, text) => post(`${api}/reply`, { id, text }),
-      resolve: (id) => post(`${api}/resolve`, { id }),
+      answer: (id, { option, text } = {}) => post("answer", { id, option, text: text || "" }),
+      comment: (anchor, text) => post("comment", { anchor, text }),
+      reply: (id, text) => post("reply", { id, text }),
+      resolve: (id) => post("resolve", { id }),
     },
     who,
     isPerson,
@@ -309,7 +340,7 @@
   }
 
   // On the jelly page, the page's header owns the Comment button.
-  const embedded = window.parent !== window;
+  const embedded = !share && window.parent !== window;
   function setMode(on) {
     commenting = on;
     btn.classList.toggle("on", on);
@@ -1114,7 +1145,7 @@
   // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {
     // A trial's page is not what `jelly look` should show; it reports in `runTrial`.
-    if (snapT || trial) return;
+    if (snapT || trial || share) return;
     snapT = setTimeout(() => {
       snapT = null;
       fetch(screenUrl, { method: "POST", headers: { "content-type": "application/json" },
@@ -1201,9 +1232,12 @@
     const refresh = (async () => {
       let j;
       try {
-        const r = await fetch(api);
-        if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
-        j = await r.json();
+        if (share) j = await viaShare("show");
+        else {
+          const r = await fetch(api);
+          if (!r.ok) throw new Error(`Could not refresh questions (${r.status})`);
+          j = await r.json();
+        }
       } catch (e) {
         if (refresh !== latestRefresh) return latestRefresh;
         throw e;
@@ -1224,7 +1258,7 @@
     document.head.appendChild(style);
     // A view that draws its own comment control opts out with <meta name="jelly-comment" content="off">.
     const optOut = document.querySelector('meta[name="jelly-comment"]')?.content === "off";
-    if (!embedded && !optOut) document.body.appendChild(btn);
+    if (!embedded && !optOut && share?.can_act !== false) document.body.appendChild(btn);
     drawMarkers();
     drawWorking();
     new ResizeObserver(queueDraw).observe(document.body);

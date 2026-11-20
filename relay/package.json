@@ -11,5 +11,9 @@
   "devDependencies": {
     "typescript": "5.9.3",
     "wrangler": "4.165.0"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
   }
 }

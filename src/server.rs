@@ -22,6 +22,8 @@ use tokio::time::Instant;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
+mod share;
+
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 const PAGE_VIEW: &str = include_str!("../assets/page.html");
 const PAGE_VERBS: &str = include_str!("../assets/page.verbs.js");
@@ -39,10 +41,27 @@ struct App {
     trials: Mutex<std::collections::HashMap<String, Trial>>,
     /// `jelly look` renders in progress, by token. Memory only.
     probes: Mutex<std::collections::HashMap<String, Probe>>,
+    /// Jellies shared through the relay, by name: their changes go there.
+    shares: Mutex<std::collections::HashMap<String, Arc<share::Live>>>,
+    /// One share or unshare at a time.
+    sharing: tokio::sync::Mutex<()>,
 }
 type Shared = Arc<App>;
 
 impl App {
+    /// The jelly's share, when it is shared: then its relay holds the live copy.
+    fn live(&self, name: &str) -> Option<Arc<share::Live>> {
+        self.shares.lock().expect("shares lock").get(name).cloned()
+    }
+
+    /// Refuses what a shared jelly cannot do while its live copy is on the relay.
+    fn not_shared(&self, name: &str, what: &str) -> Result<(), ApiError> {
+        match self.live(name) {
+            Some(_) => Err(Error::Invalid(format!("{name} is shared, so it cannot {what}; `jelly unshare {name}` first")).into()),
+            None => Ok(()),
+        }
+    }
+
     /// Broadcasts committed batch events even when a later change fails.
     fn change_many(&self, f: impl FnOnce(&mut Store) -> Result<Vec<Event>, crate::store::BatchError>) -> Result<Json<Value>, ApiError> {
         let mut store = self.store.lock().expect("store lock");
@@ -143,7 +162,8 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
+    share::resume(&app);
 
     // Unpinned jellies nobody touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -193,7 +213,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets", get(list_assets))
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).delete(remove_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
-        .route("/api/jellies/{name}/share", get(share))
+        .route("/api/jellies/{name}/share", get(share).post(share_live).delete(unshare_live))
         .route("/api/inbox", get(inbox).post(read_inbox))
         .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
@@ -266,6 +286,11 @@ fn snapshot_changed() -> ApiError {
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
         ApiError::Store(e)
+    }
+}
+impl From<String> for ApiError {
+    fn from(e: String) -> Self {
+        ApiError::Store(Error::Invalid(e))
     }
 }
 impl IntoResponse for ApiError {
@@ -365,6 +390,9 @@ struct CallReq {
 }
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "call", "verb": r.verb, "args": r.args, "source": r.source, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.call_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
 }
 
@@ -385,6 +413,10 @@ async fn set_state(State(app): State<Shared>, Path(name): Path<String>, Json(r):
         (false, Some(v)) => Some(v),
         (false, None) => return Err(Error::Invalid("give a value, or remove: true".into()).into()),
     };
+    if let Some(live) = app.live(&name) {
+        let op = json!({"op": "set", "pointer": r.pointer, "remove": value.is_none(), "value": value, "by": by(r.by)?});
+        return share::forward(&app, &live, op).await;
+    }
     app.change(|s| s.set_state(&name, &r.pointer, value, &by(r.by)?))
 }
 
@@ -397,6 +429,13 @@ struct ReshapeReq {
 }
 
 async fn reshape(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReshapeReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        // The relay trusts the daemon to have checked them, as `Store::reshape` does.
+        if let Some(src) = &r.verbs {
+            crate::verbs::check(src).map_err(|e| Error::Invalid(format!("new verbs rejected, jelly unchanged: {e}")))?;
+        }
+        return share::forward(&app, &live, json!({"op": "reshape", "view": r.view, "verbs": r.verbs, "about": r.about, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.reshape(&name, r.view, r.verbs, r.about, &by(r.by)?))
 }
 
@@ -408,6 +447,7 @@ struct ByReq {
 }
 
 async fn undo(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+    app.not_shared(&name, "be undone")?;
     app.change(|s| s.undo(&name, &by(r.by)?))
 }
 
@@ -424,6 +464,9 @@ struct CommentReq {
 }
 
 async fn comment(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CommentReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "comment", "anchor": r.anchor, "text": r.text, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.comment(&name, r.anchor, &r.text, &by(r.by)?))
 }
 
@@ -434,6 +477,9 @@ struct ResolveReq {
 }
 
 async fn resolve(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ResolveReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "resolve", "id": r.id, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.resolve(&name, &r.id, &by(r.by)?))
 }
 
@@ -447,6 +493,9 @@ struct ReplyReq {
 }
 
 async fn reply(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReplyReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "reply", "id": r.id, "text": r.text, "resolve": r.resolve, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.reply(&name, &r.id, &r.text, &by(r.by)?, r.resolve))
 }
 
@@ -457,6 +506,7 @@ struct ProjectReq {
 }
 
 async fn move_project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
+    app.not_shared(&name, "move")?;
     app.change(|s| s.set_project(&name, &r.project, &by(r.by)?))
 }
 
@@ -464,6 +514,7 @@ async fn remove(State(app): State<Shared>, Path(name): Path<String>, Query(q): Q
     if name == PAGE {
         return Err(Error::Invalid("the jelly page cannot be removed; reshape or undo it instead".into()).into());
     }
+    app.not_shared(&name, "be removed")?;
     app.change(|s| s.remove(&name, &by(q.by)?))
 }
 
@@ -728,10 +779,18 @@ async fn list_assets(State(app): State<Shared>, Path(name): Path<String>) -> Res
 }
 
 async fn put_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>, body: Bytes) -> Result<Json<Event>, ApiError> {
+    crate::store::valid_file(&file)?;
+    if let Some(live) = app.live(&name) {
+        share::put_asset(&app, &live, &file, body.to_vec()).await?;
+    }
     app.change(|s| s.put_asset(&name, &file, &body, &by(q.by)?))
 }
 
 async fn remove_asset(State(app): State<Shared>, Path((name, file)): Path<(String, String)>, Query(q): Query<AssetQ>) -> Result<Json<Event>, ApiError> {
+    crate::store::valid_file(&file)?;
+    if let Some(live) = app.live(&name) {
+        share::remove_asset(&app, &live, &file).await?;
+    }
     app.change(|s| s.remove_asset(&name, &file, &by(q.by)?))
 }
 
@@ -871,6 +930,35 @@ fn shared_static_asset(value: &str, assets: &[(String, String)], base_href: Opti
 }
 
 #[derive(Deserialize)]
+struct ShareReq {
+    /// Whom the link is for; without it, the view-only link.
+    to: Option<String>,
+    days: u64,
+}
+
+/// Mints a live link to the jelly on the relay, sharing it first if needed.
+async fn share_live(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ShareReq>) -> Result<Json<Value>, ApiError> {
+    let who = r.to.as_deref().map(str::trim).unwrap_or("");
+    if r.to.is_some() && who.is_empty() {
+        return Err(Error::Invalid("say whom the link is for: --to ana@example.com".into()).into());
+    }
+    if !(1..=365).contains(&r.days) {
+        return Err(Error::Invalid("a link lasts 1 to 365 days".into()).into());
+    }
+    Ok(Json(share::share(&app, &name, who, r.days).await?))
+}
+
+#[derive(Deserialize)]
+struct UnshareQ {
+    /// Revoke only this person's link ("" for the view-only link).
+    to: Option<String>,
+}
+
+async fn unshare_live(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<UnshareQ>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(share::unshare(&app, &name, q.to.as_deref().map(str::trim)).await?))
+}
+
+#[derive(Deserialize)]
 struct InboxQ {
     project: Option<String>,
     since: Option<u64>,
@@ -912,7 +1000,14 @@ struct AttendReq {
 async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
     let asked = now_ms();
-    let Json(ev) = app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?;
+    let Json(ev) = match app.live(&name) {
+        Some(live) => {
+            let by = self::by(by)?;
+            let item = crate::store::ask_item(&r.spec, &by)?;
+            share::forward(&app, &live, json!({"op": "attend", "item": item, "by": by})).await?
+        }
+        None => app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?,
+    };
     let mut out = json!(ev);
     // Tell the asker where the card really shows. The item is made either way,
     // and the event that listeners and the log get is unchanged.
@@ -983,10 +1078,16 @@ struct AnswerReq {
 }
 
 async fn answer(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<AnswerReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "answer", "id": id, "option": r.option, "text": r.text, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.answer(&name, &id, r.option.as_deref(), &r.text, &by(r.by)?))
 }
 
 async fn withdraw(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "withdraw", "id": id, "by": by(r.by)?})).await;
+    }
     app.change(|s| s.withdraw(&name, &id, &by(r.by)?))
 }
 
@@ -2286,6 +2387,8 @@ struct AskReq {
 /// A round of questions on an ask page, made or updated in one step.
 async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
+    let id = if r.project.is_empty() || name.contains(':') { name.clone() } else { format!("{}:{name}", r.project) };
+    app.not_shared(&id, "start a new round of questions")?;
     app.change_many(|s| s.ask_round(&name, &r.spec, ASK_VIEW, ASK_VERBS, &r.project, &who))
 }
 
@@ -2307,7 +2410,7 @@ mod share_tests {
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
         store.withdraw("test:share", "a3", "agent").unwrap();
         let (events, _) = broadcast::channel(16);
-        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() }))
+        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() }))
     }
 
     async fn exported(app: Shared) -> String {
@@ -2551,7 +2654,7 @@ mod wait_tests {
             store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
-        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() })
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() })
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
@@ -2569,7 +2672,7 @@ mod wait_tests {
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
-            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() };
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() };
             let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
@@ -2898,7 +3001,7 @@ mod wait_tests {
         let store = Store::open(dir.path()).unwrap();
         let path = store.events_path();
         let (events, _) = broadcast::channel(1);
-        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() };
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() };
         let q = WaitQ { timeout: Some(1), ..query(None, 0) };
         let waiting = wait_since(&app, &q);
         tokio::pin!(waiting);
@@ -2973,7 +3076,7 @@ mod placement_tests {
         let mut store = Store::open(dir.path()).unwrap();
         store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
-        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
         for seen in [false, true] {
             for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
                 let mut received = app.events.subscribe();
@@ -3075,7 +3178,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
         (dir, app)
     }
 
@@ -3419,7 +3522,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());
