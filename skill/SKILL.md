@@ -51,9 +51,9 @@ jelly.asset("shot.png");                        // URL of a file added with `jel
 jelly.who(vote.by);                             // "you", another person's name, or the agent's
 ```
 
-A person who sets a name on the jelly page writes as `person:<name>` instead of
-`person`, so several people on one jelly stay apart. `jelly.by` is this
-browser's `by`; in verbs, a person is `by === "person" || by.startsWith("person:")`.
+People write as `person`, or `person:<name>` once they set a name, so several
+people on one jelly stay apart; in verbs, a person is
+`by === "person" || by.startsWith("person:")`.
 
 Keep data in state, not page variables or localStorage, so you and the person
 see the same thing. Give elements stable `id`s: questions and comments point at
@@ -65,34 +65,19 @@ control sits there, move it with
 ## Look before you show
 
 ```bash
-jelly look plan              # desktop and phone in one call: outline, problems, one side-by-side png
-jelly see plan               # the page as text, its verbs and state, errors, what waits on the person
-jelly see plan --png         # also a screenshot; prints its path. --full for the whole page
-jelly see plan --width 390   # phone width
-jelly see plan --problems    # only the `error` and `!` lines, or "no problems"
-jelly see plan --compare v12 # what changed since v12: outline, problems new or fixed, one before/after png
-jelly see plan --save before # keep this version by name; later: jelly see plan --compare before
-jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it, change nothing
-jelly focus plan             # open it full size on their screen; `jelly focus` closes it
+jelly look plan                     # desktop + phone, light + dark: outline, problems, one side-by-side png
+jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it; nothing is saved
+jelly see plan --compare v12        # what your change did since v12; --save NAME keeps a version longer
+jelly see plan                      # text only, one width (--width 390, --png, --problems)
+jelly see plan --poster             # save the screenshot as the jelly page's thumbnail
+jelly focus plan                    # open it full size on their screen; `jelly focus` closes it
 ```
 
-Always run `jelly look` and fix every `error` and `!` line before you focus a
-jelly or ask about it. It prints the outline at desktop width, then only what
-differs on a phone, and one png with desktop and phone side by side: read that
-image. It renders in light and dark mode at both widths and flags what the browser
-measured, such as text unreadable in one mode or a control too small to tap on a
-phone, each with a selector for `try` and `--at`. Use `see` when you only need the
-text or one width. `look` and `see` only look: nothing in their renders is recorded as the person.
-To check that buttons and fields work, use `jelly try`, not a browser
-driver: it does the steps in order, then prints the page, errors, and each verb
-that ran and what it changed. Nothing is saved; `--png` and `--width` work as in `see`.
-After you change a jelly, check what the change did with `--compare` against the
-version you started from (`v` and the number `see` printed). It lists the outline
-lines added, removed or changed, marks problems your change made as `new:`, and
-says which it `fixed`. Earlier versions come from the undo history, which ends at
-the last undo; `--save NAME` keeps one for longer.
-`jelly see plan --poster` saves the screenshot as `assets/poster.png`, the jelly
-page's thumbnail; pick a moment that tells the story on its own.
+Run `jelly look` before you focus a jelly or ask about it, read its png, and fix
+every `error` and `!` line. Problems come with a selector you can paste into
+`try` and `--at`. Check buttons and fields with `try`, not a browser driver:
+your clicks there are never recorded as the person. After a change, `--compare`
+against the version you started from marks problems you made as `new:`.
 
 While you rebuild a jelly the person is looking at, say so: `jelly working plan
 "rebuilding the header"`, then `jelly done plan`.
@@ -105,7 +90,7 @@ One question, on the part of a jelly it is about:
 jelly ask plan "Which hero?" --option bold="Bold gradient" --option quiet="Quiet white|Swaps to a plain hero" \
   --recommend quiet --why "The button stands out more" --at "#hero" --wait --timeout 300
 # blocks; prints: a1 answered: quiet · "keep the button blue". Exit 2 on timeout.
-jelly look plan "Check the footer links" --at "#footer"   # with words, it asks them to look; they answer "seen" or with a word
+jelly look plan "Check the footer links" --at "#footer"   # with words, asks them to look; they answer "seen" or a word
 jelly withdraw plan a1                                     # when it no longer applies
 ```
 
@@ -145,14 +130,13 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 ```
 
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
---since` to catch anything after your change. `wait` exits 2 on timeout.
-In a script, add `--json` instead of parsing the text: changes print their event
-(`seq`, `version`, `changed`, `args.id` for asks), `see`, `look` and `try` their parts. If
-several agents share the jelly page, set `JELLY_AS=<your name>` so each has its
-own inbox and its changes are attributed. Add `--mine` to `inbox`, `attention`
-or `comments` to see only your jellies (made or last reshaped under your name).
-It is never the default: the plain inbox is where you hear the person act on a
-jelly another agent made.
+--since` to catch anything after your change. `wait` exits 2 on timeout. In a
+script, add `--json` to any command instead of parsing its text.
+
+If several agents share the jelly page, set `JELLY_AS=<your name>` so each has
+its own inbox and its changes are attributed. `--mine` on `inbox`, `attention`
+or `comments` shows only your jellies; the plain inbox is where you hear the
+person act on a jelly another agent made.
 
 ## Recipes
 
