@@ -1,0 +1,9 @@
+// Spike for #108 phase 0: a shared jelly lives in one Durable Object that runs
+// its verbs in QuickJS (the daemon's engine) and pushes changes over WebSockets.
+{
+  "name": "jelly-share-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-11-01",
+  "durable_objects": { "bindings": [{ "name": "JELLY", "class_name": "SharedJelly" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SharedJelly"] }]
+}
