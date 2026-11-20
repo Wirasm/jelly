@@ -347,7 +347,7 @@ enum Cmd {
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
     #[command(alias = "project")]
-    Move { name: String, project: String },
+    Move { name: String, to: String },
     /// Mark a comment as dealt with.
     Resolve { name: String, id: String },
     /// Hide a jelly from the jelly page without deleting it.
@@ -389,7 +389,8 @@ enum Cmd {
     /// prints the command that gives the relay the same secret.
     Relay {
         /// The relay's URL, e.g. https://jelly-relay.you.workers.dev. Without it, prints the current one.
-        url: Option<String>,
+        /// (Not named `url`: that would collide with the global --url.)
+        address: Option<String>,
     },
     /// What the person did in this project's jellies since you last asked.
     /// Reader identity: explicit --as / JELLY_AS, then --session-id /
@@ -905,7 +906,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             Ok(())
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
-        Cmd::Move { name, project } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": project, "by": by}))?),
+        Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
         Cmd::See { name, width, png, full, problems, poster, compare, save } => {
             let mut q = vec![];
             if let Some(c) = &compare { q.push(format!("compare={}", encode(c))); }
@@ -1084,9 +1085,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{} no longer works\n", link.url))?;
             Ok(())
         }
-        Cmd::Relay { url } => {
+        Cmd::Relay { address } => {
             let home = relay::Home(default_home()?);
-            match url {
+            match address {
                 None => output(format_args!("{}\n", home.relay()?.url))?,
                 Some(url) => {
                     let secret = home.set_relay(&url)?;
@@ -1537,6 +1538,20 @@ mod tests {
             json!({"do": "press", "at": "#q", "key": "Enter"}),
             json!({"do": "click", "at": "#b"}),
         ]);
+    }
+
+    #[test]
+    fn no_subcommand_argument_shadows_a_global_one() {
+        // A subcommand argument with a global's id silently takes the global's value
+        // (`jelly relay` once saved --url as the relay).
+        use clap::CommandFactory;
+        let cmd = super::Cli::command();
+        let globals: Vec<_> = cmd.get_arguments().filter(|a| a.is_global_set()).map(|a| a.get_id().clone()).collect();
+        for sub in cmd.get_subcommands() {
+            for arg in sub.get_arguments() {
+                assert!(!globals.contains(arg.get_id()), "jelly {}: argument {:?} shadows the global one", sub.get_name(), arg.get_id());
+            }
+        }
     }
 
     #[test]
