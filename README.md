@@ -30,7 +30,8 @@ prose, and whenever you need them to choose.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
-  state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file.
+  state yourself with `jelly set`. Undo the last change. Notes for the next agent. One page per project. Share as one file, or as a read-only link through
+  your own relay (`relay/`).
 
 ```bash
 jelly ls                                         # this project's jellies; starts the daemon on first use
