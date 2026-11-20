@@ -25,15 +25,15 @@ let st, note = "", timer;
 const name = by => by.slice(7);
 function board(s) {
   const rows = Object.entries(s.players).sort((a, b) => b[1].score - a[1].score);
-  return `<div class="board" id="board">${rows.map(([w, p], i) => `<div class="row ${w === jelly.by ? "me" : ""}"><span>${i + 1}. ${esc(name(w))}</span><b>${p.score}</b></div>`).join("") || '<span class="mute">Nobody yet</span>'}</div>`;
+  return `<div class="board" id="board">${rows.map(([w, p], i) => `<div class="row ${w === jelly.person.by ? "me" : ""}"><span>${i + 1}. ${esc(name(w))}</span><b>${p.score}</b></div>`).join("") || '<span class="mute">Nobody yet</span>'}</div>`;
 }
 function render() {
-  const s = st, me = jelly.by, joined = !!s.players[me];
+  const s = st, me = jelly.person.by, joined = !!s.players[me];
   if (!joined) {
     app.innerHTML = `<h1>${esc(s.title)}</h1><p class="mute">Join with your name, then wait for the first question.</p>
-      <div class="join"><input id="who" placeholder="Your name" value="${esc(jelly.viewer || "")}"><button id="go">Join</button></div>
+      <div class="join"><input id="who" placeholder="Your name" value="${esc(jelly.person.name || "")}"><button id="go">Join</button></div>
       <div class="chips" id="players">${Object.keys(s.players).map(w => `<span class="chip">${esc(name(w))}</span>`).join("")}</div><div class="note">${esc(note)}</div>`;
-    go.onclick = async () => { const n = who.value.trim(); if (!n) return; jelly.viewer = n; try { await jelly.call("join"); note = ""; } catch (e) { note = e.message; render(); } };
+    go.onclick = async () => { const n = who.value.trim(); if (!n) return; jelly.person.name = n; try { await jelly.call("join"); note = ""; } catch (e) { note = e.message; render(); } };
     return;
   }
   const r = s.rounds[s.round];

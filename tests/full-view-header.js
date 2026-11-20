@@ -19,7 +19,7 @@ async page => {
     };
     const open = async name => {
       await page.waitForFunction(() => pendingFocusWrites === 0);
-      await post('/api/jellies/surface/call', {verb:'focus', args:{name}});
+      await post('/api/jellies/page/call', {verb:'focus', args:{name}});
       await page.locator('#full').waitFor({state:'visible'});
       await page.waitForFunction(name => document.querySelector('#full iframe')?.contentWindow.jelly?.name === name, name);
     };

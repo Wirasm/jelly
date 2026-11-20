@@ -8,7 +8,7 @@ It answers "where are you, what is next, and can I still change it?"
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes plan --out DIR
 jelly new plan --recipe plan --state state.json --about "Plan: <what they asked for>"
-jelly see plan                                # fix every `!` and `error` line first
+jelly look plan                               # fix every `!` and `error` line first
 jelly focus plan
 jelly call plan start '{"step":"schema"}'     # before you touch anything
 ```
@@ -35,8 +35,8 @@ point; change them when the plan needs something else.
   `finish` it when it is done, one at a time. A plan that jumps from nothing to
   everything done told them nothing while they could still steer.
 - **Show what each step produced.** `finish` takes one line and a `show`: the
-  command output, a screenshot (`jelly see NAME --png`, then `jelly asset`), the
-  page before and after. A step with no picture is a claim.
+  command output, a screenshot (`jelly look NAME --width 1280`, then
+  `jelly asset`), the page before and after. A step with no picture is a claim.
 - **`needs` are real dependencies, not the order you happened to write.** They
   are drawn beside the track, and they decide what the person may reorder. Leave
   out a need and they can move a step above what it depends on.

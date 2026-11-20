@@ -60,7 +60,7 @@
       "layer": "surfaces",
       "label": "runtime.js",
       "kind": "code",
-      "what": "`window.jelly` in every view: call, onState, comments, question cards, and the text snapshot for `jelly see`.",
+      "what": "`window.jelly` in every view: call, onState, comments, question cards, and the text snapshot for `jelly look`.",
       "files": [
         "assets/runtime.js: jelly.call, apply, drawAttention, placeAfter, deadAnchors, postSnapshot"
       ],
@@ -82,10 +82,10 @@
       "layer": "surfaces",
       "label": "The jelly page",
       "kind": "browser",
-      "what": "The internal jelly, id `surface`, that lays out the others. Each jelly on it is an iframe of /j/<id>/.",
+      "what": "The internal jelly, id `page`, that lays out the others. Each jelly on it is an iframe of /j/<id>/.",
       "files": [
-        "assets/surface.html",
-        "assets/surface.verbs.js: focus, seen",
+        "assets/page.html",
+        "assets/page.verbs.js: focus, seen",
         "src/store.rs: PAGE"
       ],
       "risk": "It is a jelly too: its own verb calls are events like any other."
@@ -104,13 +104,13 @@
     {
       "id": "see",
       "layer": "daemon",
-      "label": "see and the anchor check",
+      "label": "look and the anchor check",
       "kind": "code",
-      "what": "Renders a jelly in headless Chrome and reads back what the page says is on screen. `jelly see` prints it; an ask with --at uses it to check its anchor.",
+      "what": "Renders a jelly in headless Chrome and reads back what the page says is on screen. `jelly look` prints it; an ask with --at uses it to check its anchor.",
       "files": [
-        "src/server.rs: see, render, anchor_place, RENDER_LIMIT, ANCHOR_CHECK"
+        "src/server.rs: look, render, anchor_place, RENDER_LIMIT, ANCHOR_CHECK"
       ],
-      "risk": "Headless Chrome often posts its snapshot and then does not exit. anchor_place answers when the snapshot is in; see still waits for the browser (issue #6).",
+      "risk": "Headless Chrome often posts its snapshot and then does not exit. anchor_place answers when the snapshot is in; look still waits for the browser (issue #6).",
       "touched": {
         "note": "anchor_place is new; render takes a time limit."
       }
@@ -243,7 +243,7 @@
       "layer": "disk",
       "label": "events.jsonl",
       "kind": "file",
-      "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. Inbox reads use sequence cursors to read from the end, or indexed byte ranges for timestamp windows. `jelly see` uses recent history kept in memory during startup, append and trim.",
+      "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. Inbox reads use sequence cursors to read from the end, or indexed byte ranges for timestamp windows. `jelly look` uses recent history kept in memory during startup, append and trim.",
       "files": [
         "src/store.rs: Store::log, trim_events, events_back, events_since, recent_events",
         "src/server.rs: inbox"
@@ -356,7 +356,7 @@
     {
       "from": "routes",
       "to": "see",
-      "label": "GET /see · after an ask with --at"
+      "label": "GET /look · after an ask with --at"
     },
     {
       "from": "see",

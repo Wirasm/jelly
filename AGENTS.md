@@ -1,9 +1,10 @@
 # jelly: agent notes
 
 Read `README.md` for what jelly is. Vocabulary: **jelly** (one live app: view, state,
-verbs), **jelly page** (the internal jelly, id `surface`, that lays out the others),
-**attention** (asks and looks for the person), **verb**, **reshape**,
-**event**. Do not call a jelly an app, widget, canvas or artifact.
+verbs), **jelly page** (the internal jelly, id `page`, that lays out the others),
+**attention** (asks for the person), **verb**, **reshape**,
+**event**. Do not call a jelly an app, widget, canvas or artifact. One name per
+thing: no aliases for commands, flags or runtime fields.
 
 ## Invariants
 
@@ -20,6 +21,8 @@ verbs), **jelly page** (the internal jelly, id `surface`, that lays out the othe
   `EventSource`s: each one holds an HTTP connection, and a page with a few jellies
   hits the browser's six-per-host limit and stalls every request.
 - Comments (`comments`) and attention items live beside state, not in it. Undo does not touch them.
+- A jelly's `version` changes only with its view, verbs or state. Comments, asks and
+  other attention do not bump it; an event's `seq` counts everything.
 - A jelly's id is `project:name`; the project is the part before the colon. Short
   names resolve in the CLI (current project) and the runtime (the view's project).
 - Assets live in `~/.jelly/assets/<id>/`, outside state and undo. On Windows the folder

@@ -62,7 +62,7 @@ fn look_shows_desktop_and_only_what_differs_on_a_phone() {
     let d = daemon(home.path());
     let out = look(&d, false);
     let (top, phone) = out.split_once("\nat phone width 390×844, compared with desktop:\n").unwrap_or_else(|| panic!("no phone part:\n{out}"));
-    // The desktop outline, as `see` prints it.
+    // The desktop outline, as `look --text` prints it.
     assert!(top.contains("on screen at 1280×900 (v1):\n- heading \"Plan\" [h1] #title\n- aside: #side\n  - link \"Overview\""), "{out}");
     // The phone part is the difference, not a second outline.
     assert_eq!(phone, "removed  aside: #side\nremoved  link \"Overview\"\nadded    button \"Menu\" #menu\n", "{out}");

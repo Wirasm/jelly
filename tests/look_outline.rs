@@ -5,10 +5,10 @@ mod common;
 use serde_json::json;
 use std::process::{Command, Stdio};
 
-/// `jelly see` turns the page into an outline. Words around inline elements
+/// `jelly look` turns the page into an outline. Words around inline elements
 /// must stay with them, while controls, ids and sections inside text still show.
 #[test]
-fn see_keeps_labels_and_controls_inside_text() {
+fn look_keeps_labels_and_controls_inside_text() {
     let home = tempfile::tempdir().unwrap();
     let mut daemon = Command::new(env!("CARGO_BIN_EXE_jelly"))
         .args(["serve", "--port", "0", "--home"])
@@ -27,7 +27,7 @@ fn see_keeps_labels_and_controls_inside_text() {
     ureq::post(&format!("{url}/api/jellies"))
         .send_json(json!({"name": "t:o", "view": view, "verbs": "const verbs = {};", "state": {}, "by": "test"}))
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &url, "see", "t:o"]).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &url, "look", "t:o", "--text"]).output().unwrap();
     let _ = daemon.kill();
     let text = String::from_utf8_lossy(&out.stdout);
     for line in [

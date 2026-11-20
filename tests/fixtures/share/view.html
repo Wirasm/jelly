@@ -58,9 +58,10 @@ async function loaded(image) {
   assert('assets/dot.png.extra' === jelly.state.picture + '.extra', 'absent longer literal unchanged');
   assert(window.localHelper === true, 'literal uploaded script executes');
   const original = JSON.stringify(jelly.state);
-  const history = JSON.stringify(jelly.items);
+  const history = JSON.stringify(jelly.person.asks);
   let attentionCalls = 0, stateCalls = 0;
-  jelly.onAttention(() => { attentionCalls++; document.body.dataset.attention = ids(jelly.attention); });
+  const open = (asks) => asks.filter(a => !a.answer && !a.withdrawn);
+  jelly.person.onAsk(() => { attentionCalls++; document.body.dataset.attention = ids(open(jelly.person.asks)); });
   jelly.onState(s => {
     stateCalls++;
     assert(s === jelly.state && s.picture === ['assets', 'dot.png'].join('/'), 'unchanged callback state');
@@ -68,13 +69,10 @@ async function loaded(image) {
     document.getElementById('pictures').innerHTML = `<img id="state" src="${s.picture}"><img id="api" src="${jelly.asset(s.file)}"><img id="constructed" src="${['assets', s.file].join('/')}">`;
   });
   assert(attentionCalls === 1 && stateCalls === 1, 'immediate callbacks');
-  assert(ids(jelly.items) === 'a1,a2,a3,a4', 'all history');
-  assert(ids(jelly.attention) === 'a1,a4', 'open attention');
-  assert(ids(jelly.itemsAt('#pictures')) === 'a2,a1', 'anchor order includes answered');
-  assert(ids(jelly.itemsAt('#other')) === 'a4', 'other anchor excludes withdrawn');
-  assert(jelly.itemsAt('#missing').length === 0, 'exact selector');
-  assert(jelly.items[1].answer.text === 'captured answer', 'captured answer');
-  assert(jelly.items[2].withdrawn, 'captured withdrawal');
+  assert(ids(jelly.person.asks) === 'a1,a2,a3,a4', 'all history');
+  assert(ids(open(jelly.person.asks)) === 'a1,a4', 'open asks');
+  assert(jelly.person.asks[1].answer.text === 'captured answer', 'captured answer');
+  assert(jelly.person.asks[2].withdrawn, 'captured withdrawal');
   assert(jelly.asset('unused.png').startsWith('data:image/png;base64,'), 'unused asset');
   assert(jelly.asset('absent.png') === 'assets/absent.png', 'missing asset fallback');
   await Promise.all([...document.images].map(loaded));
@@ -457,20 +455,20 @@ async function loaded(image) {
     w.WebSocket = class {};
     w.fetch = async () => ({ok: true, json: async () => w.__JELLY__});
     w.eval(source);
-    readers.push({items: ids(w.jelly.items), attention: ids(w.jelly.attention), at: ['#pictures', '#other', '#missing'].map(selector => ids(w.jelly.itemsAt(selector)))});
+    readers.push({asks: ids(w.jelly.person.asks), open: ids(open(w.jelly.person.asks))});
     frame.remove();
   }
   assert(JSON.stringify(readers[0]) === JSON.stringify(readers[1]), 'live and shared attention conformance');
   const calls = [];
   const nativeFetch = window.fetch;
   window.fetch = (...args) => { calls.push(args); return nativeFetch(...args); };
-  for (const mutate of [() => jelly.answer('a1', 'x'), () => jelly.call('change'), () => jelly.comment({}, 'no'), () => jelly.reply('x', 'no'), () => jelly.resolve('x')]) {
+  for (const mutate of [() => jelly.person.answer('a1', 'x'), () => jelly.call('change'), () => jelly.person.comment({}, 'no'), () => jelly.person.reply('x', 'no'), () => jelly.person.resolve('x')]) {
     let rejected = false;
     try { await mutate(); } catch (e) { rejected = e.message.includes('read-only'); }
     assert(rejected, 'mutation rejected');
   }
   assert(document.body.textContent.includes('Read-only snapshot.'), 'visible refusal');
-  assert(JSON.stringify(jelly.state) === original && JSON.stringify(jelly.items) === history, 'mutations leave captured data unchanged');
+  assert(JSON.stringify(jelly.state) === original && JSON.stringify(jelly.person.asks) === history, 'mutations leave captured data unchanged');
   assert(calls.length === 0, 'mutations do not request API');
   assert(!performance.getEntriesByType('resource').some(e => /\/api\//.test(e.name)), 'no daemon requests');
   assert(errors.length === 0, errors.join('; '));

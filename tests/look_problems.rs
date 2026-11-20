@@ -5,7 +5,7 @@ mod common;
 use serde_json::json;
 use std::process::{Command, Stdio};
 
-/// `jelly see --problems` on a jelly with this view, at this width.
+/// `jelly look --text --problems` on a jelly with this view, at this width.
 fn problems(view: &str, width: Option<u32>) -> String {
     let home = tempfile::tempdir().unwrap();
     let mut daemon = Command::new(env!("CARGO_BIN_EXE_jelly"))
@@ -19,7 +19,7 @@ fn problems(view: &str, width: Option<u32>) -> String {
     ureq::post(&format!("{url}/api/jellies"))
         .send_json(json!({"name": "t:p", "view": view, "verbs": "const verbs = {};", "state": {}, "by": "test"}))
         .unwrap();
-    let mut args = vec!["--url".to_string(), url, "see".into(), "t:p".into(), "--problems".into()];
+    let mut args = vec!["--url".to_string(), url, "look".into(), "t:p".into(), "--text".into(), "--problems".into()];
     if let Some(w) = width { args.extend(["--width".into(), w.to_string()]); }
     let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(&args).output().unwrap();
     let _ = daemon.kill();

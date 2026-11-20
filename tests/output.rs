@@ -77,7 +77,7 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     let parse = |text: String| -> Value { serde_json::from_str(&text).unwrap() };
 
     daemon.post("/api/jellies", json!({"name": "x", "project": "p", "view": "<ul id=list></ul>", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-    daemon.post("/api/jellies/p:x/attention", json!({"kind": "ask", "title": "Which order?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "recommend": "a", "why": "Oldest first", "by": "agent"}));
+    daemon.post("/api/jellies/p:x/attention", json!({"title": "Which order?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "recommend": "a", "why": "Oldest first", "by": "agent"}));
     daemon.post("/api/jellies/p:x/comment", json!({"anchor": {"selector": "#list"}, "text": "bigger", "by": "person"}));
 
     assert_eq!(jelly(&["attention"]), "p:x  a1 ask \"Which order?\" [a★/b]\n");

@@ -25,16 +25,16 @@ fn daemon(home: &std::path::Path) -> Daemon {
     Daemon(child, url)
 }
 
-/// `see --problems` prints only what the agent must fix.
+/// `look --problems` prints only what the agent must fix.
 #[test]
-fn see_problems_lists_only_errors() {
+fn look_problems_lists_only_errors() {
     let home = tempfile::tempdir().unwrap();
     let d = daemon(home.path());
     let view = r#"<p id="x">fine</p><script>throw new Error("boom in view")</script>"#;
     ureq::post(&format!("{}/api/jellies", d.1))
         .send_json(json!({"name": "t:p", "view": view, "verbs": "const verbs = {};", "state": {}, "by": "test"}))
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "see", "t:p", "--problems"]).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "look", "t:p", "--text", "--problems"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.lines().count() == 1 && text.starts_with("error ") && text.contains("boom in view"), "{text}");
 }
@@ -61,10 +61,10 @@ fn share_defaults_outside_the_working_directory() {
     assert!(tmp.path().join("jelly-share/s.html").exists(), "{}", String::from_utf8_lossy(&out.stdout));
 }
 
-/// An asset added by mistake can be removed, and `see --poster` turns the
+/// An asset added by mistake can be removed, and `look --poster` turns the
 /// screenshot into the jelly page's thumbnail in one step.
 #[test]
-fn assets_can_be_removed_and_posters_come_from_see() {
+fn assets_can_be_removed_and_posters_come_from_look() {
     let home = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();
     let d = daemon(home.path());
@@ -85,7 +85,7 @@ fn assets_can_be_removed_and_posters_come_from_see() {
     assert!(assets().is_empty());
     let missing = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "asset", "t:a", "--rm", "wrong.png"]).output().unwrap();
     assert!(!missing.status.success());
-    jelly(&["see", "t:a", "--poster"]);
+    jelly(&["look", "t:a", "--poster"]);
     assert_eq!(assets(), ["poster.png"]);
     let poster = ureq::get(&format!("{}/j/t:a/assets/poster.png", d.1)).call().unwrap();
     let mut png = Vec::new();

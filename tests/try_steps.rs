@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 /// `jelly try` does the steps in the page as a person would and shows the result,
 /// but the jelly itself is left exactly as it was: same state, same version, no
-/// new events, and `jelly see` still shows the real page.
+/// new events, and `jelly look` still shows the real page.
 #[test]
 fn try_runs_the_steps_and_changes_nothing() {
     let home = tempfile::tempdir().unwrap();
@@ -22,7 +22,7 @@ fn try_runs_the_steps_and_changes_nothing() {
     let view = r#"<ul id="items"></ul>
         <form id="f" hidden><input id="title" aria-label="Title"><button id="save">Save</button></form>
         <button id="add">Add</button>
-        <button id="sign" onclick="jelly.viewer = 'Ana'; jelly.call('sign').catch(() => {})">Sign</button>
+        <button id="sign" onclick="jelly.person.name = 'Ana'; jelly.call('sign').catch(() => {})">Sign</button>
         <script>
         add.onclick = () => { f.hidden = false; };
         f.onsubmit = (e) => { e.preventDefault(); jelly.call("add", { title: title.value }).catch(() => {}); };
@@ -41,11 +41,11 @@ fn try_runs_the_steps_and_changes_nothing() {
 
     let tried = jelly(&["try", "t:x", "--click", "#add", "--type", "#title=Buy milk", "--click", "#save"]);
     // No verb runs here, so the page stays at the real version: if it reported its
-    // screen like a normal render, `see` would show the typed draft.
+    // screen like a normal render, `look` would show the typed draft.
     let drafted = jelly(&["try", "t:x", "--click", "#add", "--type", "#title=Draft"]);
     // A page that names its viewer calls verbs as that person, as it would for real.
     let signed = jelly(&["try", "t:x", "--click", "#sign"]);
-    let seen = jelly(&["see", "t:x"]);
+    let seen = jelly(&["look", "t:x", "--text"]);
     let after: Value = ureq::get(&format!("{url}/api/jellies/t:x")).call().unwrap().into_json().unwrap();
     let log_after = log();
     let _ = daemon.kill();
@@ -56,5 +56,5 @@ fn try_runs_the_steps_and_changes_nothing() {
     assert_eq!(log_after, log_before, "no events recorded");
     assert!(signed.contains(r#"/signed = "person:Ana""#), "{signed}");
     assert!(drafted.contains("call     none: no verb ran") && drafted.contains(r#"= "Draft""#), "{drafted}");
-    assert!(!seen.contains("Buy milk") && !seen.contains("Draft"), "see shows the real jelly, not a trial: {seen}");
+    assert!(!seen.contains("Buy milk") && !seen.contains("Draft"), "look shows the real jelly, not a trial: {seen}");
 }

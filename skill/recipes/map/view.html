@@ -160,7 +160,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const KIND = { person: "Someone", browser: "In the browser", code: "Code", store: "Kept in memory", file: "On disk", process: "A process" };
 const FLAG = { wrong: ["✗", "This is wrong", "What is wrong?"], more: ["…", "Tell me more", "About what? (optional)"], careful: ["⚠", "Careful here", "Why? (optional)"] };
-const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
+const who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
 const narrow = () => matchMedia("(max-width: 900px)").matches;
 
@@ -176,7 +176,7 @@ const S = () => jelly.state || {};
 const nodeOf = (id) => (S().nodes || []).find((n) => n.id === id);
 const traceOf = (id) => (S().traces || []).find((t) => t.id === id);
 const flagsOn = (id) => (S().flags || []).filter((f) => f.node === id);
-const asksAt = (id) => (jelly.itemsAt?.(`#n-${id}`) || []).filter((a) => !a.answer).length;
+const asksAt = (id) => jelly.person.asks.filter((a) => a.anchor?.selector === `#n-${id}` && !a.answer && !a.withdrawn).length;
 const touchedIds = () => (S().nodes || []).filter((n) => n.touched).map((n) => n.id);
 
 // The picture for a trace step: before and after. Terminal text, images, or live HTML.
@@ -439,7 +439,7 @@ if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
   document.head.appendChild(l);
 }
 jelly.onState(render);
-jelly.onAttention?.(() => render(jelly.state));
+jelly.person.onAsk(() => render(jelly.state));
 </script>
 </body>
 </html>

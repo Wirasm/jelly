@@ -40,7 +40,7 @@ done
 env HOME="$root" "$bin" --project test ls --json >out 2>err
 [ "$(cat out)" = '[]' ]
 grep -q '^jelly: daemon started at ' err
-[ -f "$root/.jelly/jellies/surface.json" ]
+[ -f "$root/.jelly/jellies/page.json" ]
 stop
 for project in '' test; do
     client --project "$project" inbox --hook

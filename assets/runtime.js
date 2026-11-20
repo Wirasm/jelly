@@ -1,15 +1,27 @@
-// Injected into every jelly view as `window.jelly`.
+// Injected into every jelly view as `window.jelly`, grouped by what it is about.
 //
+// This jelly:
 //   jelly.state                 current state (read only; change it with verbs)
 //   jelly.onState(fn)           fn(state, event) now and after every change, from anyone
 //   jelly.call(verb, args)      run a verb; resolves to the event, rejects with the reason
-//   jelly.read(name)            another jelly's state ("plan" means plan in this project)
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
-//   jelly.watch(name, fn)       fn(state, event) for another jelly's changes (a feed)
-//   jelly.onAttend(fn)          fn(item) when the dock opens a question; returns unsubscribe
-//   jelly.itemsAt("#thumbs")    questions asked about that element; .answer.option is the pick
-//   jelly.viewer                this browser's name, "" if unset; assign to rename (kept per browser)
-//   jelly.by                    what this browser writes as: "person", or "person:<name>" once named
+//   jelly.events(fn)            fn(event) for every event of every jelly; returns unsubscribe
+//
+// Other jellies ("plan" means plan in this project):
+//   jelly.other(name).state     a promise of its state
+//   jelly.other(name).watch(fn) fn(state, event) now and after its changes; returns unsubscribe
+//   jelly.other(name).open()    put it on screen: full size on the jelly page, else navigate
+//
+// The person:
+//   jelly.person.name           this browser's name, "" if unset; assign to rename (kept per browser)
+//   jelly.person.by             what this browser writes as: "person", or "person:<name>" once named
+//   jelly.person.asks           every ask on this jelly, answered and withdrawn ones too;
+//                               open ones have no .answer and no .withdrawn; .answer.option is the pick
+//   jelly.person.onAsk(fn)      fn() now and whenever asks or comments change
+//   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the dock; returns unsubscribe
+//   jelly.person.comments       comment threads on this jelly
+//   jelly.person.answer(id, { option, text }), .comment(anchor, text), .reply(id, text), .resolve(id)
+//
 //   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
 //   jelly.isPerson(by)          true for "person" and "person:<name>"
 //
@@ -24,15 +36,15 @@
 // one once it has drawn.
 (() => {
   const boot = window.__JELLY__;
-  // Errors the page hits, so `jelly see` can tell the agent its page is broken.
+  // Errors the page hits, so `jelly look` can tell the agent its page is broken.
   const errors = [];
   let snapT = null;
-  // `jelly see` renders with ?agent=1. Jellies framed inside that render (the
+  // `jelly look` renders with ?agent=1. Jellies framed inside that render (the
   // jelly page's tiles) are agent renders too.
   const rendered = (key) => new URLSearchParams(location.search).has(key) ||
     (() => { try { return parent !== window && new URLSearchParams(parent.location.search).has(key); } catch { return false; } })();
   const agentMode = rendered("agent");
-  // `jelly see` also renders with the dark color scheme (and `&dark`) to check
+  // `jelly look` also renders with the dark color scheme (and `&dark`) to check
   // contrast there; that render's snapshot is kept apart from the light one.
   const darkRender = agentMode && rendered("dark");
   // `jelly try` renders carry steps to do as a person would. Their verb calls run
@@ -45,7 +57,7 @@
   console.error = (...a) => { noteError(a.map((x) => x?.stack || x?.message || String(x)).join(" ")); consoleError(...a); };
   let state = boot.state;
   let version = boot.version;
-  let comments = boot.comments || boot.feedback || [];
+  let comments = boot.comments || [];
   let attention = boot.attention || [];
   const attentionSubs = [];
   const attendSubs = new Set();
@@ -57,7 +69,7 @@
   const screenUrl = boot.screenUrl || `${api}/screen`;
   // Names are unique per project: a short name means a jelly in this one.
   const project = boot.name.includes(":") ? boot.name.split(":")[0] : "";
-  const full = (name) => (name.includes(":") || name === "surface" || !project ? name : `${project}:${name}`);
+  const full = (name) => (name.includes(":") || name === "page" || !project ? name : `${project}:${name}`);
 
   function apply(ev) {
     if (ev.version <= version || ev.state === undefined) return;
@@ -95,7 +107,7 @@
 
   async function post(path, body) {
     // Nobody is at an agent render, so nothing it does may be recorded as the person.
-    if (agentMode) throw new Error("jelly see only looks; this change was not made");
+    if (agentMode) throw new Error("jelly look only looks; this change was not made");
     const r = await fetch(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -174,7 +186,7 @@
   })();
 
   listeners.add((ev) => {
-    // A trial shows its own copy of the state, and `see --compare` an earlier
+    // A trial shows its own copy of the state, and `look --compare` an earlier
     // version; real changes meanwhile do not reach either.
     if (ev.jelly !== boot.name || trial || boot.past) return;
     if (ev.kind === "remove") {
@@ -189,64 +201,62 @@
     apply(ev);
   });
 
+  const events = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+  const readState = async (name) => {
+    const r = await fetch(`/api/jellies/${enc(name)}/state`);
+    if (!r.ok) throw new Error((await r.json()).error);
+    return r.json();
+  };
+
   window.jelly = {
     name: boot.name,
     about: boot.about,
-    get viewer() { return viewer(); },
-    set viewer(name) {
-      name = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
-      try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
-    },
-    get by() { return me(); },
-    who,
-    isPerson,
     get state() { return state; },
-    /** Every event from every jelly. Returns a function that stops listening. */
-    events(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-    /** Comment threads on this jelly. */
-    get comments() { return comments; },
-    get feedback() { return comments; }, // old name
     onState(fn) { subs.push(fn); fn(state, null); },
     async call(verb, args = {}) {
       const ev = trial ? await trialCall(verb, args) : await post(`${api}/call`, { verb, args, source: source() });
       apply(ev);
       return ev;
     },
-    async read(name) {
-      const r = await fetch(`/api/jellies/${enc(full(name))}/state`);
-      if (!r.ok) throw new Error((await r.json()).error);
-      return r.json();
-    },
-    watch(name, fn) {
-      name = full(name);
-      let seen = 0;
-      this.read(name).then((s) => fn(s, null), (e) => console.warn(e.message));
-      return this.events((ev) => {
-        if (ev.jelly === name && ev.state !== undefined && ev.version > seen) { seen = ev.version; fn(ev.state, ev); }
-      });
-    },
-    comment: (anchor, text) => post(`${api}/comment`, { anchor, text }),
-    /** Put another jelly on screen: on the jelly page it opens full size, alone it navigates. */
-    focus(name) {
-      name = full(name);
-      if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
-      else location.href = `/j/${enc(name)}/`;
-    },
-    show(name) { return this.focus(name); }, // old name
-    resolve: (id) => post(`${api}/resolve`, { id }),
-    /** Open asks and looks the agent put on this jelly. */
-    get attention() { return attention.filter((a) => !a.answer && !a.withdrawn); },
-    /** Every attention item, answered and withdrawn ones too. */
-    get items() { return attention; },
-    /** The items asked about one element (`--at "#thumbs"`), newest first: item.answer.option is the pick. */
-    itemsAt: (selector) => attention.filter((a) => a.anchor?.selector === selector && !a.withdrawn).reverse(),
-    /** fn() now and whenever attention items or comments change. */
-    onAttention(fn) { attentionSubs.push(fn); fn(); },
-    onAttend(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
-    /** Answer one: an option id, text, or both. A look takes nothing ("seen"). */
-    answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
     asset: (file) => `/j/${enc(boot.name)}/assets/${enc(file)}`,
-    reply: (id, text) => post(`${api}/reply`, { id, text }),
+    events,
+    other(name) {
+      name = full(name);
+      return {
+        name,
+        get state() { return readState(name); },
+        watch(fn) {
+          let seen = 0;
+          readState(name).then((s) => fn(s, null), (e) => console.warn(e.message));
+          return events((ev) => {
+            if (ev.jelly === name && ev.state !== undefined && ev.version > seen) { seen = ev.version; fn(ev.state, ev); }
+          });
+        },
+        open() {
+          if (embedded) parent.postMessage({ type: "jelly:show", name }, location.origin);
+          else location.href = `/j/${enc(name)}/`;
+        },
+      };
+    },
+    person: {
+      get name() { return viewer(); },
+      set name(name) {
+        name = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+        try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
+      },
+      get by() { return me(); },
+      get asks() { return attention; },
+      onAsk(fn) { attentionSubs.push(fn); fn(); },
+      onOpen(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
+      get comments() { return comments; },
+      /** An option id, text, or both. A seen ask takes nothing ("seen"). */
+      answer: (id, { option, text } = {}) => post(`${api}/attention/${enc(id)}/answer`, { option, text: text || "" }),
+      comment: (anchor, text) => post(`${api}/comment`, { anchor, text }),
+      reply: (id, text) => post(`${api}/reply`, { id, text }),
+      resolve: (id) => post(`${api}/resolve`, { id }),
+    },
+    who,
+    isPerson,
   };
 
   // ---- comments: markers on the elements they are about ------------------------
@@ -330,7 +340,7 @@
     p.querySelector(".jf-on").textContent = anchor.quote ? `on "${anchor.quote}"` : `on ${anchor.selector}`;
     const ta = p.querySelector("textarea");
     ta.focus();
-    const send = () => jelly.comment(anchor, ta.value).then(() => { p.remove(); pop = null; }, (e) => alert(e.message));
+    const send = () => jelly.person.comment(anchor, ta.value).then(() => { p.remove(); pop = null; }, (e) => alert(e.message));
     p.querySelector(".jf-send").onclick = send;
     p.querySelector(".jf-cancel").onclick = () => { p.remove(); pop = null; };
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } if (e.key === "Escape") { p.remove(); pop = null; } };
@@ -361,11 +371,11 @@
     if (f.resolved) t.insertAdjacentHTML("beforeend", '<div class="jf-done">Resolved</div>');
     const ta = p.querySelector("textarea");
     const close = () => { p.remove(); pop = null; };
-    const send = () => ta.value.trim() && jelly.reply(f.id, ta.value).then(close, (e) => alert(e.message));
+    const send = () => ta.value.trim() && jelly.person.reply(f.id, ta.value).then(close, (e) => alert(e.message));
     p.querySelector(".jf-close").onclick = close;
     p.querySelector(".jf-send").onclick = send;
     const r = p.querySelector(".jf-resolve");
-    if (r) r.onclick = () => jelly.resolve(f.id).then(close);
+    if (r) r.onclick = () => jelly.person.resolve(f.id).then(close);
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } if (e.key === "Escape") close(); };
   }
 
@@ -543,7 +553,7 @@
   }
   function renderCard(host, a) {
     const root = host.shadowRoot;
-    const isAsk = a.kind === "ask";
+    const isAsk = !a.seen; // a seen ask can be answered with nothing
     const opts = a.options || [];
     const answered = a.answer && !editing.has(a.id);
     const draft = root.querySelector("textarea")?.value || "";
@@ -555,7 +565,7 @@
       const o = opts.find((x) => x.id === a.answer.option);
       c.innerHTML = `<div class="done"><span class="q"></span><span class="a"></span><span class="n"></span><button class="chg">Change</button></div>`;
       c.querySelector(".q").textContent = a.title;
-      c.querySelector(".a").textContent = "✓ " + (o ? o.label || o.id : a.kind === "look" ? "Seen" : "Answered");
+      c.querySelector(".a").textContent = "✓ " + (o ? o.label || o.id : a.seen ? "Seen" : "Answered");
       c.querySelector(".n").textContent = a.answer.text || "";
       c.querySelector(".chg").onclick = () => { editing.add(a.id); drawAttention(); };
       return;
@@ -579,7 +589,7 @@
     const send = (option) => {
       if (isAsk && !option && !ta.value.trim()) return;
       go.disabled = true;
-      jelly.answer(a.id, { option, text: ta.value }).then(() => editing.delete(a.id), (e) => { sync(); alert(e.message); });
+      jelly.person.answer(a.id, { option, text: ta.value }).then(() => editing.delete(a.id), (e) => { sync(); alert(e.message); });
     };
     for (const o of opts) {
       const b = document.createElement("button");
@@ -896,7 +906,7 @@
     document.body.appendChild(workEl);
   }
 
-  // ---- agent view: what is on screen, as text, for `jelly see` ----------------
+  // ---- agent view: what is on screen, as text, for `jelly look` ---------------
   // A `display: contents` element (SvelteKit's app root) has no box of its own,
   // so the walker passes through it to its children instead of skipping it.
   const LEAF = new Set(["button", "a", "input", "textarea", "select", "img", "canvas", "svg", "iframe", "video", "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "label", "td", "th", "figcaption", "blockquote", "summary"]);
@@ -937,7 +947,7 @@
     })(document.body, 0);
     return lines.join("\n");
   }
-  // ---- problems the browser measures, for `jelly see` ----------------------------
+  // ---- problems the browser measures, for `jelly look` ---------------------------
   const CONTROL = "button, a[href], input:not([type=hidden]), textarea, select, [role=button]";
   // The shortest selector an agent can paste into `jelly try` or `--at`: a unique
   // id, test id, href, name, label or class before falling back to the element's path.
@@ -1103,13 +1113,13 @@
   }
   // At most one post per interval, so a page that changes all the time still reports.
   function postSnapshot() {
-    // A trial's page is not what `jelly see` should show; it reports in `runTrial`.
+    // A trial's page is not what `jelly look` should show; it reports in `runTrial`.
     if (snapT || trial) return;
     snapT = setTimeout(() => {
       snapT = null;
       fetch(screenUrl, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
-          // Only `jelly see`'s own renders measure problems; a person's browser does not pay for them.
+          // Only `jelly look`'s own renders measure problems; a person's browser does not pay for them.
           ...(agentMode && { dark: darkRender, contrast: contrast(), problems: darkRender ? [] : problems() }),
           inline: inline(), page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
           exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),

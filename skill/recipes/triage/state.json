@@ -19,7 +19,7 @@
     { "id": "1", "ref": "#1", "title": "An agent can ask a question and get the answer in one command", "lane": "now", "agent_lane": "now",
       "reason": "The loop agents use most: one command where there are two.", "confidence": 0.85, "impact": 5, "effort": 2,
       "moved": null, "checked": null, "done": null },
-    { "id": "6", "ref": "#6", "title": "The first jelly see after the daemon starts returns a snapshot", "lane": "now", "agent_lane": "now",
+    { "id": "6", "ref": "#6", "title": "The first jelly look after the daemon starts returns a snapshot", "lane": "now", "agent_lane": "now",
       "reason": "The cause is known now (F3), and the ask check already works round it the same way.", "confidence": 0.8, "impact": 4, "effort": 2,
       "moved": null, "checked": null, "done": null },
     { "id": "8", "ref": "#8", "title": "Only jelly's own pages and the CLI can talk to the daemon", "lane": "now", "agent_lane": "now",

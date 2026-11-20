@@ -8,7 +8,7 @@ pile for each, and where were you guessing?"
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes triage --out DIR
 jelly new triage --recipe triage --state state.json --about "Triage: <what is being sorted>"
-jelly see triage                              # fix every `!` and `error` line first
+jelly look triage                             # fix every `!` and `error` line first
 jelly focus triage
 ```
 

@@ -94,6 +94,19 @@ fn an_answer_given_while_the_asker_listens_is_returned() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), "a1 answered: a\n");
 }
 
+/// `ask --seen` takes no options; the person can answer with nothing.
+#[test]
+fn a_seen_ask_answered_with_nothing_prints_seen() {
+    let d = daemon();
+    let person = react(&d.url, Duration::ZERO, "answer", json!({"by": "person"}));
+    let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["--url", &d.url, "ask", "t:q", "Check the list", "--seen", "--wait", "--timeout", "20"])
+        .output().unwrap();
+    person.join().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "a1 answered: seen\n");
+}
+
 #[test]
 fn a_withdrawn_ask_returns_and_json_prints_the_item() {
     let d = daemon();
