@@ -3,7 +3,21 @@
 // cannot read this page, its URL (the link) or the socket, and reaches the
 // jelly only through postMessage, which this page turns into the few things a
 // link may do. The view runs the daemon's own runtime.js, sent by the daemon.
-export const SHELL = String.raw`<!doctype html>
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const FAVICON = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="#ff4f8b"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><circle cx="16" cy="24" r="1.9" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.9" fill="#3b0a1e"/></svg>`);
+
+/** The link page, titled with the jelly's about line so a pasted link previews as what it is. */
+export const shell = (about: string) => SHELL.replace("<title>jelly</title>", `<title>${esc(about ? `${about} · jelly` : "jelly")}</title>
+<meta property="og:title" content="${esc(about || "A jelly for you")}">
+<meta property="og:description" content="A live page shared with you. Open it to use it: tap, answer, comment.">
+<meta property="og:site_name" content="jelly">
+<meta property="og:image" content="https://getjellyware.com/og.png">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="${FAVICON}">
+<link rel="apple-touch-icon" href="https://getjellyware.com/apple-touch-icon.png">`);
+
+const SHELL = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">

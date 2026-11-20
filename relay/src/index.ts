@@ -12,7 +12,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { engine, run, Refusal } from "./verbs";
-import { SHELL } from "./shell";
+import { shell } from "./shell";
 
 interface Env {
   LIVE: DurableObjectNamespace<Live>;
@@ -262,7 +262,7 @@ export class Live extends DurableObject<Env> {
     if (kind === "assets") return this.doc ? this.asset(decodeURIComponent(rest)) : notFound();
     const [secret, ws] = rest.split("/");
     const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number }>("SELECT who, can_act FROM people WHERE hash = ?", await sha256(secret)).toArray()[0];
-    if (ws !== "ws") return row ? new Response(SHELL, { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
+    if (ws !== "ws") return row ? new Response(shell(this.doc?.about ?? ""), { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
     if (req.headers.get("Upgrade") !== "websocket") return text("expected a WebSocket\n", 426);
     const [client, server] = Object.values(new WebSocketPair());
     if (!row || !this.doc) {
