@@ -55,6 +55,7 @@ jelly undo plan                                  # undo the last change to its v
 jelly pin plan                                   # keep it: a week untouched no longer archives it
 jelly restore plan                               # bring an archived jelly back to the jelly page
 jelly rm plan                                    # remove it with its undo history and assets; cannot be undone
+jelly move plan other                            # move it to project other as other:plan, assets too; "" for no project
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
