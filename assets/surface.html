@@ -368,7 +368,10 @@
     col.querySelector(".empty")?.remove();
     col.insertAdjacentHTML("beforeend", list.length
       ? `<div class="end">Agents add jellies here as they work. Pinned ones move to the side. Quiet ones archive after a week.${archivedNote()}</div>`
-      : (PROJECT ? `<div class="empty"><h2>Nothing in ${esc(PROJECT)} yet</h2>Agents working in that repo put their jellies here. Move one in with <code>jelly project NAME ${esc(PROJECT)}</code>.</div>` : `<div class="empty"><h2>Nothing in the stream</h2>Agents put things here as they work. Ask one to show you something, or run <code>jelly ask</code>.</div>`));
+      : jellies.some((j) => j.pinned)
+        // Everything here is pinned, so the stream is empty but the project is not.
+        ? `<div class="empty"><h2>Everything${PROJECT ? ` in ${esc(PROJECT)}` : ""} is pinned</h2>Pinned jellies are on the side. New ones agents make appear here.${archivedNote()}</div>`
+        : (PROJECT ? `<div class="empty"><h2>Nothing in ${esc(PROJECT)} yet</h2>Agents working in that repo put their jellies here. Move one in with <code>jelly move NAME ${esc(PROJECT)}</code>.</div>` : `<div class="empty"><h2>Nothing in the stream</h2>Agents put things here as they work. Ask one to show you something, or run <code>jelly ask</code>.</div>`));
     if (fresh.length) arrived(fresh[0]);
     watchSeen();
   }
