@@ -92,3 +92,29 @@ fn assets_can_be_removed_and_posters_come_from_see() {
     std::io::Read::read_to_end(&mut poster.into_reader(), &mut png).unwrap();
     assert!(png.starts_with(b"\x89PNG"));
 }
+
+/// When the person names a jelly loosely ("the one about the three issues"),
+/// `jelly find` resolves it across every project, archived ones included, and
+/// prints the same short reference the person can copy from the jelly page.
+#[test]
+fn find_resolves_a_loosely_named_jelly() {
+    let home = tempfile::tempdir().unwrap();
+    let d = daemon(home.path());
+    for (name, about) in [("a:three", "Shaping the three issues that need you"), ("b:other", "Something else"), ("b:old", "Three old issues")] {
+        ureq::post(&format!("{}/api/jellies", d.1))
+            .send_json(json!({"name": name, "about": about, "view": "<p>x</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}))
+            .unwrap();
+    }
+    ureq::post(&format!("{}/api/jellies/b:old/archive", d.1)).send_json(json!({"by": "test"})).unwrap();
+    let find = |words: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "find"]).args(words).output().unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let (ok, text) = find(&["three", "issues"]);
+    assert!(ok, "{text}");
+    let first = text.lines().next().unwrap_or("");
+    assert_eq!(first, "a:three · Shaping the three issues that need you", "live jellies come first: {text}");
+    assert!(text.contains("made by test") && text.contains("b:old · Three old issues") && text.contains("archived"), "{text}");
+    assert!(!text.contains("b:other"), "{text}");
+    assert!(!find(&["nothing", "like", "this"]).0);
+}
