@@ -141,3 +141,17 @@ fn clipped_text_is_caught() {
     assert!(out.contains(r#"!        text cut off: div.name "This text is much too long for""#), "{out}");
     assert_clean(&format!(r#"<div style="{clip}; text-overflow: ellipsis">This text is much too long for its box</div>"#), None);
 }
+
+/// A link scrolled out of view inside a sideways tab bar is reachable by
+/// scrolling the bar, so it is not "covered" by the button beside the bar.
+/// A control really under another element still is.
+#[test]
+fn links_scrolled_away_in_a_tab_bar_are_not_covered() {
+    let tabs: String = (0..20).map(|i| format!(r#"<a href="/p/{i}" style="padding: 4px 10px">project-{i}</a>"#)).collect();
+    assert_clean(&format!(r#"<header style="display: flex; gap: 8px; align-items: center">
+        <nav style="display: flex; overflow-x: auto; min-width: 0">{tabs}</nav>
+        <button style="margin-left: auto; white-space: nowrap">Set your name</button></header>"#), None);
+    let out = problems(r#"<button id="under" style="position: absolute; top: 40px; left: 40px; width: 80px; height: 40px">Hidden</button>
+        <div style="position: absolute; top: 30px; left: 30px; width: 120px; height: 60px; background: #eee">On top</div>"#, None);
+    assert!(out.contains("covered by another element"), "{out}");
+}

@@ -46,6 +46,8 @@
   .dot.live { background: var(--accent); box-shadow: 0 0 0 3px var(--brand-glow); }
   .top .count { color: var(--dark-faint); font-size: 12px; }
   .projects { display: flex; gap: 2px; margin-left: 10px; overflow-x: auto; min-width: 0; }
+  /* More projects past the edge: fade it, so the hidden ones read as "scroll for more". */
+  .projects.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
   .projects a { color: var(--bar-muted); text-decoration: none; font-size: 12.5px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
   .projects a:hover { color: var(--bar-ink); background: var(--brand-soft); }
   .projects a.on { color: var(--chip-on-ink); background: var(--chip-on); }
@@ -715,13 +717,26 @@
   }
 
   function renderProjects(all) {
-    const counts = {};
-    for (const j of all) if (j.project) counts[j.project] = (counts[j.project] || 0) + 1;
+    const counts = {}, latest = {};
+    for (const j of all) if (j.project) {
+      counts[j.project] = (counts[j.project] || 0) + 1;
+      latest[j.project] = Math.max(latest[j.project] || 0, j.updated_ms || 0);
+    }
     const link = (href, label, n, on) => `<a href="${href}" class="${on ? "on" : ""}">${esc(label)}<span>${n}</span></a>`;
-    $("projects").innerHTML = link("/", "All", all.length, !PROJECT)
-      + Object.keys(counts).sort().map((p) => link(`/p/${enc(p)}`, p, counts[p], p === PROJECT)).join("")
+    // Most recently active first, so the projects in use are the visible ones.
+    const nav = $("projects");
+    nav.innerHTML = link("/", "All", all.length, !PROJECT)
+      + Object.keys(counts).sort((a, b) => latest[b] - latest[a] || a.localeCompare(b)).map((p) => link(`/p/${enc(p)}`, p, counts[p], p === PROJECT)).join("")
       + (PROJECT && !counts[PROJECT] ? link(`/p/${enc(PROJECT)}`, PROJECT, 0, true) : "");
+    fadeProjects();
   }
+  function fadeProjects() {
+    const nav = $("projects");
+    nav.classList.toggle("more", nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1);
+  }
+
+  $("projects").addEventListener("scroll", fadeProjects, { passive: true });
+  addEventListener("resize", fadeProjects);
 
   async function refresh() {
     const all = (await (await fetch("/api/jellies")).json()).filter((j) => j.name !== "surface");

@@ -1061,11 +1061,23 @@
       if (undersized(p)) return Math.hypot(p.left + p.width / 2 - x, p.top + p.height / 2 - y) >= 24;
       return Math.hypot(Math.max(p.left - x, 0, x - p.right), Math.max(p.top - y, 0, y - p.bottom)) >= 12;
     });
+    // Scrolled out of view inside a box that scrolls (a sideways tab bar): reachable
+    // by scrolling that box, so not covered by whatever sits at that spot.
+    const clipped = (c, r) => {
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      for (let a = c.parentElement; a && a !== document.body; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (!/auto|scroll|hidden/.test(cs.overflowX + cs.overflowY)) continue;
+        const b = a.getBoundingClientRect();
+        if (x < b.left || x > b.right || y < b.top || y > b.bottom) return true;
+      }
+      return false;
+    };
     for (const c of controls) {
       const r = rects.get(c), name = `${c.tagName.toLowerCase()} ${named(c)} ${shortSelector(c)}`;
       if ((r.right > W + 1 || r.left < -1) && !scrolls(c)) { off.push(name); continue; }
       const p = r.top >= 0 && r.bottom <= innerHeight ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
-      if (p && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p)) {
+      if (p && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p) && !clipped(c, r)) {
         covered.push(`${name} under ${p.closest(".jf-btn") ? "jelly's Comment button (move it with --jelly-comment-inset)" : shortSelector(p)}`);
       }
       // A labelled checkbox or radio is tapped through its label; a link inside text is exempt.
