@@ -3,6 +3,7 @@
 mod design;
 mod disk;
 mod recipes;
+mod relay;
 mod server;
 mod store;
 mod startup;
@@ -364,12 +365,31 @@ enum Cmd {
         rm: bool,
     },
     /// Write a read-only snapshot of a jelly as one HTML file you can send
-    /// anyone: state baked in, assets inlined.
+    /// anyone: state baked in, assets inlined. With --link, publish it to your
+    /// relay instead and print an unguessable link; sharing again updates the
+    /// same link with the jelly as it is now.
     Share {
         name: String,
         /// Where to write it (default: <temp dir>/jelly-share/<name>.html, so it never lands in a repo).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "link")]
         out: Option<PathBuf>,
+        /// Publish to your relay (`jelly relay URL`) and print a read-only link.
+        #[arg(long)]
+        link: bool,
+        /// Days until the link stops working (default 30, at most 365).
+        #[arg(long, requires = "link", default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=365))]
+        days: u64,
+    },
+    /// Stop a jelly's link from working, now.
+    Unshare {
+        name: String,
+    },
+    /// Use the relay you deployed (relay/ in the jelly repo) for share links.
+    /// Saves the URL with a new publish secret in $JELLY_HOME/relay.json and
+    /// prints the command that gives the relay the same secret.
+    Relay {
+        /// The relay's URL, e.g. https://jelly-relay.you.workers.dev. Without it, prints the current one.
+        url: Option<String>,
     },
     /// What the person did in this project's jellies since you last asked.
     /// Reader identity: explicit --as / JELLY_AS, then --session-id /
@@ -516,7 +536,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. }) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. }) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -527,7 +547,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
     if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
-        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Inbox { .. }) {
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Inbox { .. }) {
         return Err("this command has no --json output".into());
     }
     // A change prints the daemon's event as it is, or one line about it.
@@ -551,9 +571,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
                 std::env::temp_dir().join(format!("jelly-temp-{}-{nanos}", std::process::id()))
             } else {
-                home.or_else(|| std::env::var_os("JELLY_HOME").map(PathBuf::from))
-                    .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
-                    .ok_or("could not find your home directory: set --home or JELLY_HOME")?
+                match home { Some(h) => h, None => default_home()? }
             };
             let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
             rt.block_on(async {
@@ -1025,11 +1043,25 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Share { name, out } => {
+        Cmd::Share { name, out, link, days } => {
             let name = id(&name)?;
             let resp = ureq::get(&api(&format!("/{name}/share"))).call().map_err(describe)?;
             let mut html = String::new();
             resp.into_reader().read_to_string(&mut html).map_err(|e| e.to_string())?;
+            if link {
+                let home = relay::Home(default_home()?);
+                let relay = home.relay()?;
+                // Sharing again keeps the link, so people who have it see the update.
+                let token = match home.link(&name)? {
+                    Some(l) if l.url.starts_with(&relay.url) => l.token,
+                    _ => relay::token(22)?,
+                };
+                let expires_at = relay::publish(&relay, &token, &html, days * 86_400)?;
+                let url = format!("{}/j/{token}", relay.url);
+                home.save_link(&name, Some(relay::Link { token, url: url.clone(), expires_at }))?;
+                output(format_args!("{url}\n  read-only snapshot of {name}, works for {days} day{}; anyone with the link can open it. `jelly unshare {name}` stops it.\n", if days == 1 { "" } else { "s" }))?;
+                return Ok(());
+            }
             let short = name.split_once(':').map_or(name.as_str(), |(_, n)| n);
             let out = match out {
                 Some(out) => out,
@@ -1041,6 +1073,26 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             };
             std::fs::write(&out, &html).map_err(|e| format!("{}: {e}", out.display()))?;
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
+            Ok(())
+        }
+        Cmd::Unshare { name } => {
+            let name = id(&name)?;
+            let home = relay::Home(default_home()?);
+            let Some(link) = home.link(&name)? else { return Err(format!("{name} has no link to stop").into()) };
+            relay::revoke(&home.relay()?, &link.token)?;
+            home.save_link(&name, None)?;
+            output(format_args!("{} no longer works\n", link.url))?;
+            Ok(())
+        }
+        Cmd::Relay { url } => {
+            let home = relay::Home(default_home()?);
+            match url {
+                None => output(format_args!("{}\n", home.relay()?.url))?,
+                Some(url) => {
+                    let secret = home.set_relay(&url)?;
+                    output(format_args!("relay: {}\nGive the relay the same publish secret (in relay/):\n  echo {secret} | npx wrangler secret put RELAY_SECRET\n", url.trim_end_matches('/')))?;
+                }
+            }
             Ok(())
         }
         Cmd::Inbox { hook, mine, session_id } => {
@@ -1423,6 +1475,13 @@ fn upload_asset(jelly: &str, file: &str, bytes: &[u8], by: &str) -> Result<Strin
         .send_bytes(bytes)
         .map_err(describe)?;
     Ok(format!("assets/{file}  ({} KB)", bytes.len().div_ceil(1024)))
+}
+
+/// Where jellies are kept when no --home is given: $JELLY_HOME or ~/.jelly.
+fn default_home() -> Result<PathBuf, String> {
+    std::env::var_os("JELLY_HOME").map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
+        .ok_or_else(|| "could not find your home directory: set --home or JELLY_HOME".into())
 }
 
 fn get(url: &str) -> Result<Value, String> {

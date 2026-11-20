@@ -184,6 +184,8 @@ jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses ass
 jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
+jelly share plan --link          # a read-only link anyone can open, e.g. on their phone; again = update it
+jelly unshare plan               # the link stops working
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly pin plan                   # keep it; unpinned jellies archive after a quiet week
 jelly rm plan
