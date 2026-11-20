@@ -340,7 +340,9 @@
   const DAY = 86400000;
   const lastAt = (f) => Math.max(f.at_ms, ...(f.replies || []).map((r) => r.at_ms));
   // Open threads, plus resolved ones from the last day so the person sees the answer.
-  const visible = () => comments.filter((f) => !f.resolved || Date.now() - lastAt(f) < DAY);
+  // A comment without a selector is about the whole jelly: it has no element to
+  // pin to, and the jelly page shows it in the jelly's header instead.
+  const visible = () => comments.filter((f) => f.anchor?.selector && (!f.resolved || Date.now() - lastAt(f) < DAY));
   function thread(f, x, y) {
     const msgs = [{ by: f.by, text: f.text, at_ms: f.at_ms }, ...(f.replies || [])];
     const p = openPop(x, y, `<div class="jf-on"></div><div class="jf-thread"></div>
@@ -372,7 +374,7 @@
     markerEls.forEach((p) => p.remove());
     markerEls = [];
     const shown = visible();
-    const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor?.selector || "body" } })), keepFocus());
+    const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor.selector } })), keepFocus());
     shown.forEach((f, i) => {
       const el = anchors[i].element;
       if (!el) return;

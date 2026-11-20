@@ -129,6 +129,9 @@ jelly reply plan c3 "Split it into two steps." --resolve   # done; without --res
 jelly wait plan --since seq:42 --timeout 60 --json         # block until someone else changes it
 ```
 
+A question the person asks about a whole jelly arrives like a comment, marked
+"on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.
+
 `ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
 --since` to catch anything after your change. `wait` exits 2 on timeout. In a
 script, add `--json` to any command instead of parsing its text.

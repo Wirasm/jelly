@@ -300,6 +300,9 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
             "attention": j.attention.iter().filter(|a| a.is_open()).count(),
+            "answered": j.attention.iter().filter(|a| a.answer.is_some() && a.withdrawn.is_none()).count(),
+            // Threads about the whole jelly (no selector); the jelly page shows them in the header.
+            "whole_jelly_comments": j.comments.iter().filter(|c| c.is_whole_jelly()).collect::<Vec<_>>(),
             "working": j.working,
             "poster": store.assets(&j.name).into_iter().find(|f| f.starts_with("poster.")),
         }))
@@ -1488,7 +1491,7 @@ fn summary(app: &App, j: &crate::store::Jelly) -> String {
         line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
     }
     for f in j.comments.iter().filter(|f| !f.resolved) {
-        line(&mut out, format!("comment  {} on {}{}: {:?}{}", f.id, f.anchor["selector"].as_str().unwrap_or("the page"), named(&f.by), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
+        line(&mut out, format!("comment  {} on {}{}: {:?}{}", f.id, crate::store::comment_place(&f.anchor), named(&f.by), f.text, if f.replies.is_empty() { "" } else { " (thread)" }));
     }
     for e in &mine {
         line(&mut out, format!("person   {} {}{}", ago(e.at_ms), viewer(&e.by).map(|n| format!("{n} ")).unwrap_or_default(), e.describe()));
