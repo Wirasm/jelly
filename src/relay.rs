@@ -1,23 +1,30 @@
-//! Share links through your own relay (relay/ in this repo, deployed to your
-//! Cloudflare account). The CLI holds the relay's URL and publish secret in
-//! `<home>/relay.json`, and the links it made in `<home>/shares.json`, so
-//! sharing again updates the same link and `unshare` can revoke it.
+//! Your relay (relay/ in this repo, deployed to your Cloudflare account) and
+//! what the daemon keeps about the jellies shared through it. The relay's URL
+//! and secret are in `<home>/relay.json`; each share's record, with the links it
+//! minted, in `<home>/shares/<share id>.json`, so shares survive restarts.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
+use crate::encode;
 use std::path::{Path, PathBuf};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Relay {
     pub url: String,
     pub secret: String,
 }
 
+/// One shared jelly. While it exists, the relay's copy is the live one.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Link {
-    pub token: String,
-    pub url: String,
-    pub expires_at: u64,
+pub struct Record {
+    pub jelly: String,
+    /// The relay's name for it: the first half of every link.
+    pub share: String,
+    /// The last of the relay's events mirrored into the local store.
+    pub seq: u64,
+    /// Each link's secret by whom it is for; "" is the view-only link.
+    pub links: BTreeMap<String, String>,
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, String> {
@@ -67,50 +74,124 @@ impl Home {
         Ok(secret)
     }
 
-    fn links(&self) -> Result<BTreeMap<String, Link>, String> {
-        Ok(read_json(&self.0.join("shares.json"))?.unwrap_or_default())
-    }
-
-    pub fn link(&self, jelly: &str) -> Result<Option<Link>, String> {
-        Ok(self.links()?.remove(jelly))
-    }
-
-    pub fn save_link(&self, jelly: &str, link: Option<Link>) -> Result<(), String> {
-        let mut all = self.links()?;
-        match link {
-            Some(l) => all.insert(jelly.to_string(), l),
-            None => all.remove(jelly),
+    pub fn records(&self) -> Result<Vec<Record>, String> {
+        let dir = self.0.join("shares");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
         };
-        write_json(&self.0.join("shares.json"), &all)
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|x| x == "json") {
+                out.extend(read_json::<Record>(&entry.path())?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save(&self, r: &Record) -> Result<(), String> {
+        write_json(&self.0.join("shares").join(format!("{}.json", r.share)), r)
+    }
+
+    pub fn forget(&self, share: &str) -> Result<(), String> {
+        let path = self.0.join("shares").join(format!("{share}.json"));
+        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(format!("{}: {e}", path.display())) })
     }
 }
 
-fn relay_error(e: ureq::Error, relay: &Relay) -> String {
-    match e {
-        ureq::Error::Status(401, _) => format!("{} refused the publish secret; run `jelly relay {}` and set the new secret on the relay", relay.url, relay.url),
-        ureq::Error::Status(code, resp) => format!("{}: {code} {}", relay.url, resp.into_string().unwrap_or_default().trim()),
-        ureq::Error::Transport(t) => format!("cannot reach the relay at {} ({t})", relay.url),
+/// Why the relay did not do something.
+#[derive(Debug)]
+pub enum Fail {
+    /// It refused the change, and says why (a verb threw, no such ask).
+    Refused(String),
+    /// The share is over: unshared, or expired.
+    Gone,
+    Other(String),
+}
+
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Fail::Refused(m) | Fail::Other(m) => f.write_str(m),
+            Fail::Gone => f.write_str("the share has ended"),
+        }
     }
 }
 
-/// Publishes `html` under `token` for `ttl_s` seconds; returns when it expires (ms).
-pub fn publish(relay: &Relay, token: &str, html: &str, ttl_s: u64) -> Result<u64, String> {
-    let resp: serde_json::Value = ureq::put(&format!("{}/api/shares/{token}?ttl={ttl_s}", relay.url))
-        .set("Authorization", &format!("Bearer {}", relay.secret))
-        .set("Content-Type", "text/html; charset=utf-8")
-        .send_string(html)
-        .map_err(|e| relay_error(e, relay))?
-        .into_json()
-        .map_err(|e| e.to_string())?;
-    resp["expires_at"].as_u64().ok_or_else(|| format!("{}: unexpected answer {resp}", relay.url))
-}
+impl Relay {
+    fn at(&self, method: &str, share: &str, path: &str) -> ureq::Request {
+        ureq::request(method, &format!("{}/api/live/{share}{path}", self.url)).set("Authorization", &format!("Bearer {}", self.secret))
+    }
 
-pub fn revoke(relay: &Relay, token: &str) -> Result<(), String> {
-    ureq::delete(&format!("{}/api/shares/{token}", relay.url))
-        .set("Authorization", &format!("Bearer {}", relay.secret))
-        .call()
-        .map_err(|e| relay_error(e, relay))?;
-    Ok(())
+    fn fail(&self, e: ureq::Error) -> Fail {
+        match e {
+            ureq::Error::Status(401, _) => Fail::Other(format!("{} refused the publish secret; run `jelly relay {}` and set the new secret on the relay", self.url, self.url)),
+            ureq::Error::Status(404, _) => Fail::Gone,
+            ureq::Error::Status(400, resp) => {
+                let body: Value = resp.into_json().unwrap_or_default();
+                Fail::Refused(body["error"].as_str().unwrap_or("the relay refused the change").into())
+            }
+            ureq::Error::Status(code, resp) => Fail::Other(format!("{}: {code} {}", self.url, resp.into_string().unwrap_or_default().trim())),
+            ureq::Error::Transport(t) => Fail::Other(format!("cannot reach the relay at {} ({t})", self.url)),
+        }
+    }
+
+    fn json(&self, req: ureq::Request, body: Option<&Value>) -> Result<Value, Fail> {
+        let resp = match body { Some(b) => req.send_json(b), None => req.call() }.map_err(|e| self.fail(e))?;
+        if resp.status() == 204 { return Ok(Value::Null); }
+        resp.into_json().map_err(|e| Fail::Other(format!("{}: unreadable answer: {e}", self.url)))
+    }
+
+    /// Puts the jelly on the relay, with the runtime its view runs on there.
+    pub fn publish(&self, share: &str, doc: &Value, runtime: &str) -> Result<(), Fail> {
+        self.json(self.at("PUT", share, ""), Some(&serde_json::json!({"doc": doc, "runtime": runtime}))).map(drop)
+    }
+
+    pub fn put_asset(&self, share: &str, file: &str, bytes: &[u8], content_type: &str) -> Result<(), Fail> {
+        self.at("PUT", share, &format!("/assets/{}", encode(file))).set("Content-Type", content_type).send_bytes(bytes).map_err(|e| self.fail(e))?;
+        Ok(())
+    }
+
+    pub fn remove_asset(&self, share: &str, file: &str) -> Result<(), Fail> {
+        self.json(self.at("DELETE", share, &format!("/assets/{}", encode(file))), None).map(drop)
+    }
+
+    /// Lets the holder of `secret` in for `days`; returns when the share expires (ms).
+    pub fn mint(&self, share: &str, secret: &str, who: &str, days: u64) -> Result<u64, Fail> {
+        let body = serde_json::json!({"secret": secret, "who": who, "can_act": !who.is_empty(), "days": days});
+        let resp = self.json(self.at("POST", share, "/people"), Some(&body))?;
+        resp["expires_at"].as_u64().ok_or_else(|| Fail::Other(format!("{}: unexpected answer {resp}", self.url)))
+    }
+
+    /// Stops `who`'s link; their open pages close at once.
+    pub fn revoke(&self, share: &str, who: &str) -> Result<(), Fail> {
+        self.json(self.at("DELETE", share, &format!("/people?who={}", encode(who))), None).map(drop)
+    }
+
+    /// One change; returns the batch with its event.
+    pub fn change(&self, share: &str, op: &Value) -> Result<Value, Fail> {
+        self.json(self.at("POST", share, "/op"), Some(op))
+    }
+
+    /// Every event after `seq`, with the jelly as it is now.
+    pub fn since(&self, share: &str, seq: u64) -> Result<Value, Fail> {
+        self.json(self.at("GET", share, &format!("/events?since={seq}")), None)
+    }
+
+    /// Ends the share; returns the events after `seq` it had not sent yet.
+    pub fn end(&self, share: &str, seq: u64) -> Result<Value, Fail> {
+        self.json(self.at("DELETE", share, &format!("?since={seq}")), None)
+    }
+
+    /// The daemon's own WebSocket to the share, catching up from `seq`.
+    pub fn socket(&self, share: &str, seq: u64) -> String {
+        format!("{}/api/live/{share}/ws?since={seq}", self.url.replacen("http", "ws", 1))
+    }
+
+    pub fn link(&self, share: &str, secret: &str) -> String {
+        format!("{}/j/{share}{secret}", self.url)
+    }
 }
 
 #[cfg(test)]

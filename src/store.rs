@@ -465,6 +465,35 @@ pub struct Event {
     pub state: Option<Value>,
 }
 
+/// One change as the relay of a shared jelly made it (relay/src/index.ts).
+#[derive(Deserialize, Clone, Debug)]
+pub struct Mirrored {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub kind: EventKind,
+    pub by: String,
+    #[serde(default)]
+    pub verb: Option<String>,
+    #[serde(default)]
+    pub args: Option<Value>,
+    #[serde(default)]
+    pub source: Option<Value>,
+    pub version: u64,
+    pub view_rev: u64,
+}
+
+/// The parts of a shared jelly the relay sends after a change; the view and
+/// verbs only when they may have changed.
+#[derive(Deserialize, Default, Debug)]
+pub struct MirroredDoc {
+    pub state: Option<Value>,
+    pub view: Option<String>,
+    pub verbs: Option<String>,
+    pub about: Option<String>,
+    pub comments: Option<Vec<Comment>>,
+    pub attention: Option<Vec<Attention>>,
+}
+
 /// Every kind of change. Adding one means adding it here and to `describe`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -600,6 +629,8 @@ pub struct Store {
     trims: u64,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
+    /// When a mirrored change happened on the relay; taken by the next event.
+    at_ms: Option<u64>,
     #[cfg(test)]
     pub log_failure: Option<(u64, usize)>,
 }
@@ -666,7 +697,7 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, #[cfg(test)] log_failure: None })
+        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, at_ms: None, #[cfg(test)] log_failure: None })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -1122,6 +1153,46 @@ impl Store {
         Ok(ev)
     }
 
+    /// Records a change the hosted copy of a shared jelly made (`share.rs`): the
+    /// event as it happened there, with its version, and with `doc` the jelly's
+    /// parts as they are after it. A change mirrored without `doc` (one of several
+    /// caught up at once) moves the version only, so versions before it cannot be
+    /// rebuilt for `look --compare`.
+    pub fn mirror(&mut self, name: &str, ev: &Mirrored, doc: Option<&MirroredDoc>) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
+        let entry = self.entry(name)?;
+        let j = &mut entry.jelly;
+        let mut step = Step::before(j);
+        let mut changed = Vec::new();
+        if let Some(doc) = doc {
+            if let Some(state) = &doc.state {
+                diff(&j.state, state, &mut String::new(), &mut changed);
+                step.state = state_step(state, &j.state);
+                j.state = state.clone();
+            }
+            let replaced = |old: &mut String, new: &Option<String>| new.as_ref().filter(|n| *n != old).map(|n| std::mem::replace(old, n.clone()));
+            step.view = replaced(&mut j.view, &doc.view);
+            step.verbs = replaced(&mut j.verbs, &doc.verbs);
+            if let Some(a) = &doc.about { j.about = a.clone(); }
+            if let Some(c) = &doc.comments { j.comments = c.clone(); }
+            if let Some(a) = &doc.attention { j.attention = a.clone(); }
+        }
+        if ev.kind == EventKind::Reshape {
+            j.shaped_by = Some(ev.by.clone());
+        }
+        let moved = ev.version != j.version;
+        j.version = ev.version;
+        j.view_rev = ev.view_rev;
+        match (moved, doc) {
+            (true, Some(_)) => push_step(entry, step),
+            (true, None) => entry.history_from = entry.history_from.max(ev.version + 1),
+            (false, _) => {}
+        }
+        self.source = ev.source.clone();
+        self.at_ms = Some(ev.at_ms);
+        self.record(name, ev.kind, &ev.by, ev.verb.clone(), ev.args.clone(), changed, previous_entry)
+    }
+
     fn entry(&mut self, name: &str) -> Result<&mut Entry, Error> {
         self.jellies.get_mut(name).ok_or_else(|| Error::NotFound(name.into()))
     }
@@ -1144,6 +1215,22 @@ impl Store {
         if matches!(kind, EventKind::Call | EventKind::Set | EventKind::Undo) || (kind == EventKind::Reshape && reshaped) {
             entry.jelly.version += 1;
         }
+        self.record(name, kind, by, verb, args, changed, previous)
+    }
+
+    /// Saves the jelly as it is, logs the event and returns it with state attached.
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        name: &str,
+        kind: EventKind,
+        by: &str,
+        verb: Option<String>,
+        args: Option<Value>,
+        changed: Vec<String>,
+        previous: Option<Entry>,
+    ) -> Result<Event, Error> {
+        let entry = self.jellies.get_mut(name).expect("caller checked");
         entry.jelly.updated_ms = now_ms();
         if kind != EventKind::Archive {
             entry.jelly.archived = false;
@@ -1180,7 +1267,7 @@ impl Store {
         self.seq += 1;
         Event {
             seq: self.seq,
-            at_ms: now_ms(),
+            at_ms: self.at_ms.take().unwrap_or_else(now_ms),
             jelly: j.name.clone(),
             kind,
             by: by.into(),
@@ -1533,6 +1620,11 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
 }
 
 /// Names become file names and URL segments.
+/// An ask checked as `attend` checks it, for a shared jelly: its relay numbers it.
+pub fn ask_item(spec: &Value, by: &str) -> Result<Attention, Error> {
+    attention_from(spec, String::new(), by)
+}
+
 /// Builds an attention item from an agent's spec, checking it.
 fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error> {
     let seen = spec["seen"].as_bool().unwrap_or(false);
@@ -2457,6 +2549,27 @@ mod tests {
         assert!(s.get("p:j").unwrap().comments[0].awaiting_person());
         s.reply("p:j", "c1", "thanks", "person:bo", false).unwrap();
         assert!(!s.get("p:j").unwrap().comments[0].awaiting_person(), "another person's reply is not the agent's");
+    }
+
+    #[test]
+    fn changes_mirrored_from_a_share_read_as_if_made_here() {
+        let (_d, mut s) = store();
+        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let at = now_ms() - 60_000;
+        let ev = |seq: u64, kind: &str, by: &str, args: Value, version: u64| -> Mirrored {
+            serde_json::from_value(json!({"seq": seq, "at_ms": at, "kind": kind, "by": by, "verb": "label", "args": args, "version": version, "view_rev": 1})).unwrap()
+        };
+        // Caught up after a sleep: the first click moves the version, the last brings the jelly.
+        s.mirror("p:j", &ev(1, "call", "person:ana@example.com", json!({"id": "a"}), 2), None).unwrap();
+        let doc: MirroredDoc = serde_json::from_value(json!({"state": {"labels": {"a": 1, "b": 2}}, "comments": [], "attention": []})).unwrap();
+        let last = s.mirror("p:j", &ev(2, "call", "person:bo", json!({"id": "b"}), 3), Some(&doc)).unwrap();
+        assert_eq!((last.version, last.at_ms, last.changed.clone()), (3, at, vec!["/labels/a".to_string(), "/labels/b".to_string()]));
+        assert_eq!(s.get("p:j").unwrap().state, json!({"labels": {"a": 1, "b": 2}}));
+        let heard: Vec<String> = consume_inbox(&mut s, "p", InboxReader::Named { name: "r".into() }).unwrap().into_iter().map(|e| e.by).collect();
+        assert_eq!(heard, ["person:ana@example.com", "person:bo"]);
+        // v2 only ever existed on the relay, so it cannot be rebuilt here.
+        assert!(s.at_version("p:j", 2).is_err());
+        assert_eq!(s.at_version("p:j", 3).unwrap().state, json!({"labels": {"a": 1, "b": 2}}));
     }
 
     #[test]

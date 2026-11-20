@@ -17,6 +17,9 @@ similar = "2"
 sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "fs", "process", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+# The daemon's WebSocket to each shared jelly on the relay.
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 ureq = { version = "2", features = ["json"] }
 url = "2"
 

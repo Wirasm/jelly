@@ -1,12 +1,13 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // The jelly relay: shares jellies by unguessable link. Each person deploys
-  // their own (npm run deploy) and gets https://jelly-relay.<account>.workers.dev.
+  // The jelly relay: live share links for jellies. Each person deploys their own
+  // (npm run deploy) and gets https://jelly-relay.<account>.workers.dev.
   "name": "jelly-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": true,
-  // Snapshots, keyed by a hash of their token. Wrangler creates the namespace on first deploy.
-  "kv_namespaces": [{ "binding": "SHARES" }]
+  // One Durable Object per shared jelly, with SQLite storage (on the free plan too).
+  "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "Live" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Live"] }]
   // RELAY_SECRET is a secret: `npx wrangler secret put RELAY_SECRET`. Only its holder can publish.
 }
