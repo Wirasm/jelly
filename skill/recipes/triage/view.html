@@ -167,9 +167,9 @@ const ON = { accent: "#fff", warn: "#1f1a1d", idle: "var(--ink)" };
 // A tone as text on the card.
 const INK = { accent: "var(--accent-ink)", warn: "color-mix(in srgb, var(--warn) 70%, var(--ink))", idle: "var(--muted)" };
 const ORDER = ["accent", "warn", "idle", "good", "bad"];
-const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
+const who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 const short = (it) => String(it.ref || it.id).replace(/^#/, "");
-const asksAt = (it) => (jelly.itemsAt?.(`#i-${it.id}`) || []).filter((a) => !a.answer).length;
+const asksAt = (it) => jelly.person.asks.filter((a) => a.anchor?.selector === `#i-${it.id}` && !a.answer && !a.withdrawn).length;
 
 // What is only on this screen. Everything else is state.
 let view = "board";   // or "scatter"
@@ -286,7 +286,7 @@ function render(s) {
     ${writing ? `<div class="compose"><textarea id="why-note" aria-label="Why you moved it" placeholder="Why it belongs there"></textarea><button data-send>Send</button></div>` : ""}</div>`;
 
   const done = L.filter((l) => s.accepted?.[l.id]).length, all = L.length > 0 && done === L.length;
-  const asks = (jelly.attention || []).length;
+  const asks = jelly.person.asks.filter((a) => !a.answer && !a.withdrawn).length;
   const C = 2 * Math.PI * 16, part = L.length ? done / L.length : 0;
   const head = s.applied ? "Done" : s.go ? "You said go" : all ? "Every lane is sorted" : [unsure.length && `${unsure.length} unsure`, `${L.length - done} lane${L.length - done === 1 ? "" : "s"} to look at`, asks && `${asks} question${asks === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
   const sub = s.applied ? s.applied.note : s.go ? `${s.next || ""}: the agent is on it` : `Then: ${s.next || ""}`;
@@ -396,7 +396,7 @@ if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
   document.head.appendChild(l);
 }
 jelly.onState(render);
-jelly.onAttention?.(redraw);
+jelly.person.onAsk(redraw);
 </script>
 </body>
 </html>

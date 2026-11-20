@@ -1,7 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
-//! views. The jelly page people look at is itself an internal jelly named `surface`.
+//! views. The jelly page people look at is itself an internal jelly named `page`.
 
-use crate::store::{named, viewer, AttentionKind, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Past, Store, PAGE};
+use crate::store::{named, viewer, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Past, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -23,8 +23,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
-const SURFACE_VIEW: &str = include_str!("../assets/surface.html");
-const SURFACE_VERBS: &str = include_str!("../assets/surface.verbs.js");
+const PAGE_VIEW: &str = include_str!("../assets/page.html");
+const PAGE_VERBS: &str = include_str!("../assets/page.verbs.js");
 const SNAPSHOT_JS: &str = include_str!("../assets/snapshot.js");
 const ASK_VIEW: &str = include_str!("../assets/ask.html");
 const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
@@ -37,7 +37,7 @@ struct App {
     screens: Mutex<std::collections::HashMap<String, ViewScreen>>,
     /// `jelly try` renders in progress, by token. Memory only.
     trials: Mutex<std::collections::HashMap<String, Trial>>,
-    /// `jelly look` and `see --compare` renders in progress, by token. Memory only.
+    /// `jelly look` renders in progress, by token. Memory only.
     probes: Mutex<std::collections::HashMap<String, Probe>>,
 }
 type Shared = Arc<App>;
@@ -57,7 +57,7 @@ impl App {
         }
         if let Some(error) = error {
             if let Some(last) = evs.last() {
-                return Err(Error::Invalid(format!("{error}; committed {} changes to {} through seq:{}. Inspect with `jelly show {}` before retrying", evs.len(), last.jelly, last.seq, last.jelly)).into());
+                return Err(Error::Invalid(format!("{error}; committed {} changes to {} through seq:{}. Inspect with `jelly state {}` before retrying", evs.len(), last.jelly, last.seq, last.jelly)).into());
             }
             return Err(error.into());
         }
@@ -106,7 +106,7 @@ impl App {
     }
 
     /// The latest snapshot from a light render (or a person's browser), or from
-    /// `jelly see`'s dark render.
+    /// `jelly look`'s dark render.
     fn screen_in(&self, name: &str, owner: &str, dark: bool) -> Result<Option<Screen>, ApiError> {
         let store = self.store.lock().expect("store lock");
         let j = store.get(name)?;
@@ -116,7 +116,7 @@ impl App {
         Ok(if dark { entry.dark.clone() } else { entry.screen.clone() })
     }
 
-    fn validate_see(&self, name: &str, owner: &str, version: u64) -> Result<(), ApiError> {
+    fn validate_render(&self, name: &str, owner: &str, version: u64) -> Result<(), ApiError> {
         let store = self.store.lock().expect("store lock");
         let j = store.get(name)?;
         let screens = self.screens.lock().expect("screens lock");
@@ -131,9 +131,15 @@ impl App {
 pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option<String>) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
+        // Homes from before the jelly page was named `page` keep it as `surface`.
+        // Its state (what the person has seen) moves to a fresh page; its view
+        // used runtime names that no longer exist, so it is not kept.
+        let state = store.get("surface").map_or(json!({}), |j| j.state.clone());
+        let old = store.get("surface").is_ok();
         store
-            .create(PAGE, SURFACE_VIEW.into(), SURFACE_VERBS.into(), json!({}), "jelly", false, "The jelly page", "")
+            .create(PAGE, PAGE_VIEW.into(), PAGE_VERBS.into(), state, "jelly", false, "The jelly page", "")
             .and_then(|_| store.pin(PAGE, true, "jelly"))
+            .and_then(|_| if old { store.remove("surface", "jelly").map(drop) } else { Ok(()) })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
@@ -192,9 +198,8 @@ fn router(app: Shared) -> Router {
         .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
-        .route("/api/jellies/{name}/see", get(see))
-        .route("/see-frame/{name}", get(see_frame))
         .route("/api/jellies/{name}/look", get(look))
+        .route("/look-frame/{name}", get(look_frame))
         .route("/probe-frame", get(probe_frame))
         .route("/api/probes/{token}", post(put_probe_screen))
         .route("/api/jellies/{name}/try", post(try_steps))
@@ -256,7 +261,7 @@ enum ApiError {
 }
 
 fn snapshot_changed() -> ApiError {
-    ApiError::Conflict("the jelly changed; reload the page or retry see".into())
+    ApiError::Conflict("the jelly changed; reload the page or retry".into())
 }
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
@@ -1106,7 +1111,7 @@ impl AnchorPlace {
     }
 }
 
-/// What a browser shows of a jelly, as text, posted by the runtime for `jelly see`.
+/// What a browser shows of a jelly, as text, posted by the runtime for `jelly look`.
 #[derive(Deserialize, Clone)]
 struct Screen {
     owner: String,
@@ -1142,13 +1147,13 @@ struct Screen {
     fallback: Vec<AnchorFallback>,
     #[serde(default)]
     below: Vec<String>,
-    /// Rendered with `prefers-color-scheme: dark` for `jelly see`'s contrast check.
+    /// Rendered with `prefers-color-scheme: dark` for `jelly look`'s contrast check.
     #[serde(default)]
     dark: bool,
     /// Text below WCAG AA contrast against what is painted behind it.
     #[serde(default)]
     contrast: Vec<Contrast>,
-    /// Other measured problems by kind. Only `jelly see`'s renders measure them, so
+    /// Other measured problems by kind. Only `jelly look`'s renders measure them, so
     /// `None` is a snapshot from a person's browser.
     #[serde(default)]
     problems: Option<Vec<Problem>>,
@@ -1244,7 +1249,7 @@ fn chrome() -> Option<String> {
     candidates.into_iter().find(|c| !c.is_empty() && std::path::Path::new(c).exists())
 }
 
-/// How long `jelly see` waits for the browser.
+/// How long `jelly look` waits for the browser.
 const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Runs headless Chrome on a jelly at a given size. With `png`, writes a
@@ -1265,7 +1270,7 @@ async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<&str>, widt
     // Headless Chrome will not make a window narrower than 500px, so phone
     // widths render the jelly in an iframe of exactly that size.
     let url = if width < 500 {
-        format!("http://127.0.0.1:{port}/see-frame/{name}?w={width}&h={height}{trial}")
+        format!("http://127.0.0.1:{port}/look-frame/{name}?w={width}&h={height}{trial}")
     } else {
         format!("http://127.0.0.1:{port}/j/{name}/?agent=1{trial}")
     };
@@ -1343,9 +1348,11 @@ async fn run_browser_at(bin: &str, url: &str, width: u32, height: u32, png: Opti
 }
 
 #[derive(Deserialize)]
-struct SeeQ {
+struct LookQ {
+    /// Render only this width. Without it, desktop and phone side by side.
     width: Option<u32>,
     height: Option<u32>,
+    /// With `width`: also take a screenshot.
     #[serde(default)]
     png: bool,
     /// The whole page, not just the first screen.
@@ -1360,10 +1367,11 @@ struct SeeQ {
     save: Option<String>,
 }
 
-/// Everything an agent needs to pick up a jelly, as plain text: what it is,
-/// what the person did, what waits on them, and what is on screen. With
-/// `json`, the same split into the summary, the problem lines and the outline.
-async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(mut q): Query<SeeQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+/// `jelly look`: everything an agent needs to pick up a jelly, as plain text:
+/// what it is, what the person did, what waits on them, and what is on screen.
+/// At desktop and phone width by default, at one `width`, or compared with an
+/// earlier version.
+async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(mut q): Query<LookQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
     let port = port_of(&req_headers);
     // Read what to compare with before saving, so `--compare x --save x` compares with the old x.
     let before = q.compare.as_deref().map(|c| past(&app, &name, c)).transpose()?;
@@ -1371,14 +1379,18 @@ async fn see(State(app): State<Shared>, Path(name): Path<String>, Query(mut q): 
     if let Some(before) = before {
         return compare(&app, port, &name, before, &q).await;
     }
+    if q.width.is_none() {
+        return look_both(&app, port, &name, q.json).await;
+    }
     let render_name = name.clone();
-    see_with_renderer(app, name, q, move |width, height, png: Option<std::path::PathBuf>, dark| {
+    look_at_width(app, name, q, move |width, height, png: Option<std::path::PathBuf>, dark| {
         let name = render_name.clone();
         async move { render(port, &name, None, width, height, png.as_deref(), dark, RENDER_LIMIT).await }
     }).await
 }
 
-async fn see_with_renderer<F, Fut>(app: Shared, name: String, q: SeeQ, mut render_page: F) -> Result<Response, ApiError>
+/// One width: a light and a dark render, and with `png` a screenshot.
+async fn look_at_width<F, Fut>(app: Shared, name: String, q: LookQ, mut render_page: F) -> Result<Response, ApiError>
 where
     F: FnMut(u32, u32, Option<std::path::PathBuf>, bool) -> Fut,
     Fut: std::future::Future<Output = Result<(), String>>,
@@ -1390,9 +1402,11 @@ where
     };
     let width = q.width.unwrap_or(1280);
     let height = q.height.unwrap_or(if width <= 500 { 844 } else { 900 });
-    // Only see's own renders measure problems, so a person's snapshot does not count.
+    // Only look's own renders measure problems, so a person's snapshot does not
+    // count. A snapshot from before the last change of any kind (an ask added
+    // since, say) has not measured it.
     let fresh = |app: &App, dark: bool| -> Result<Option<Screen>, ApiError> {
-        Ok(app.screen_in(&name, &owner, dark)?.filter(|s| s.version == j.version && s.width == width && s.problems.is_some()))
+        Ok(app.screen_in(&name, &owner, dark)?.filter(|s| s.version == j.version && s.at_ms >= j.updated_ms && s.width == width && s.problems.is_some()))
     };
     let mut notes: Vec<String> = Vec::new();
     let mut snap = fresh(&app, false)?;
@@ -1422,7 +1436,7 @@ where
         if wait_dark && dark.is_none() { notes.push("The dark mode render sent no snapshot.".into()); }
     }
     let png = if q.png {
-        let dir = home.join("see");
+        let dir = home.join("renders");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{}-{width}.png", crate::disk::name(&name)));
         // The full page: as tall as the page said it was, within reason.
@@ -1433,7 +1447,7 @@ where
         }
     } else { None };
 
-    app.validate_see(&name, &owner, j.version)?;
+    app.validate_render(&name, &owner, j.version)?;
     let mut out = summary(&app, &j);
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
@@ -1462,7 +1476,7 @@ where
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }
 
-/// The part of `jelly see` that needs no browser: what the jelly is, who made
+/// The part of `jelly look` that needs no browser: what the jelly is, who made
 /// it, its verbs and state, what waits on the person and what they did lately.
 fn summary(app: &App, j: &crate::store::Jelly) -> String {
     let mut out = String::new();
@@ -1487,7 +1501,7 @@ fn summary(app: &App, j: &crate::store::Jelly) -> String {
     }
     for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
         let ans = a.answer.as_ref().expect("filtered");
-        let pick = ans.option.as_deref().unwrap_or(if a.kind == AttentionKind::Look { "seen" } else { "" });
+        let pick = ans.option.as_deref().unwrap_or(if a.seen { "seen" } else { "" });
         line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
     }
     for f in j.comments.iter().filter(|f| !f.resolved) {
@@ -1526,7 +1540,7 @@ async fn maybe<F: std::future::Future>(run: Option<F>) -> Option<F::Output> {
     match run { Some(f) => Some(f.await), None => None }
 }
 
-/// How many of each kind of problem `jelly see` prints; the rest are counted.
+/// How many of each kind of problem `jelly look` prints; the rest are counted.
 const PROBLEMS_SHOWN: usize = 3;
 
 /// The measured problems as `kind: item` lines, a few of each kind. Unreadable
@@ -1564,7 +1578,7 @@ fn problem_lines(light: Option<&Screen>, dark: Option<&Screen>) -> Vec<String> {
 
 // ---- jelly look ----------------------------------------------------------------
 
-/// One page in a `jelly look` or `see --compare` render. Its snapshot goes
+/// One page in a `jelly look` render at two widths or two versions. Its snapshot goes
 /// here, not into the jelly's shared one, so pages at several widths or
 /// versions can render at once.
 struct Probe {
@@ -1736,40 +1750,34 @@ fn measured_problems(light: &Option<Screen>, dark: &Option<Screen>) -> Vec<Strin
 const DESKTOP: (u32, u32) = (1280, 900);
 const PHONE: (u32, u32) = (390, 844);
 
-#[derive(Deserialize)]
-struct LookQ {
-    #[serde(default)]
-    json: bool,
-}
 
-/// `jelly look`: the jelly at desktop and phone width in one call. The desktop
+/// The jelly at desktop and phone width in one call. The desktop
 /// outline, what differs on a phone, the measured problems at both widths, and
 /// one screenshot with both side by side. Four pages render in three browsers
 /// at once (the two light pages share the screenshot), so it takes about as
 /// long as one render.
-async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<LookQ>, req_headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
-    let port = port_of(&req_headers);
+async fn look_both(app: &Shared, port: u16, name: &str, json: bool) -> Result<Response, ApiError> {
     let (j, home) = {
         let store = app.store.lock().expect("store lock");
-        (store.get(&name)?.clone(), store.home().to_path_buf())
+        (store.get(name)?.clone(), store.home().to_path_buf())
     };
     let label = |(w, h): (u32, u32), what: &str| format!("{what} {w}×{h}");
     // Desktop and phone in light mode, then each in dark mode.
-    let probes = Probes(&app, vec![
-        app.start_probe(&name, DESKTOP, &label(DESKTOP, "desktop"), false, None)?,
-        app.start_probe(&name, PHONE, &label(PHONE, "phone"), false, None)?,
-        app.start_probe(&name, DESKTOP, "", true, None)?,
-        app.start_probe(&name, PHONE, "", true, None)?,
+    let probes = Probes(app, vec![
+        app.start_probe(name, DESKTOP, &label(DESKTOP, "desktop"), false, None)?,
+        app.start_probe(name, PHONE, &label(PHONE, "phone"), false, None)?,
+        app.start_probe(name, DESKTOP, "", true, None)?,
+        app.start_probe(name, PHONE, "", true, None)?,
     ]);
-    let dir = home.join("see");
+    let dir = home.join("renders");
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{}-look.png", crate::disk::name(&name)));
+    let path = dir.join(format!("{}-look.png", crate::disk::name(name)));
     // A screenshot left from an earlier look must not pass for this one.
     let _ = std::fs::remove_file(&path);
     let (light, dd, pd) = tokio::join!(
-        render_probes(&app, port, &probes.1[..2], Some(&path)),
-        render_probes(&app, port, &probes.1[2..3], None),
-        render_probes(&app, port, &probes.1[3..], None),
+        render_probes(app, port, &probes.1[..2], Some(&path)),
+        render_probes(app, port, &probes.1[2..3], None),
+        render_probes(app, port, &probes.1[3..], None),
     );
     let mut notes = Vec::new();
     let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, what: &str| match r {
@@ -1784,7 +1792,7 @@ async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
     if phone_sc.is_none() { notes.push("The page sent no snapshot at phone width.".into()); }
     let png = path.exists().then_some(path);
 
-    let mut out = summary(&app, &j);
+    let mut out = summary(app, &j);
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
     if let Some(p) = &png { line(&mut out, format!("png      {} · desktop on the left, phone on the right", p.display())); }
     let problems_from = out.len();
@@ -1800,7 +1808,7 @@ async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
         (Some(d), Some(p)) => Some(outline_diff(&d.text, &p.text)),
         _ => None,
     };
-    if q.json {
+    if json {
         return Ok(Json(json!({
             "jelly": j.name, "version": j.version,
             "summary": &out[..problems_from],
@@ -1823,21 +1831,21 @@ async fn look(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], out).into_response())
 }
 
-// ---- jelly see --compare -------------------------------------------------------
+// ---- jelly look --compare ------------------------------------------------------
 
 /// `v12` names version 12.
 fn version_of(s: &str) -> Option<u64> {
     s.strip_prefix('v').filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
 }
 
-/// Where `see --save LABEL` keeps a jelly's view and state.
+/// Where `look --save LABEL` keeps a jelly's view and state.
 fn saved_path(app: &App, name: &str, label: &str) -> Result<std::path::PathBuf, ApiError> {
     let ok = (1..=40).contains(&label.len()) && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if !ok || version_of(label).is_some() {
         return Err(Error::Invalid(format!("{label:?} cannot name a saved version: use letters, digits, - and _ (v and a number is a version)")).into());
     }
     let home = app.store.lock().expect("store lock").home().to_path_buf();
-    Ok(home.join("see").join("saved").join(crate::disk::name(name)).join(format!("{label}.json")))
+    Ok(home.join("renders").join("saved").join(crate::disk::name(name)).join(format!("{label}.json")))
 }
 
 /// Keeps the jelly's view and state as they are now under `label`, outside the
@@ -1863,15 +1871,15 @@ fn past(app: &App, name: &str, against: &str) -> Result<(String, Past), ApiError
         return Ok((format!("v{v}"), app.store.lock().expect("store lock").at_version(name, v)?));
     }
     let path = saved_path(app, name, against)?;
-    let bytes = std::fs::read(&path).map_err(|_| Error::Invalid(format!("nothing is saved as {against} for {name}; save it with: jelly see {name} --save {against}")))?;
+    let bytes = std::fs::read(&path).map_err(|_| Error::Invalid(format!("nothing is saved as {against} for {name}; save it with: jelly look {name} --save {against}")))?;
     let past: Past = serde_json::from_slice(&bytes).map_err(|e| ApiError::Internal(format!("{}: {e}", path.display())))?;
     Ok((format!("{against} (v{})", past.version), past))
 }
 
-/// `jelly see --compare`: what changed since an earlier version. Both versions
+/// `jelly look --compare`: what changed since an earlier version. Both versions
 /// render at once, side by side in one screenshot, each also in dark mode, and
 /// the answer is the outline difference and the problems that are new or fixed.
-async fn compare(app: &Shared, port: u16, name: &str, (against, before): (String, Past), q: &SeeQ) -> Result<Response, ApiError> {
+async fn compare(app: &Shared, port: u16, name: &str, (against, before): (String, Past), q: &LookQ) -> Result<Response, ApiError> {
     let (j, home) = {
         let store = app.store.lock().expect("store lock");
         (store.get(name)?.clone(), store.home().to_path_buf())
@@ -1886,7 +1894,7 @@ async fn compare(app: &Shared, port: u16, name: &str, (against, before): (String
         app.start_probe(name, size, "", true, Some(&before))?,
         app.start_probe(name, size, "", true, None)?,
     ]);
-    let dir = home.join("see");
+    let dir = home.join("renders");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{}-compare.png", crate::disk::name(name)));
     let _ = std::fs::remove_file(&path);
@@ -2076,7 +2084,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     let trial = app.trials.lock().expect("trials lock").remove(&token).expect("only this handler removes its trial");
     // The screenshot is a second render that does the same steps from the same start.
     let png = if r.png {
-        let dir = home.join("see");
+        let dir = home.join("renders");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{}-try-{width}.png", crate::disk::name(&trial.name)));
         let token = app.start_trial(&name, &r.steps)?;
@@ -2252,11 +2260,11 @@ struct FrameQ {
     h: u32,
     #[serde(rename = "try")]
     trial: Option<String>,
-    /// `jelly see`'s dark render.
+    /// `jelly look`'s dark render.
     dark: Option<String>,
 }
 
-async fn see_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Result<Html<String>, ApiError> {
+async fn look_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Result<Html<String>, ApiError> {
     // The name goes into the page, so only a valid jelly name may (#66).
     crate::store::valid_name(&name)?;
     // Scaled up to fill the 500px window, so the screenshot is the phone layout and nothing else.
@@ -2294,7 +2302,7 @@ mod share_tests {
             json!({"picture": "assets/dot.png", "file": "dot.png", "textFile": "hello.txt", "label": "Label: assets/dot.png", "closing": "</script>"}),
             "agent", false, "Shared </script> jelly", "").unwrap();
         for (anchor, title) in [("#pictures", "open"), ("#pictures", "answered"), ("#other", "withdrawn"), ("#other", "other")] {
-            store.attend("test:share", json!({"kind": "look", "title": title, "anchor": {"selector": anchor}}), "agent").unwrap();
+            store.attend("test:share", json!({"seen": true, "title": title, "anchor": {"selector": anchor}}), "agent").unwrap();
         }
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
         store.withdraw("test:share", "a3", "agent").unwrap();
@@ -2588,13 +2596,13 @@ mod wait_tests {
         let (_dir, app) = fixture(16);
         let start = note(&app, "j", "person");
         note(&app, "j", "agent");
-        let surface = note(&app, PAGE, "person");
+        let page = note(&app, PAGE, "person");
         let other = note(&app, "other", "helper");
         let first = note(&app, "j", "helper");
         note(&app, "j", "person");
         assert_eq!(wait_since(&app, &query(Some("j"), start.seq)).await.unwrap().unwrap().seq, first.seq);
         assert_eq!(wait_since(&app, &query(None, start.seq)).await.unwrap().unwrap().seq, other.seq);
-        assert_eq!(wait_since(&app, &query(Some(PAGE), start.seq)).await.unwrap().unwrap().seq, surface.seq);
+        assert_eq!(wait_since(&app, &query(Some(PAGE), start.seq)).await.unwrap().unwrap().seq, page.seq);
         assert!(wait_since(&app, &query(None, u64::MAX)).await.unwrap().is_none());
         assert!(matches!(wait_since(&app, &query(Some("missing"), 0)).await, Err(Error::NotFound(_))));
     }
@@ -2602,7 +2610,7 @@ mod wait_tests {
     #[tokio::test]
     async fn history_survives_replacement_removal_and_restart() {
         let (dir, mut app) = fixture(16);
-        let start = note(&app, "j", "agent");
+        let start = app.change(|s| s.set_state("j", "/n", Some(json!(1)), "agent")).unwrap().0;
         let replacement = app.change(|s| s.create("j", "".into(), "const verbs = {};".into(), json!({}), "person", true, "", "")).unwrap().0;
         assert!(replacement.version < start.version);
         let removed = app.change(|s| s.remove("j", "person")).unwrap().0;
@@ -2829,7 +2837,7 @@ mod wait_tests {
                 assert!(message.contains("could not record event"), "{message}");
                 if successful > 0 {
                     assert!(message.contains(&format!("committed {successful} changes to sharing through seq:{}", head + successful)), "{message}");
-                    assert!(message.contains("jelly show sharing"), "{message}");
+                    assert!(message.contains("jelly state sharing"), "{message}");
                     assert!(message.contains("before retrying"), "{message}");
                 } else {
                     assert!(!message.contains("committed"), "{message}");
@@ -2966,7 +2974,7 @@ mod placement_tests {
         store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
         let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default() });
-        for kind in ["ask", "look"] {
+        for seen in [false, true] {
             for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
                 let mut received = app.events.subscribe();
                 let post_snapshot = async {
@@ -2986,7 +2994,7 @@ mod placement_tests {
                     assert_eq!(put_screen(State(app.clone()), Path("placement".into()), Json(snapshot)).await.unwrap(), StatusCode::NO_CONTENT);
                 };
                 let request = attend(State(app.clone()), Path("placement".into()), axum::http::HeaderMap::new(), Json(AttendReq {
-                    spec: json!({"kind":kind, "title":"Choose", "by":"test", "anchor":{"selector":"#tile"}})
+                    spec: json!({"seen":seen, "title":"Choose", "by":"test", "anchor":{"selector":"#tile"}})
                 }));
                 let (response, ()) = tokio::join!(request, post_snapshot);
                 let Json(response) = response.unwrap_or_else(|_| panic!("attention request failed"));
@@ -3206,7 +3214,7 @@ mod tests {
         serde_json::from_str::<Value>(boot).unwrap()["snapshotOwner"].as_str().unwrap().into()
     }
 
-    /// A snapshot from one of `jelly see`'s own light renders.
+    /// A snapshot from one of `jelly look`'s own light renders.
     fn snapshot(owner: &str, text: &str, version: u64) -> Screen {
         serde_json::from_value(json!({"owner": owner, "text": text, "width": 1280, "height": 900, "version": version, "problems": []})).unwrap()
     }
@@ -3215,8 +3223,8 @@ mod tests {
         put_screen(State(app.clone()), Path("test:x".into()), Json(sc)).await
     }
 
-    /// Posts the light snapshot and its dark twin, as `jelly see`'s two renders do,
-    /// so a later `see` needs no browser.
+    /// Posts the light snapshot and its dark twin, as `jelly look`'s two renders do,
+    /// so a later `look` needs no browser.
     async fn post_both(app: &Shared, sc: Screen) -> Result<StatusCode, ApiError> {
         let mut dark = sc.clone();
         dark.dark = true;
@@ -3225,8 +3233,8 @@ mod tests {
     }
 
     async fn seen(app: &Shared) -> String {
-        let response = see(State(app.clone()), Path("test:x".into()),
-            Query(SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None }), axum::http::HeaderMap::new()).await.unwrap();
+        let response = look(State(app.clone()), Path("test:x".into()),
+            Query(LookQ { width: Some(1280), height: None, png: false, full: false, json: false, compare: None, save: None }), axum::http::HeaderMap::new()).await.unwrap();
         String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
     }
 
@@ -3273,8 +3281,8 @@ mod tests {
                 let (started, suspended) = tokio::sync::oneshot::channel();
                 let (resume, resumed) = tokio::sync::oneshot::channel();
                 let mut rendezvous = Some((started, resumed));
-                let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                    SeeQ { width: None, height: None, png, full: false, json: false, compare: None, save: None },
+                let seeing = look_at_width(app.clone(), "test:x".into(),
+                    LookQ { width: Some(1280), height: None, png, full: false, json: false, compare: None, save: None },
                     move |_, _, path, dark| {
                         assert_eq!(path.is_some(), png);
                         let light = (!dark).then(|| rendezvous.take().expect("one light render"));
@@ -3294,7 +3302,7 @@ mod tests {
                     resume.send(()).unwrap();
                 };
                 let (result, _) = tokio::join!(seeing, changing);
-                assert_eq!(result.expect_err("obsolete see must fail").into_response().status(), StatusCode::CONFLICT,
+                assert_eq!(result.expect_err("obsolete look must fail").into_response().status(), StatusCode::CONFLICT,
                     "png={png}, replace={replace}");
             }
         }
@@ -3309,7 +3317,7 @@ mod tests {
             create_page(&app, "PAGE", false).await;
             let current = owner(&app, "test:x").await;
             post_both(&app, snapshot(&current, "PAGE", 1)).await.unwrap();
-            let png = dir.path().join("see").join(format!("{}-1280.png", crate::disk::name("test:x")));
+            let png = dir.path().join("renders").join(format!("{}-1280.png", crate::disk::name("test:x")));
             if old_png {
                 std::fs::create_dir_all(png.parent().unwrap()).unwrap();
                 std::fs::write(&png, b"old").unwrap();
@@ -3318,8 +3326,8 @@ mod tests {
             std::fs::write(&browser, format!("#!/bin/sh\nexit {exit}\n")).unwrap();
             std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
             let browser = browser.to_str().unwrap().to_string();
-            let response = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: true, full: false, json: false, compare: None, save: None },
+            let response = look_at_width(app.clone(), "test:x".into(),
+                LookQ { width: Some(1280), height: None, png: true, full: false, json: false, compare: None, save: None },
                 move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
@@ -3350,8 +3358,8 @@ mod tests {
             let mut rendered = Some(rendered);
             let posting_app = app.clone();
             let posting_owner = current.clone();
-            let seeing = see_with_renderer(app.clone(), "test:x".into(),
-                SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None },
+            let seeing = look_at_width(app.clone(), "test:x".into(),
+                LookQ { width: Some(1280), height: None, png: false, full: false, json: false, compare: None, save: None },
                 move |_, _, path, dark| {
                     assert!(path.is_none() && !dark);
                     let app = posting_app.clone();
@@ -3406,7 +3414,7 @@ mod tests {
             let output = seen(&app).await;
             assert!(output.contains(text), "{output}");
             assert!(!output.contains("OLD PAGE"), "{output}");
-            assert!(app.validate_see("test:x", &previous, 1).is_err());
+            assert!(app.validate_render("test:x", &previous, 1).is_err());
         }
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
@@ -3430,7 +3438,7 @@ mod tests {
         let _ = app.change(|s| s.set_state("test:x", "", Some(json!({"n":1})), "test")).unwrap();
         assert_eq!(owner(&app, "test:x").await, first);
         assert_eq!(app.screen("test:x", &first).unwrap().unwrap().version, 1);
-        assert!(app.validate_see("test:x", &first, 1).is_err());
+        assert!(app.validate_render("test:x", &first, 1).is_err());
         let _ = app.change(|s| s.reshape("test:x", Some("<h1>NEW PAGE</h1>".into()), None, None, "test")).unwrap();
         assert!(post(&app, snapshot(&first, "OLD PAGE", 1)).await.is_err());
         let reshaped = owner(&app, "test:x").await;
@@ -3572,7 +3580,7 @@ mod tests {
         }
         let path = store.events_path();
         drop(store);
-        // Removing the backing log makes any per-see log read observable.
+        // Removing the backing log makes any per-look log read observable.
         let saved = std::fs::read(&path).unwrap();
         for restarted in [false, true] {
             if restarted {
@@ -3615,7 +3623,7 @@ mod tests {
         let current = owner(&app, "test:x").await;
         post_both(&app, snapshot(&current, "PAGE", version)).await.unwrap();
         let see_x = || async {
-            let response = see_with_renderer(app.clone(), "test:x".into(), SeeQ { width: None, height: None, png: false, full: false, json: false, compare: None, save: None },
+            let response = look_at_width(app.clone(), "test:x".into(), LookQ { width: Some(1280), height: None, png: false, full: false, json: false, compare: None, save: None },
                 |_, _, _, _| async { Err("no browser".to_string()) }).await.unwrap();
             String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         };

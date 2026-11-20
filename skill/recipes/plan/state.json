@@ -45,7 +45,7 @@
         "text": "Eight outcome-driven issues, #1 to #8, each with evidence and a done-when list.",
         "show": {
           "kind": "terminal",
-          "after": "#1  An agent can ask a question and get the answer in one command\n#2  jelly wait never misses a change made before it started listening\n#3  Every agent in a project sees everything the person did\n#4  jelly is running whenever an agent reaches for it\n#5  jelly ask says so when its --at matches nothing\n#6  The first jelly see after the daemon starts returns a snapshot\n#7  Every command an agent reads prints one line per item\n#8  Only jelly's own pages and the CLI can talk to the daemon"
+          "after": "#1  An agent can ask a question and get the answer in one command\n#2  jelly wait never misses a change made before it started listening\n#3  Every agent in a project sees everything the person did\n#4  jelly is running whenever an agent reaches for it\n#5  jelly ask says so when its --at matches nothing\n#6  The first jelly look after the daemon starts returns a snapshot\n#7  Every command an agent reads prints one line per item\n#8  Only jelly's own pages and the CLI can talk to the daemon"
         },
         "by": "agent",
         "at_ms": 1794260040000
@@ -130,7 +130,7 @@
         "at_ms": 1794267000000
       },
       "result": {
-        "text": "jelly ask and jelly look now say when --at matches nothing. About 0.7 s per ask. Commit ef60c62.",
+        "text": "jelly ask now says when --at matches nothing. About 0.7 s per ask. Commit ef60c62.",
         "show": {
           "kind": "terminal",
           "before": "$ jelly ask plan \"Which order?\" --at \"#nope\"\nit shows on the page below #nope",

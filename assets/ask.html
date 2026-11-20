@@ -126,13 +126,13 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const L = (i) => String.fromCharCode(65 + i);
 const qid = (a) => a.anchor?.selector?.replace(/^#q-/, "") ?? a.id;
-jelly.onAttend(() => document.documentElement.style.setProperty("--bar-height", `${$("bar").offsetHeight}px`));
+jelly.person.onOpen(() => document.documentElement.style.setProperty("--bar-height", `${$("bar").offsetHeight}px`));
 const big = new Set(); // previews opened large are rendered once
 const drafts = {};     // unsent note text per question, kept across re-renders
 
 function current() {
   const g = `round-${jelly.state.round || 1}`;
-  return jelly.items.filter((a) => a.group === g && !a.withdrawn);
+  return jelly.person.asks.filter((a) => a.group === g && !a.withdrawn);
 }
 
 function render() {
@@ -156,7 +156,7 @@ function render() {
 }
 
 // "You" for this browser, else the person's or agent's name.
-const Who = (by) => (by === jelly.by ? "You" : jelly.who(by));
+const Who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 
 function question(a, i) {
   const ans = a.answer;
@@ -185,27 +185,27 @@ function option(a, o, k) {
 }
 
 function renderAdded() {
-  const mine = jelly.comments.filter((c) => c.anchor?.selector === "#more");
+  const mine = jelly.person.comments.filter((c) => c.anchor?.selector === "#more");
   $("added").innerHTML = mine.map((c) => `<div><small>${esc(jelly.who(c.by))}${c.replies?.length ? " · the agent replied" : ""}</small>${esc(c.text)}${(c.replies || []).map((r) => `<small style="margin-top:6px">${esc(r.by)}</small>${esc(r.text)}`).join("")}</div>`).join("");
 }
 
 function renderPast() {
   const g = `round-${jelly.state.round || 1}`;
-  const old = jelly.items.filter((a) => a.group && a.group !== g);
+  const old = jelly.person.asks.filter((a) => a.group && a.group !== g);
   $("past").innerHTML = old.length ? `<details class="past"><summary>Earlier rounds (${old.length} questions)</summary>${old.map((a) => {
     const o = a.options.find((x) => x.id === a.answer?.option);
     return `<div class="row"><b>${esc(a.title)}</b> · ${a.withdrawn ? "replaced by a newer round" : a.answer ? `${o ? esc(o.label) : "answered in words"}${a.answer.text ? `: “${esc(a.answer.text)}”` : ""}` : "not answered"}</div>`;
   }).join("")}</details>` : "";
 }
 
-function find(id) { return jelly.items.find((a) => a.id === id); }
+function find(id) { return jelly.person.asks.find((a) => a.id === id); }
 document.addEventListener("click", (e) => {
   const p = e.target.closest("[data-pick]");
   if (p) {
     const [id, option] = p.dataset.pick.split("|");
     const text = document.querySelector(`[data-note="${id}"]`)?.value.trim() || find(id)?.answer?.text || "";
     delete drafts[id];
-    return jelly.answer(id, { option, text }).catch((err) => alert(err.message));
+    return jelly.person.answer(id, { option, text }).catch((err) => alert(err.message));
   }
   const s = e.target.closest("[data-send]");
   if (s) {
@@ -214,7 +214,7 @@ document.addEventListener("click", (e) => {
     const option = find(id)?.answer?.option;
     const text = t.value.trim();
     delete drafts[id];
-    return jelly.answer(id, { option, text }).catch((err) => alert(err.message));
+    return jelly.person.answer(id, { option, text }).catch((err) => alert(err.message));
   }
   const b = e.target.closest("[data-big]");
   if (b) {
@@ -240,11 +240,11 @@ addEventListener("keydown", (e) => {
 $("more-send").onclick = () => {
   const t = $("more-text");
   if (!t.value.trim()) return t.focus();
-  jelly.comment({ selector: "#more", quote: "Add a question or context" }, t.value.trim()).then(() => (t.value = ""), (err) => alert(err.message));
+  jelly.person.comment({ selector: "#more", quote: "Add a question or context" }, t.value.trim()).then(() => (t.value = ""), (err) => alert(err.message));
 };
 
 jelly.onState(render);
-jelly.onAttention(render);
+jelly.person.onAsk(render);
 </script>
 </body>
 </html>

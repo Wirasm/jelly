@@ -54,7 +54,7 @@ fn only_this_machine_can_use_the_daemon() {
     // A rebound DNS name reaches 127.0.0.1 with a foreign Host.
     assert!(call(None, "evil.example").contains("403"));
     // A crafted name is refused, not written into the page.
-    let (status, page) = raw(&addr, &format!("GET /see-frame/%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E?w=1&h=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"));
+    let (status, page) = raw(&addr, &format!("GET /look-frame/%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E?w=1&h=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"));
     // Refused, and the error is JSON, which a browser never runs as a page.
     assert!(status.contains("400") && page.to_ascii_lowercase().contains("content-type: application/json"), "{page}");
     // The design routes stay inside the home.

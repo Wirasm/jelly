@@ -62,13 +62,13 @@ fn short_name_commands_stop_when_identity_lookup_fails() {
         vec!["rm", "plan"], vec!["call", "plan", "tick"], vec!["set", "plan", "{}"],
         vec!["state", "plan"], vec!["reshape", "plan", "--about", "updated"],
         vec!["undo", "plan"], vec!["pin", "plan"], vec!["unpin", "plan"],
-        vec!["show", "plan"], vec!["events", "plan"], vec!["ask", "plan", "Which?"],
-        vec!["look", "plan", "Check"], vec!["withdraw", "plan", "a1"], vec!["focus", "plan"],
+        vec!["look", "plan"], vec!["events", "plan"], vec!["ask", "plan", "Which?"],
+        vec!["ask", "plan", "Check", "--seen"], vec!["withdraw", "plan", "a1"], vec!["focus", "plan"],
         vec!["working", "plan", "updating"], vec!["done", "plan"],
         vec!["ask", "plan", "--spec", "spec.json"], vec!["wait", "plan", "--timeout", "0"],
         vec!["wait", "plan", "--since", "seq:0", "--timeout", "0"], vec!["comments", "plan"],
         vec!["reply", "plan", "c1", "answer"], vec!["move", "plan", "other"],
-        vec!["see", "plan"], vec!["note", "plan", "note"], vec!["pull", "plan"],
+        vec!["look", "plan", "--text"], vec!["note", "plan", "note"], vec!["pull", "plan"],
         vec!["dev", "plan", "missing"], vec!["archive", "plan"], vec!["restore", "plan"],
         vec!["asset", "plan", "asset.txt"], vec!["share", "plan"], vec!["resolve", "plan", "c1"],
         vec!["open", "plan"],
@@ -94,10 +94,10 @@ fn short_name_commands_stop_when_identity_lookup_fails() {
 #[test]
 fn explicit_ids_bypass_candidate_lookup() {
     let server = LookupServer::start();
-    for name in ["test:plan", "surface"] {
+    for name in ["test:plan", "page"] {
         let output = Command::new(env!("CARGO_BIN_EXE_jelly"))
-            .args(["--url", &server.url, "--project", "test", "show", name]).output().unwrap();
+            .args(["--url", &server.url, "--project", "test", "state", name]).output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(server.requests.try_iter().collect::<Vec<_>>(), [format!("GET /api/jellies/{name}")]);
+        assert_eq!(server.requests.try_iter().collect::<Vec<_>>(), [format!("GET /api/jellies/{name}/state")]);
     }
 }

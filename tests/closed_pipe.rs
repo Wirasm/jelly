@@ -251,7 +251,7 @@ fn creation_and_asset_uploads_finish_before_output() {
 
 #[test]
 fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
-    for cmd in ["events", "watch", "wait"] {
+    for cmd in ["events", "wait"] {
         let fixture = Fixture::new();
         let mut child = spawn(command(&fixture.url, &[cmd]).stdout(closed_pipe()));
         let mut req = fixture.request();

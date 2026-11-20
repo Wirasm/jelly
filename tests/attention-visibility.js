@@ -29,7 +29,7 @@ async page => {
       if (window.openings && openings.length <= previous) return false;
       const host = document.getElementById(`jf-q-${id}`);
       if (host) return !!host.shadowRoot.activeElement;
-      const item = window.jelly?.items.find(a => a.id === id);
+      const item = window.jelly?.person.asks.find(a => a.id === id);
       return item && document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
     }, {id:itemId, previous});
     return frame;
@@ -103,8 +103,8 @@ async page => {
   assert(await frame.evaluate(() => document.activeElement.id === 'show'), 'inactive card must not steal focus');
   await frame.evaluate(() => {
     window.unsubscribedCalled = 0;
-    const stop = jelly.onAttend(() => { unsubscribedCalled++; }); stop();
-    window.stopThrow = jelly.onAttend(() => { throw new Error('expected subscriber failure'); });
+    const stop = jelly.person.onOpen(() => { unsubscribedCalled++; }); stop();
+    window.stopThrow = jelly.person.onOpen(() => { throw new Error('expected subscriber failure'); });
     details.hidden = true; reveal = 'none';
   });
   await dock(name, id);
@@ -113,7 +113,7 @@ async page => {
   assert(await frame.evaluate(() => { stopThrow(); return openings.length === 5 && unsubscribedCalled === 0; }), 'throwing subscriber does not block or duplicate opening');
   // Answer through the real card and observe the daemon, then reopen its summary.
   await frame.locator(`#jf-q-${id} button.o`).first().click();
-  await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'yes', id);
+  await frame.waitForFunction(id => jelly.person.asks.find(a => a.id === id)?.answer?.option === 'yes', id);
   const saved = await (await page.request.get(`${base}/api/jellies/${name}`)).json();
   assert(saved.attention.find(a => a.id === id).answer.text === 'keep this draft', 'answer persisted with draft');
   await frame.evaluate(id => window.postMessage({type:'jelly:attend',id},location.origin), id);
@@ -221,7 +221,7 @@ async page => {
     await page.route(showUrl, overlap);
     const waiting = await ask('#tucked', 'look');
     await staleReady;
-    await frame.waitForFunction(id => !jelly.items.some(a => a.id === id), waiting.args.id);
+    await frame.waitForFunction(id => !jelly.person.asks.some(a => a.id === id), waiting.args.id);
     await frame.evaluate(() => document.activeElement.blur());
     if (!(await page.locator('#dock-panel').isVisible())) await page.locator('#dock-btn').click();
     await page.locator(`#dock-list [data-goto="${name}"][data-item="${waiting.args.id}"]`).click();
@@ -301,11 +301,11 @@ async page => {
   assert(!!groupedId, 'grouped row carries an item id');
   frame = await dock(groupedName, groupedId);
   await frame.waitForFunction(id => {
-    const a = jelly.items.find(a => a.id === id), target = document.getElementById(a.anchor.selector.slice(1));
+    const a = jelly.person.asks.find(a => a.id === id), target = document.getElementById(a.anchor.selector.slice(1));
     return target?.contains(document.activeElement) && document.activeElement.matches('[data-pick]');
   }, groupedId);
   const groupedOpening = await frame.evaluate(id => {
-    const item = jelly.items.find(a => a.id === id);
+    const item = jelly.person.asks.find(a => a.id === id);
     const question = document.getElementById(item.anchor.selector.slice(1));
     const heading = question.querySelector('h2').getBoundingClientRect();
     const answer = document.activeElement.getBoundingClientRect();
@@ -314,7 +314,7 @@ async page => {
       answer:answer.top >= bar.bottom && answer.bottom <= innerHeight};
   }, groupedId);
   assert(groupedOpening.heading && groupedOpening.answer, 'grouped opening shows the question heading and focused answer below the sticky bar');
-  const inlineItems = await frame.evaluate(() => jelly.items.map(a => ({id:a.id,selector:a.anchor.selector})));
+  const inlineItems = await frame.evaluate(() => jelly.person.asks.map(a => ({id:a.id,selector:a.anchor.selector})));
   const unopened = new Map(inlineItems.map(item => [item.id, item]));
   while (unopened.size) {
     await page.waitForFunction(({name,ids}) => ids.includes(document.querySelector(`#dock-list [data-goto="${name}"]`)?.dataset.item), {name:groupedName,ids:[...unopened.keys()]});
@@ -323,7 +323,7 @@ async page => {
     await frame.evaluate(selector => { location.hash = selector; document.activeElement.blur(); }, item.selector);
     frame = await dock(groupedName, item.id);
     await frame.waitForFunction(id => {
-      const item = jelly.items.find(a => a.id === id);
+      const item = jelly.person.asks.find(a => a.id === id);
       return document.getElementById(item.anchor.selector.slice(1))?.contains(document.activeElement);
     }, item.id);
     groupedId = item.id;
@@ -346,14 +346,14 @@ async page => {
     await page.locator(`#dock-list [data-goto="${tallName}"]`).waitFor({state:'attached'});
     const initialId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
     frame = await dock(tallName, initialId);
-    const firstId = await frame.evaluate(() => jelly.items.find(a => a.anchor.selector === '#q-first').id);
+    const firstId = await frame.evaluate(() => jelly.person.asks.find(a => a.anchor.selector === '#q-first').id);
     await frame.locator(`[data-pick="${firstId}|y"]`).click();
-    await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'y', firstId);
+    await frame.waitForFunction(id => jelly.person.asks.find(a => a.id === id)?.answer?.option === 'y', firstId);
     await page.locator(`#dock-list [data-goto="${tallName}"]:not([data-item="${firstId}"])`).waitFor({state:'attached'});
     const tallId = await page.locator(`#dock-list [data-goto="${tallName}"]`).getAttribute('data-item');
     frame = await dock(tallName, tallId);
     const opening = await frame.evaluate(id => {
-      const item = jelly.items.find(a => a.id === id);
+      const item = jelly.person.asks.find(a => a.id === id);
       const question = document.getElementById(item.anchor.selector.slice(1));
       const heading = question.querySelector('h2').getBoundingClientRect();
       const focus = document.activeElement.getBoundingClientRect();
@@ -368,7 +368,7 @@ async page => {
       assert(!unanswered.attention.find(a => a.id === tallId).answer, `Enter at the tall ${content} heading does not choose an answer`);
     }
     await frame.locator(`[data-pick="${tallId}|y"]`).click();
-    await frame.waitForFunction(id => jelly.items.find(a => a.id === id)?.answer?.option === 'y', tallId);
+    await frame.waitForFunction(id => jelly.person.asks.find(a => a.id === id)?.answer?.option === 'y', tallId);
   }
   // History changes the URL without replacing the loaded view.
   frame = await dock(name, twin.args.id);
@@ -382,7 +382,7 @@ async page => {
   assert(await frame.locator('.jf-ask').count() === 0, 'inline view has no duplicate cards');
   // Hold an earlier local write before committing it; wait for both response
   // echoes before checking the final frame and focused question.
-  const focusUrl = `${base}/api/jellies/surface/call`;
+  const focusUrl = `${base}/api/jellies/page/call`;
   let releaseFirst, firstStarted;
   const firstReady = new Promise(resolve => { firstStarted = resolve; });
   const firstGate = new Promise(resolve => { releaseFirst = resolve; });
@@ -403,7 +403,7 @@ async page => {
   await firstReady;
   frame = await (await page.locator('#full iframe').elementHandle()).contentFrame();
   await frame.waitForURL(`${base}/j/${encodeURIComponent(groupedName)}/`, {waitUntil:'load'});
-  await frame.waitForFunction(id => window.jelly?.items.find(a => a.id === id) && document.activeElement.matches('[data-pick]'), groupedId);
+  await frame.waitForFunction(id => window.jelly?.person.asks.find(a => a.id === id) && document.activeElement.matches('[data-pick]'), groupedId);
   releaseFirst();
   await page.waitForFunction(name => pendingFocusWrites === 0 && jelly.state.focus === name, groupedName);
   assert(writes.length === 2, 'both delayed local focus writes completed');
@@ -427,7 +427,7 @@ async page => {
       await page.evaluate(({name,id}) => document.querySelector(`#dock-list [data-goto="${name}"][data-item="${id}"]`).click(), {name,id:twin.args.id});
     } else await page.locator('#back').click();
     await ready;
-    await post('/api/jellies/surface/call', {verb:'focus',args:{name:groupedName}});
+    await post('/api/jellies/page/call', {verb:'focus',args:{name:groupedName}});
     await page.waitForFunction(name => jelly.state.focus === name, groupedName);
     release();
     await page.waitForFunction(name => pendingFocusWrites === 0 && jelly.state.focus === name && full === name, groupedName);
@@ -444,7 +444,7 @@ async page => {
   });
   for (const failure of ['http','network']) {
     for (const prior of [null, groupedName]) {
-      await post('/api/jellies/surface/call', {verb:'focus',args:{name:prior}});
+      await post('/api/jellies/page/call', {verb:'focus',args:{name:prior}});
       await page.waitForFunction(prior => full === prior && pendingFocusWrites === 0, prior);
       const failFocus = async route => {
         if (route.request().postDataJSON().verb !== 'focus') return route.continue();
@@ -474,7 +474,7 @@ async page => {
   const snapshotErrors = [];
   snapshot.on('pageerror', e => snapshotErrors.push(e.message));
   await snapshot.setContent(await shared.text());
-  assert(await snapshot.evaluate(() => typeof jelly.onAttend(() => {}) === 'function'), 'snapshot subscription stub');
+  assert(await snapshot.evaluate(() => typeof jelly.person.onOpen(() => {}) === 'function'), 'snapshot subscription stub');
   assert(snapshotErrors.length === 0, `snapshot errors: ${snapshotErrors}`);
   await snapshot.close();
   page.off('pageerror', onError);

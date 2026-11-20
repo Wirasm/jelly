@@ -115,11 +115,11 @@
     {
       "id": "i6",
       "short": "#6",
-      "label": "The first jelly see returns a snapshot",
+      "label": "The first jelly look returns a snapshot",
       "cost": 2,
       "value": 4,
       "group": "run",
-      "why": "Cause found: Chrome posts its snapshot, then lingers, and see waits 20 s.",
+      "why": "Cause found: Chrome posts its snapshot, then lingers, and look waits 20 s.",
       "in": true
     },
     {

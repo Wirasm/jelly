@@ -8,11 +8,11 @@ Start it as soon as you have two observations, and add to it as you go.
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes timeline --out DIR
 jelly new timeline --recipe timeline --state state.json --about "Why <the thing> happened"
-jelly see timeline                             # fix every `!` and `error` line first
+jelly look timeline                            # fix every `!` and `error` line first
 jelly focus timeline
 ```
 
-The example `state.json` is a real investigation: why `jelly see` sometimes took
+The example `state.json` is a real investigation: why `jelly look` sometimes took
 20 s and came back without a snapshot. It is still open, and says so. Replace it
 with your own. The view and verbs are a starting point; change them when the
 investigation needs something else.

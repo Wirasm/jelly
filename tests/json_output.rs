@@ -38,7 +38,7 @@ impl Daemon {
 }
 
 /// Every change prints the daemon's event: its kind, seq and version, what it
-/// changed, and for an ask or look the item's id.
+/// changed, and for an ask the item's id.
 #[test]
 fn changes_print_their_event() {
     let dir = tempfile::tempdir().unwrap();
@@ -66,8 +66,8 @@ fn changes_print_their_event() {
 
     let asked = d.json(&["ask", "x", "Which first?", "--option", "a=Milk", "--option", "b=Eggs"]);
     assert_eq!((asked["kind"].as_str(), asked["args"]["id"].as_str()), (Some("attention"), Some("a1")), "{asked}");
-    let looked = d.json(&["look", "x", "The list"]);
-    assert_eq!(looked["args"]["id"], "a2", "{looked}");
+    let seen = d.json(&["ask", "x", "The list", "--seen"]);
+    assert_eq!((seen["args"]["id"].as_str(), seen["args"]["seen"].as_bool()), (Some("a2"), Some(true)), "{seen}");
     let withdrawn = d.json(&["withdraw", "x", "a1"]);
     assert_eq!(withdrawn["kind"], "withdraw", "{withdrawn}");
 
@@ -76,17 +76,17 @@ fn changes_print_their_event() {
     assert!(!share.status.success() && share.stdout.is_empty(), "{share:?}");
 }
 
-/// `see --json` splits what `see` prints: the summary, the problem lines, the
-/// screenshot's path and the outline of what is on screen.
+/// `look --width --json` splits what `look` prints at one width: the summary,
+/// the problem lines, the screenshot's path and the outline of what is on screen.
 #[test]
-fn see_prints_its_parts() {
+fn look_at_one_width_prints_its_parts() {
     let home = tempfile::tempdir().unwrap();
     let d = daemon(home.path());
     let view = r#"<p id="x">fine</p><script>throw new Error("boom in view")</script>"#;
     ureq::post(&format!("{}/api/jellies", d.1))
         .send_json(json!({"name": "t:p", "view": view, "verbs": "const verbs = {};", "state": {}, "by": "test"}))
         .unwrap();
-    let seen = d.json(&["see", "p", "--png"]);
+    let seen = d.json(&["look", "p", "--width", "1280"]);
     assert_eq!((seen["jelly"].as_str(), seen["version"].as_u64()), (Some("t:p"), Some(1)), "{seen}");
     assert!(seen["summary"].as_str().unwrap().starts_with("t:p · "), "{seen}");
     let problems = seen["problems"].as_array().unwrap();

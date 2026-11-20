@@ -1,12 +1,12 @@
 {
   "title": "The 20-second browser",
-  "question": "Why does jelly see sometimes take 20 s and come back without a snapshot?",
-  "status": "Open. jelly ask no longer waits for the browser to exit; jelly see still does (issue #6).",
+  "question": "Why does jelly look sometimes take 20 s and come back without a snapshot?",
+  "status": "Open. jelly ask no longer waits for the browser to exit; jelly look still does (issue #6).",
   "clock": "21:02",
   "lanes": [
     {
       "id": "see",
-      "label": "jelly see"
+      "label": "jelly look"
     },
     {
       "id": "ask",
@@ -33,11 +33,11 @@
       "dur": 20,
       "kind": "bad",
       "when": "21:02",
-      "label": "First see: 20 s, no snapshot",
-      "detail": "The very first jelly see against a new daemon. The profile folder /tmp/jelly-chrome did not exist before this run.",
+      "label": "First look: 20 s, no snapshot",
+      "detail": "The very first jelly look against a new daemon. The profile folder /tmp/jelly-chrome did not exist before this run.",
       "show": {
         "kind": "terminal",
-        "after": "$ time jelly see plan\ntrial:plan · trial · v4 · made by agent · last change just now by agent\nwaits    a1 ask \"Which order?\" [a★/b] at #list\nwaits    a2 ask \"Dead anchor?\" [y/n] at #nope\n!        No snapshot: the browser took longer than 20 s\n\nreal    0m20.006s"
+        "after": "$ time jelly look plan\ntrial:plan · trial · v4 · made by agent · last change just now by agent\nwaits    a1 ask \"Which order?\" [a★/b] at #list\nwaits    a2 ask \"Dead anchor?\" [y/n] at #nope\n!        No snapshot: the browser took longer than 20 s\n\nreal    0m20.006s"
       },
       "by": "agent"
     },
@@ -100,7 +100,7 @@
       "detail": "Same daemon, same jelly, two minutes later. This is what made a cold start look like the cause.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly see plan\ntrial:plan · trial · v5 · made by agent · last change 1m ago by agent\n…\non screen at 1280×757 (v5):\n- heading \"Plan\" [h1] #title\n- ul: #list\n  - text \"first\"\n- button \"Add\" #add\n1s"
+        "after": "$ jelly look plan\ntrial:plan · trial · v5 · made by agent · last change 1m ago by agent\n…\non screen at 1280×757 (v5):\n- heading \"Plan\" [h1] #title\n- ul: #list\n  - text \"first\"\n- button \"Add\" #add\n1s"
       },
       "by": "agent"
     },
@@ -126,11 +126,11 @@
       "dur": 1,
       "kind": "ok",
       "when": "23:15",
-      "label": "see --full at 1280: fine",
+      "label": "look --full at 1280: fine",
       "detail": "A second daemon, two hours later. The profile folder is the same one from 21:02.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly see review --full\npng      …/home2/see/demo:review-1280.png"
+        "after": "$ jelly look review --full\npng      …/home2/renders/demo:review-1280.png"
       },
       "by": "agent"
     },
@@ -145,7 +145,7 @@
       "detail": "The very next command. The screenshot was written; the snapshot step timed out.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly see review --full --width 390\npng      …/home2/see/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
+        "after": "$ jelly look review --full --width 390\npng      …/home2/renders/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
       },
       "by": "agent"
     },
@@ -161,7 +161,7 @@
       "detail": "Same failure a few minutes later, after the view changed.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly reshape review --view view.html\ndemo:review v6: reshape\n$ jelly see review --full --width 390\npng      …/home2/see/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
+        "after": "$ jelly reshape review --view view.html\ndemo:review v6: reshape\n$ jelly look review --full --width 390\npng      …/home2/renders/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
       },
       "by": "agent"
     },
@@ -177,7 +177,7 @@
       "detail": "One command, two renders. The first posted its snapshot (the page text came back); the second, for the png, hit 20 s. So a render can do its work and still be counted as failed.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly see example --full\n!        No screenshot: the browser took longer than 20 s\n  - text \"All 29 changed lines are in a group, checked against the whole diff\" #account"
+        "after": "$ jelly look example --full\n!        No screenshot: the browser took longer than 20 s\n  - text \"All 29 changed lines are in a group, checked against the whole diff\" #account"
       },
       "by": "agent"
     },
@@ -208,7 +208,7 @@
       "detail": "Three identical commands in a loop, nothing else running.",
       "show": {
         "kind": "terminal",
-        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo:example-1280.png\n1s",
+        "after": "$ for i in 1 2 3; do jelly look example --full | grep \"png\\|^!\"; done\npng      …/renders/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/renders/demo:example-1280.png\n1s",
         "caption": "This one is the first line."
       },
       "by": "agent"
@@ -225,7 +225,7 @@
       "detail": "The second of the three, started the moment the first returned.",
       "show": {
         "kind": "terminal",
-        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo:example-1280.png\n1s",
+        "after": "$ for i in 1 2 3; do jelly look example --full | grep \"png\\|^!\"; done\npng      …/renders/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/renders/demo:example-1280.png\n1s",
         "caption": "This one is the middle line."
       },
       "by": "agent"
@@ -242,7 +242,7 @@
       "detail": "The third, started the moment the failed one was killed.",
       "show": {
         "kind": "terminal",
-        "after": "$ for i in 1 2 3; do jelly see example --full | grep \"png\\|^!\"; done\npng      …/see/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/see/demo:example-1280.png\n1s",
+        "after": "$ for i in 1 2 3; do jelly look example --full | grep \"png\\|^!\"; done\npng      …/renders/demo:example-1280.png\n0s\n!        No screenshot: the browser took longer than 20 s\n20s\npng      …/renders/demo:example-1280.png\n1s",
         "caption": "This one is the last line."
       },
       "by": "agent"
@@ -317,7 +317,7 @@
       "approx": true,
       "when": "about 23:57",
       "label": "Fix: answer when the snapshot is in",
-      "detail": "The anchor check stops waiting for the process. It polls for the snapshot while the browser runs and drops the browser once it has one. jelly see was left as it is.",
+      "detail": "The anchor check stops waiting for the process. It polls for the snapshot while the browser runs and drops the browser once it has one. jelly look was left as it is.",
       "show": {
         "kind": "terminal",
         "before": "let rendered = render(…).await;   // waits for Chrome to exit\nfor _ in 0..30 { if let Some(s) = snap() { return Ok(…) } … }",
@@ -396,7 +396,7 @@
         "ask-four",
         "see-split"
       ],
-      "settle": "Give every render its own profile folder and run jelly see fifty times. If the 20 s runs stop, it was the profile.",
+      "settle": "Give every render its own profile folder and run jelly look fifty times. If the 20 s runs stop, it was the profile.",
       "verdict": null,
       "by": "agent"
     },

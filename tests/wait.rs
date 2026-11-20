@@ -67,7 +67,7 @@ fn answers_completed_before_wait_are_replayed_in_all_attention_forms() {
     let cases = [
         (vec!["ask", "plan", "Which?", "--option", "a=Quiet", "--option", "b=Bold", "--recommend", "a", "--why", "Calmer"], json!({"option": "a", "text": "larger please", "by": "person"})),
         (vec!["ask", "plan", "Anything missing?"], json!({"text": "more space", "by": "person"})),
-        (vec!["look", "plan", "Check links"], json!({"by": "person"})),
+        (vec!["ask", "plan", "Check links", "--seen"], json!({"by": "person"})),
     ];
     for (args, answer) in cases {
         let output = daemon.ok(&args);
@@ -109,7 +109,7 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
         assert!(output["next"].as_str().unwrap().contains(&format!("--since {}", output["since"].as_str().unwrap())));
         if round == 2 {
             assert!(log.iter().any(|e| e["kind"] == "withdraw"));
-            let shown: Value = serde_json::from_str(&daemon.ok(&["show", "sharing"])).unwrap();
+            let shown: Value = ureq::get(&format!("{}/api/jellies/test:sharing", daemon.url)).call().unwrap().into_json().unwrap();
             let item = shown["attention"].as_array().unwrap().iter().find(|a|
                 a["anchor"]["selector"] == "#q-one" && a["group"] == "round-2").unwrap();
             assert_eq!(item["id"], "a2");

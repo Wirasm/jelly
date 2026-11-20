@@ -29,7 +29,7 @@ const UNDO_SLACK: usize = 64 * 1024;
 const DIFF_DEADLINE: Duration = Duration::from_millis(50);
 /// `events.jsonl` is trimmed once it passes `LOG_LIMIT`, down to the newest
 /// `LOG_KEEP` plus up to `PERSON_CARRY` of the person's older events, which
-/// are what the inbox and `jelly see` report.
+/// are what the inbox and `jelly look` report.
 const LOG_LIMIT: u64 = 8 << 20;
 const LOG_KEEP: usize = 4 << 20;
 const PERSON_CARRY: usize = 1 << 20;
@@ -51,7 +51,9 @@ pub struct Jelly {
     pub view: String,
     pub verbs: String,
     pub state: Value,
-    /// Bumps on every change of any kind.
+    /// Bumps when the view, verbs or state change: a verb call, a set, an undo
+    /// or a reshape of the view or verbs. Comments, asks and other attention
+    /// leave it alone; an event's `seq` counts those.
     pub version: u64,
     /// Bumps when the view or verbs change; an open view reloads when it does.
     pub view_rev: u64,
@@ -61,13 +63,13 @@ pub struct Jelly {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaped_by: Option<String>,
     pub updated_ms: u64,
-    /// When the agent made it; the surface's stream is in this order.
+    /// When the agent made it; the jelly page's stream is in this order.
     #[serde(default)]
     pub created_ms: u64,
     /// One line from the agent on what this jelly is for, shown beside it.
     #[serde(default)]
     pub about: String,
-    /// Hidden from the surface after a quiet week; any change brings it back.
+    /// Hidden from the jelly page after a quiet week; any change brings it back.
     #[serde(default)]
     pub archived: bool,
     /// Comments pinned to elements of the view. Kept apart from state: they are
@@ -75,27 +77,29 @@ pub struct Jelly {
     #[serde(default)]
     #[serde(alias = "feedback")]
     pub comments: Vec<Comment>,
-    /// What the agent put in front of the person: asks to answer, things to
-    /// look at. Beside state like comments; undo does not touch them.
+    /// The asks the agent put in front of the person. Beside state like
+    /// comments; undo does not touch them.
     #[serde(default)]
     pub attention: Vec<Attention>,
     /// Set while an agent says it is changing this jelly, so the person waits.
     #[serde(default)]
     pub working: Option<Value>,
     /// Notes agents leave for the next agent: what this jelly is for, how its
-    /// verbs are meant to be used, what the person said. `jelly see` shows them.
+    /// verbs are meant to be used, what the person said. `jelly look` shows them.
     #[serde(default)]
     pub notes: Vec<Value>,
 }
 
-/// One item for the person's attention: an ask wants an answer (an option, or
-/// text), a look wants a glance (seen, or a word back). Items asked together,
-/// as one `jelly ask --spec` round, share a group.
+/// One ask for the person's attention. It wants an option or words, or, when
+/// `seen`, a glance: "seen", or a word back. Asks made together, as one
+/// `jelly ask --spec` round, share a group.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(from = "AttentionOnDisk")]
 pub struct Attention {
     pub id: String,
-    pub kind: AttentionKind,
+    /// The person can answer with nothing, meaning "seen" (`jelly ask --seen`).
+    #[serde(default)]
+    pub seen: bool,
     pub title: String,
     /// More to read before answering.
     #[serde(default)]
@@ -142,20 +146,14 @@ impl Attention {
         self.answer.is_none() && self.withdrawn.is_none()
     }
 
-    /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly see`
-    /// and `jelly attention` both use it.
+    /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly look`
+    /// and `jelly attention` both use it. A seen ask shows `[seen]`.
     pub fn summary(&self) -> String {
-        let opts = self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/");
-        let kind = if self.kind == AttentionKind::Look { "look" } else { "ask" };
-        format!("{} {kind} {:?}{}{}", self.id, self.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, self.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default())
+        let opts = if self.seen { "seen".into() } else {
+            self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/")
+        };
+        format!("{} ask {:?}{}{}", self.id, self.title, if opts.is_empty() { String::new() } else { format!(" [{opts}]") }, self.anchor["selector"].as_str().map(|s| format!(" at {s}")).unwrap_or_default())
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AttentionKind {
-    Ask,
-    Look,
 }
 
 /// One choice in an ask. Only `id` and `label` are needed; the rest is there
@@ -179,7 +177,7 @@ pub struct AskOption {
     pub preview: String,
 }
 
-/// The person's answer: an option, words, or both. A look answered with
+/// The person's answer: an option, words, or both. A seen ask answered with
 /// neither means "seen".
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Answer {
@@ -202,7 +200,8 @@ pub struct Stamp {
 #[derive(Deserialize)]
 struct AttentionOnDisk {
     id: String,
-    kind: AttentionKind,
+    #[serde(default)]
+    seen: bool,
     title: String,
     #[serde(default, alias = "detail")]
     context: String,
@@ -235,7 +234,7 @@ impl From<AttentionOnDisk> for Attention {
             Some(v) => serde_json::from_value(v).ok(),
             None => None,
         };
-        Attention { id: d.id, kind: d.kind, title: d.title, context: d.context, anchor: d.anchor, options: d.options, recommend: d.recommend, why: d.why, group: d.group, by: d.by, at_ms: d.at_ms, answer, withdrawn }
+        Attention { id: d.id, seen: d.seen, title: d.title, context: d.context, anchor: d.anchor, options: d.options, recommend: d.recommend, why: d.why, group: d.group, by: d.by, at_ms: d.at_ms, answer, withdrawn }
     }
 }
 
@@ -260,7 +259,7 @@ pub struct Reply {
     pub at_ms: u64,
 }
 
-/// A jelly's view and state at an earlier version, for `jelly see --compare`.
+/// A jelly's view and state at an earlier version, for `jelly look --compare`.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Past {
     pub view: String,
@@ -518,7 +517,7 @@ pub fn named(by: &str) -> String {
     viewer(by).map(|n| format!(" by {n}")).unwrap_or_default()
 }
 /// The internal jelly that is the jelly page.
-pub const PAGE: &str = "surface";
+pub const PAGE: &str = "page";
 
 impl Event {
     pub fn is_inbox_item(&self, project: &str) -> bool {
@@ -526,7 +525,7 @@ impl Event {
             && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
     }
 
-    /// One line on what happened, for agents: the inbox and `jelly see` both use it.
+    /// One line on what happened, for agents: the inbox and `jelly look` both use it.
     pub fn describe(&self) -> String {
         let a = self.args.clone().unwrap_or(Value::Null);
         let s = |v: &Value| v.as_str().unwrap_or("").to_string();
@@ -817,7 +816,7 @@ impl Store {
             return Err(Error::Invalid(format!("{name} is at v{}; there is no v{version}", j.version)));
         }
         if version < entry.history_from {
-            return Err(Error::Invalid(format!("v{version} of {name} is older than its kept history, which starts at v{}; to compare with a version later, keep it with jelly see {name} --save NAME", entry.history_from)));
+            return Err(Error::Invalid(format!("v{version} of {name} is older than its kept history, which starts at v{}; to compare with a version later, keep it with jelly look {name} --save NAME", entry.history_from)));
         }
         let mut past = Past { view: j.view.clone(), state: j.state.clone(), version };
         for step in entry.steps.iter().rev().take_while(|s| s.version >= version) {
@@ -895,7 +894,7 @@ impl Store {
     pub fn sweep(&mut self, idle_ms: u64) -> Vec<Event> {
         let cutoff = now_ms().saturating_sub(idle_ms);
         let stale: Vec<String> = self.list()
-            .filter(|j| !j.pinned && !j.archived && j.name != "surface" && j.updated_ms < cutoff)
+            .filter(|j| !j.pinned && !j.archived && j.name != PAGE && j.updated_ms < cutoff)
             .filter(|j| j.comments.iter().all(|f| f.resolved))
             .filter(|j| j.attention.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
@@ -1003,8 +1002,8 @@ impl Store {
         Ok(out)
     }
 
-    /// Puts something in front of the person: `{"kind": "ask"|"look", "title",
-    /// "context"?, "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
+    /// Puts an ask in front of the person: `{"title", "seen"?, "context"?,
+    /// "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
     pub fn attend(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
         let n = self.get(name)?.attention.len();
         let item = attention_from(&spec, format!("a{}", n + 1), by)?;
@@ -1036,7 +1035,6 @@ impl Store {
         for (i, q) in questions.iter().enumerate() {
             let qid = q["id"].as_str().map(String::from).unwrap_or_else(|| format!("q{}", i + 1));
             let mut q = q.clone();
-            q["kind"] = "ask".into();
             q["title"] = q.get("question").cloned().or_else(|| q.get("title").cloned()).unwrap_or(Value::Null);
             q["group"] = group.clone().into();
             q["anchor"] = serde_json::json!({"selector": format!("#q-{qid}")});
@@ -1070,7 +1068,7 @@ impl Store {
     }
 
     /// The person answers an item, or changes their answer: an option id,
-    /// text, or both. A look can be answered with nothing, meaning "seen".
+    /// text, or both. A seen ask can be answered with nothing, meaning "seen".
     pub fn answer(&mut self, name: &str, id: &str, option: Option<&str>, text: &str, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
@@ -1084,11 +1082,11 @@ impl Store {
             }
         }
         let text = text.trim();
-        if item.kind == AttentionKind::Ask && option.is_none() && text.is_empty() {
-            return Err(Error::Invalid("an ask needs an option or some text".into()));
+        if !item.seen && option.is_none() && text.is_empty() {
+            return Err(Error::Invalid("this ask needs an option or some text".into()));
         }
         item.answer = Some(Answer { option: option.map(String::from), text: text.into(), by: by.into(), at_ms: now_ms() });
-        let args = serde_json::json!({"id": id, "kind": item.kind, "title": item.title, "option": option, "text": text, "group": item.group});
+        let args = serde_json::json!({"id": id, "seen": item.seen, "title": item.title, "option": option, "text": text, "group": item.group});
         self.commit(name, EventKind::Answer, by, None, Some(args), Vec::new(), previous_entry)
     }
 
@@ -1128,7 +1126,8 @@ impl Store {
         self.jellies.get_mut(name).ok_or_else(|| Error::NotFound(name.into()))
     }
 
-    /// Bumps the version, saves the jelly, logs the event and returns it with state attached.
+    /// Bumps the version if the view, verbs or state changed, saves the jelly,
+    /// logs the event and returns it with state attached.
     #[allow(clippy::too_many_arguments)]
     fn commit(
         &mut self,
@@ -1141,7 +1140,8 @@ impl Store {
         previous: Option<Entry>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
-        if kind != EventKind::New {
+        let reshaped = previous.as_ref().is_some_and(|p| p.jelly.view_rev != entry.jelly.view_rev);
+        if matches!(kind, EventKind::Call | EventKind::Set | EventKind::Undo) || (kind == EventKind::Reshape && reshaped) {
             entry.jelly.version += 1;
         }
         entry.jelly.updated_ms = now_ms();
@@ -1255,7 +1255,7 @@ impl Store {
 
     /// Last retained change and the person's last eight events, oldest first.
     /// Built during startup validation and maintained on append and trim so a
-    /// see never searches through unrelated history.
+    /// look never searches through unrelated history.
     pub fn recent_events(&self, name: &str) -> (Option<Event>, Vec<Event>) {
         self.recent.get(name).map(|r| (r.last.clone(), r.person.clone())).unwrap_or_default()
     }
@@ -1535,11 +1535,7 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
 /// Names become file names and URL segments.
 /// Builds an attention item from an agent's spec, checking it.
 fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error> {
-    let kind = match spec["kind"].as_str().unwrap_or("ask") {
-        "ask" => AttentionKind::Ask,
-        "look" => AttentionKind::Look,
-        k => return Err(Error::Invalid(format!("attention kind must be ask or look, not {k:?}"))),
-    };
+    let seen = spec["seen"].as_bool().unwrap_or(false);
     let title = spec["title"].as_str().unwrap_or("").trim().to_string();
     if title.is_empty() {
         return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
@@ -1554,6 +1550,9 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
         if !ids.insert(o.id.as_str()) {
             return Err(Error::Invalid(format!("{title:?}: option id {:?} appears twice", o.id)));
         }
+    }
+    if seen && !options.is_empty() {
+        return Err(Error::Invalid(format!("{title:?}: a seen ask has no options; the person answers \"seen\" or with words")));
     }
     let recommend = spec["recommend"].as_str().map(String::from);
     if let Some(r) = &recommend {
@@ -1571,9 +1570,9 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
     let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
     Ok(Attention {
         id,
-        kind,
+        seen,
         title,
-        context: if spec.get("context").is_some_and(|c| c.is_string()) { text("context") } else { text("detail") },
+        context: text("context"),
         anchor: spec.get("anchor").cloned().unwrap_or(Value::Null),
         options,
         recommend,
@@ -2192,29 +2191,32 @@ mod tests {
         assert_eq!(out, vec!["/a/x", "/gone", "/k~1v", "/list", "/new"]);
     }
 
-    /// `see --compare vN` renders the jelly as it was. Versions that changed
-    /// nothing (a comment) show what came before them; an undone change, history
-    /// older than the kept steps and jellies saved before steps had versions
-    /// cannot be rebuilt, and say so.
+    /// `look --compare vN` renders the jelly as it was. A comment makes no
+    /// version; an undone change, history older than the kept steps and jellies
+    /// saved before steps had versions cannot be rebuilt, and say so.
     #[test]
     fn earlier_versions_rebuild_from_undo_steps() {
         let (dir, mut s) = store();
         s.create("j", "<p>one</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         s.call("j", "label", json!({"id": "a", "value": "x"}), "agent").unwrap(); // v2
-        s.comment("j", json!({"selector": "p"}), "hm", "person").unwrap(); // v3
-        s.reshape("j", Some("<p>two</p>".into()), None, None, "agent").unwrap(); // v4
+        let ev = s.comment("j", json!({"selector": "p"}), "hm", "person").unwrap();
+        assert_eq!(ev.version, 2, "a comment is not a version");
+        let ev = s.attend("j", json!({"title": "Seen it?", "seen": true}), "agent").unwrap();
+        assert_eq!(ev.version, 2, "an ask is not a version");
+        s.reshape("j", None, None, Some("relabelled".into()), "agent").unwrap();
+        assert_eq!(s.get("j").unwrap().version, 2, "a new about line is not a version");
+        s.reshape("j", Some("<p>two</p>".into()), None, None, "agent").unwrap(); // v3
         let at = |s: &Store, v| s.at_version("j", v).map(|p| (p.view, p.state));
         assert_eq!(at(&s, 1).unwrap(), ("<p>one</p>".into(), json!({"labels": {}})));
         assert_eq!(at(&s, 2).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
-        assert_eq!(at(&s, 3).unwrap(), at(&s, 2).unwrap());
-        assert_eq!(at(&s, 4).unwrap(), ("<p>two</p>".into(), json!({"labels": {"a": "x"}})));
-        assert!(at(&s, 5).is_err());
+        assert_eq!(at(&s, 3).unwrap(), ("<p>two</p>".into(), json!({"labels": {"a": "x"}})));
+        assert!(at(&s, 4).is_err());
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(at(&s, 1).unwrap().1, json!({"labels": {}}), "history survives a restart");
-        s.undo("j", "agent").unwrap(); // v5, the same as v3
-        assert_eq!(at(&s, 5).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
-        assert!(at(&s, 4).unwrap_err().to_string().contains("starts at v5"), "v4 was undone");
+        s.undo("j", "agent").unwrap(); // v4, the same as v2
+        assert_eq!(at(&s, 4).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
+        assert!(at(&s, 3).unwrap_err().to_string().contains("starts at v4"), "v3 was undone");
         assert!(at(&s, 1).is_err(), "before an undo, versions are ambiguous");
 
         // Saved before steps had versions: only the current version.
@@ -2224,7 +2226,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
         drop(s);
         let s = Store::open(dir.path()).unwrap();
-        assert!(at(&s, 5).is_ok() && at(&s, 2).is_err());
+        assert!(at(&s, 4).is_ok() && at(&s, 2).is_err());
     }
 
     #[test]
@@ -2338,15 +2340,15 @@ mod tests {
     fn attention_items_are_answered_beside_state() {
         let (_d, mut s) = store();
         s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let spec = json!({"kind": "ask", "title": "Which header?", "options": [{"id": "a", "label": "Bold"}, {"id": "b", "label": "Quiet"}], "recommend": "b", "why": "Calmer"});
+        let spec = json!({"title": "Which header?", "options": [{"id": "a", "label": "Bold"}, {"id": "b", "label": "Quiet"}], "recommend": "b", "why": "Calmer"});
         s.attend("j", spec, "claude").unwrap();
-        s.attend("j", json!({"kind": "look", "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
+        s.attend("j", json!({"seen": true, "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "z"}), "claude").is_err());
         // A recommendation needs alternatives and a reason.
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "a", "why": "only one"}), "claude").is_err());
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a"}), "claude").is_err());
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a", "why": " "}), "claude").is_err());
-        assert!(s.attend("j", json!({"kind": "poll", "title": "x"}), "claude").is_err());
+        assert!(s.attend("j", json!({"seen": true, "title": "x", "options": [{"id": "a"}]}), "claude").is_err(), "a seen ask has no options");
         assert!(s.answer("j", "a1", Some("c"), "", "person").is_err(), "not an option");
         assert!(s.answer("j", "a1", None, " ", "person").is_err(), "an ask needs something");
         let ev = s.answer("j", "a1", Some("b"), "but larger", "person").unwrap();

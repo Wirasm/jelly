@@ -45,10 +45,15 @@ jelly state plan /items               # read state, or the part at a JSON pointe
 In the view:
 
 ```js
+// this jelly
 jelly.onState((state, event) => render(state)); // now, and after every change by anyone
 jelly.call("add", { title });                   // runs a verb; rejects with its error
-jelly.watch("other", (state) => …);             // another jelly's state, live
 jelly.asset("shot.png");                        // URL of a file added with `jelly asset`
+// other jellies
+jelly.other("plan").watch((state) => …);        // its state, live; .state is a promise, .open() shows it
+// the person
+jelly.person.asks;                              // asks on this jelly; open ones have no .answer or .withdrawn
+jelly.person.onAsk(() => …);                    // now, and when asks or comments change
 jelly.who(vote.by);                             // "you", another person's name, or the agent's
 ```
 
@@ -68,9 +73,9 @@ control sits there, move it with
 ```bash
 jelly look plan                     # desktop + phone, light + dark: outline, problems, one side-by-side png
 jelly try plan --click "#add" --type "#title=Tea" --press "#title=Enter"   # use it; nothing is saved
-jelly see plan --compare v12        # what your change did since v12; --save NAME keeps a version longer
-jelly see plan                      # text only, one width (--width 390, --png, --problems)
-jelly see plan --poster             # save the screenshot as the jelly page's thumbnail
+jelly look plan --compare v12       # what your change did since v12; --save NAME keeps a version longer
+jelly look plan --text              # one width, no screenshot; --width 390 for one width with a png
+jelly look plan --poster            # save a screenshot as the jelly page's thumbnail
 jelly focus plan                    # open it full size on their screen; `jelly focus` closes it
 ```
 
@@ -91,7 +96,7 @@ One question, on the part of a jelly it is about:
 jelly ask plan "Which hero?" --option bold="Bold gradient" --option quiet="Quiet white|Swaps to a plain hero" \
   --recommend quiet --why "The button stands out more" --at "#hero" --wait --timeout 300
 # blocks; prints: a1 answered: quiet · "keep the button blue". Exit 2 on timeout.
-jelly look plan "Check the footer links" --at "#footer"   # with words, asks them to look; they answer "seen" or a word
+jelly ask plan "Check the footer links" --seen --at "#footer"   # they answer "seen" or a word
 jelly withdraw plan a1                                     # when it no longer applies
 ```
 
@@ -133,7 +138,7 @@ jelly wait plan --since seq:42 --timeout 60 --json         # block until someone
 A question the person asks about a whole jelly arrives like a comment, marked
 "on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.
 
-`ask`, `look`, `call` and `reshape` print `since seq:N`; pass it to `wait
+`ask`, `call` and `reshape` print `since seq:N`; pass it to `wait
 --since` to catch anything after your change. `wait` exits 2 on timeout. In a
 script, add `--json` to any command instead of parsing its text.
 
@@ -178,7 +183,7 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
 jelly ls                         # this project's jellies; --all for every project
 jelly find three issues          # the person named a jelly loosely: which one, and its state
 jelly serve --temp               # a throwaway daemon (free port, fresh home); use its URL as JELLY_URL
-jelly pull plan ./plan           # view.html, verbs.js, state.json, assets/ into a folder
+jelly pull plan ./plan           # the full jelly into a folder: view.html, verbs.js, state.json, assets/
 jelly dev plan ./plan            # reshape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
 jelly asset plan --rm shot.png       # remove one
@@ -193,7 +198,7 @@ jelly rm plan
 
 A jelly's full name is `project:name`; the project is the git repo you run in
 (or `--project`). Short names work inside the same project, in the CLI and in
-`jelly.read`/`jelly.watch`. From outside, use the full name.
+`jelly.other`. From outside, use the full name.
 
 Live data: verbs have no network, so push it in from your turn, a script or a
 loop with `jelly call`.

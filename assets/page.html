@@ -192,7 +192,7 @@
   .ditem { display: grid; grid-template-columns: 8px 1fr auto; gap: 8px; align-items: center; width: 100%; text-align: left; background: none; border: 0; color: var(--dark-ink); border-radius: 9px; padding: 7px 8px; cursor: pointer; font-size: 12.5px; }
   .ditem:hover { background: rgba(255,255,255,.08); }
   .ditem i { width: 8px; height: 8px; border-radius: 50%; background: #ff4f8b; }
-  .ditem i.look, .ditem i.reply { background: #ffcf3f; }
+  .ditem i.reply { background: #ffcf3f; }
   .ditem .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ditem .tt small { display: block; color: var(--dark-faint); font: 11px ui-monospace, monospace; }
   .ditem .pg { color: var(--dark-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -267,7 +267,7 @@
   // On a project page names show without their project; on All they show in full.
   const short = (n) => (PROJECT && n.startsWith(PROJECT + ":") ? n.slice(PROJECT.length + 1) : n);
   const who = (by) => (by ? jelly.who(by) : "?");
-  let attentionItems = []; // open asks and looks across this page's jellies
+  let attentionItems = []; // open asks across this page's jellies
   function flags(j) {
     const out = [];
     if (j.working) out.push(`<span class="tag work">${esc(who(j.working.by))} is working</span>`);
@@ -419,7 +419,7 @@
   let dockOpen = false, lastCount = null;
   let pendingAttend = null;
   // One row per thing to do: a round of questions on an ask page is one row
-  // ("3 questions"), a single ask or look is one row, comment replies are one row.
+  // ("3 questions"), a single ask is one row, comment replies are one row.
   function attentionCards() {
     const rows = [], groups = new Map();
     for (const a of attentionItems) {
@@ -799,12 +799,12 @@
   // ---- actions --------------------------------------------------------------
 
   async function act(path, body, method = "POST") {
-    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: jelly.by }) });
+    const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: jelly.person.by }) });
     if (!r.ok) alert((await r.json()).error);
     return r.ok;
   }
   const pin = (name) => act(`/api/jellies/${enc(name)}/pin`, { pinned: !byName(name).pinned });
-  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=${enc(jelly.by)}`, null, "DELETE"); };
+  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=${enc(jelly.person.by)}`, null, "DELETE"); };
 
   $("col").addEventListener("click", (e) => {
     const r = e.target.closest("[data-restore]");
@@ -889,7 +889,7 @@
   addEventListener("resize", fadeProjects);
 
   async function refresh() {
-    const all = (await (await fetch("/api/jellies")).json()).filter((j) => j.name !== "surface");
+    const all = (await (await fetch("/api/jellies")).json()).filter((j) => j.name !== "page");
     const live = all.filter((j) => !j.archived);
     const scope = (list) => (PROJECT ? list.filter((j) => j.project === PROJECT) : list);
     jellies = scope(live);
@@ -911,7 +911,7 @@
   let pending = null;
   jelly.events((ev) => {
     $("live").classList.add("live");
-    if (ev.jelly === "surface") return;
+    if (ev.jelly === "page") return;
     if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
     if (!jelly.isPerson(ev.by)) jiggle($("logo"));
     if (ev.kind !== "remove") lastEvent.set(ev.jelly, { text: describe(ev), by: ev.by, at: ev.at_ms || Date.now() });
@@ -924,7 +924,7 @@
     if (s.focus && s.focus !== full) openFull(s.focus, true);
     if (!s.focus && full) closeFull(true);
   }
-  // An agent focusing the surface opens that jelly full size; null closes it.
+  // An agent focusing the page opens that jelly full size; null closes it.
   jelly.onState((s, ev) => {
     if (!ev || !booted) return;
     if (ev.verb === "focus" && pendingFocusWrites) return;
@@ -933,11 +933,11 @@
   });
   setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
   // Unnamed, everything this browser does is "person", as it always was.
-  const drawMe = () => { $("me").textContent = jelly.viewer ? `You: ${jelly.viewer}` : "Set your name"; };
+  const drawMe = () => { $("me").textContent = jelly.person.name ? `You: ${jelly.person.name}` : "Set your name"; };
   $("me").onclick = () => {
-    const name = prompt("Your name, so others on these jellies can tell what you did. Leave it empty to stay unnamed.", jelly.viewer);
+    const name = prompt("Your name, so others on these jellies can tell what you did. Leave it empty to stay unnamed.", jelly.person.name);
     if (name === null) return;
-    jelly.viewer = name;
+    jelly.person.name = name;
     drawMe();
     renderStream(); renderBoard();
   };

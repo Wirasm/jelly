@@ -16,17 +16,17 @@ prose, and whenever you need them to choose.
 - **Show anything.** A jelly is a view (any HTML), state (JSON) and verbs (the JS
   functions that change state). Prototypes, three.js, charts, forms, animations.
   No component kit, no ceiling.
-- **Hear their answer.** Every click is a verb call with an author. `jelly ask` and
-  `jelly look` put a question on the exact element it is about. Comments attach
-  to elements. You get all of it from `jelly inbox` (or a hook at the start of your
+- **Hear their answer.** Every click is a verb call with an author. `jelly ask`
+  puts a question on the exact element it is about, or with `--seen` asks them
+  to look at it. Comments attach to elements. You get all of it from `jelly inbox` (or a hook at the start of your
   turn), or block on `jelly wait`.
 - **Get choices made.** `jelly ask --spec` lays out options with live previews,
   gains, costs and your recommendation. They pick, add a note, or add their own question.
-- **See what you made.** `jelly see NAME` prints the page as text, with everything
-  waiting on them, what they did lately, and problems the browser measured, such as
-  text unreadable in dark mode. `--png` when layout matters. `jelly look NAME`
-  does desktop and phone width in one call, with one side-by-side screenshot.
-  `jelly see NAME --compare v12` shows what a change did since version 12.
+- **See what you made.** `jelly look NAME` prints the page as text at desktop and
+  phone width, with everything waiting on them, what they did lately, problems the
+  browser measured (such as text unreadable in dark mode), and one side-by-side
+  screenshot. `--text` for one width and no screenshot.
+  `jelly look NAME --compare v12` shows what a change did since version 12.
   `jelly try NAME --click … --type …` uses the page the way they would and shows
   the result, without saving anything.
 - **Keep working on it together.** Reshape while it runs and state stays. Write
@@ -43,9 +43,9 @@ jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly inbox                                      # what they did since you last looked
 jelly look plan                                  # desktop and phone: outline, problems, one png
-jelly see plan                                   # what is on screen, as text
+jelly look plan --text                           # what is on screen, as text
 jelly try plan --click "#add" --type "#title=Tea" --click "#save"   # use it without changing it
-jelly show plan                                  # the full jelly: view, verbs, state
+jelly pull plan ./plan                           # the full jelly into a folder: view, verbs, state, assets
 jelly state plan /labels                         # its state, or the part at a JSON pointer
 jelly events plan                                # stream its events as JSON lines; no name streams every jelly's
 jelly undo plan                                  # undo the last change to its view, verbs or state
@@ -54,7 +54,7 @@ jelly rm plan                                    # remove it with its undo histo
 ```
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
-Finite commands finish their changes before printing. `events`/`watch` and `dev`
+Finite commands finish their changes before printing. `events` and `dev`
 stop when an output write detects closure; while idle, they keep waiting. `wait`
 keeps its event selection and timeout behavior, detecting closure only when it
 prints a qualifying event. `serve` continues serving when stdout closes.
@@ -90,13 +90,15 @@ full-view headers, and reshapes that swap in without a blank frame, run this fro
 the updated checkout against your running daemon:
 
 ```bash
-jelly reshape surface --view assets/surface.html
+jelly reshape page --view assets/page.html
 ```
 
 This replaces the jelly page's view and keeps its state. If you customized that
-view, incorporate the improvements from `assets/surface.html` into your version
+view, incorporate the improvements from `assets/page.html` into your version
 and reshape with that file instead. There is no automatic upgrade or compatibility
-layer for stored jelly pages.
+layer for stored jelly pages, with one exception: a home from before the jelly
+page was named `page` (it was `surface`) gets a fresh page from the bundled view
+on first start, keeping only the old page's state.
 
 To let agents hear you without asking, add `jelly inbox --hook` as a Claude Code
 `UserPromptSubmit` hook. It starts the default daemon silently, suppresses startup
@@ -149,9 +151,9 @@ reusing positions already passed by inbox readers or corrupting the final record
 on the next append.
 
 `~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
-to 1 MiB of your older events, so the inbox and `jelly see` still have them. A trim
+to 1 MiB of your older events, so the inbox and `jelly look` still have them. A trim
 keeps every event's position, and inbox reads go back only as far as the reader's
-position. `jelly see` uses the last change and last eight person events per jelly,
+position. `jelly look` uses the last change and last eight person events per jelly,
 kept in memory during startup validation and updated on append and trim; it does
 not scan the log on each request. Initial one-hour inbox windows and timestamp
 queries use an in-memory timestamp index to read only matching event byte ranges,

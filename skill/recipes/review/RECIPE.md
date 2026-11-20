@@ -8,7 +8,7 @@ diff is the backup, not the page.
 # Write your own state.json. To change the view or verbs: jelly recipes review --out DIR
 jelly new review --recipe review --state state.json --about "Review: <what they asked for>"
 git diff main...HEAD > /tmp/full.diff && jelly asset review /tmp/full.diff
-jelly see review                              # fix every `!` and `error` line first
+jelly look review                             # fix every `!` and `error` line first
 jelly focus review
 ```
 
@@ -37,8 +37,8 @@ something else: before/after screenshots, a rendered preview, a table of rows.
 - **Show, do not describe.** The page is a map (what they asked for, wired to the
   changes made for it), then one change at a time with its before and after.
   Give every change that decides something a `show`: run the old and the new and
-  paste both, or screenshot both (`jelly see NAME --png`, then `jelly asset`).
-  Without a `show` the person gets a diff, which is the thing this recipe is for
+  paste both, or screenshot both (`jelly look NAME --width 1280`, then
+  `jelly asset`). Without a `show` the person gets a diff, which is the thing this recipe is for
   avoiding. Keep `intent` and outcome `text` to a few words.
 - **Group by intent, not by file.** One group per reason you changed code. A file
   can appear in several groups; each group's `diff` holds only its own hunks.

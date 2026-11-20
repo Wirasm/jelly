@@ -331,7 +331,7 @@ fn manual_bind_failure_does_not_touch_home_and_custom_url_stays_selected() {
         assert!(server.try_wait().unwrap().is_none());
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(home.join("jellies/surface.json").exists());
+    assert!(home.join("jellies/page.json").exists());
     let result = Command::new(env!("CARGO_BIN_EXE_jelly"))
         .args(["--url", &url(p), "ls", "--json"])
         .env("HOME", s.0.path())
@@ -551,4 +551,35 @@ fn a_second_daemon_on_the_same_home_refuses_to_start() {
     }
     third.kill().unwrap();
     third.wait().unwrap();
+}
+
+/// A home from before the jelly page was named `page` holds it as `surface`.
+/// The next start replaces it with the bundled page and keeps its state.
+#[test]
+fn an_old_surface_becomes_the_page() {
+    let home = tempfile::tempdir().unwrap();
+    let serve = || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_jelly"))
+            .args(["serve", "--port", "0", "--home"]).arg(home.path())
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        let url = common::served_url(&mut child);
+        (child, url)
+    };
+    let (mut old, url) = serve();
+    ureq::post(&format!("{url}/api/jellies"))
+        .send_json(serde_json::json!({"name": "surface", "view": "<p>old page</p>", "verbs": "const verbs = {};", "state": {"seen": {"t:x": 3}}, "by": "jelly"}))
+        .unwrap();
+    old.kill().unwrap();
+    old.wait().unwrap();
+    std::fs::remove_file(home.path().join("jellies/page.json")).unwrap();
+
+    let (mut daemon, url) = serve();
+    let page: serde_json::Value = ureq::get(&format!("{url}/api/jellies/page")).call().unwrap().into_json().unwrap();
+    let surface = ureq::get(&format!("{url}/api/jellies/surface")).call();
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    assert_eq!(page["state"], serde_json::json!({"seen": {"t:x": 3}}));
+    assert!(!page["view"].as_str().unwrap().contains("old page") && page["pinned"] == true, "{page}");
+    assert!(matches!(surface, Err(ureq::Error::Status(404, _))));
 }

@@ -9,7 +9,7 @@ watches what it costs them. For a pick between a few options, use `jelly ask`.
 # Write your own state.json. To change the view or verbs: jelly recipes scope --out DIR
 jelly new scope --recipe scope --state state.json --about "Scope: <what is being decided>"
 jelly call scope recount                      # writes `result` from your items and levers
-jelly see scope                               # fix every `!` and `error` line first
+jelly look scope                              # fix every `!` and `error` line first
 jelly focus scope
 ```
 

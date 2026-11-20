@@ -15,7 +15,7 @@ printf 'const verbs = {};\n' > /tmp/jelly-visibility-verbs.js
 Run the browser from a scratch directory so generated browser files stay outside
 the checkout. A home created by an earlier build retains its stored jelly page;
 use a fresh home, or update that test page with
-`/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 reshape surface --view assets/surface.html`
+`/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 reshape page --view assets/page.html`
 from the checkout before running. The program takes the daemon URL from the open page and creates
 fresh jellies through the API. Use an absolute path to the test:
 
@@ -71,7 +71,7 @@ Comment, iframe Escape, the parent c shortcut, Undo, tab order, Pin/Unpin, Back,
 Enter, Escape and Remove.
 It returns measurements and saves `header-390.png` and `header-1280.png` in the
 scratch directory. Stop the throwaway daemon afterward. Existing homes retain
-their stored surface; use a fresh home for the newly built bundled view.
+their stored jelly page; use a fresh home for the newly built bundled view.
 
 # Shared-file browser check
 
@@ -136,7 +136,7 @@ It returns measurements and saves `stream-390.png`, `stream-390-expanded.png` an
 Run `full-view-header.js` against the same daemon to check full-view behavior.
 Stop the daemon afterward with Ctrl-C. Existing homes retain their stored jelly
 page; use a fresh home to test the newly built bundled view. To explicitly update
-a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 reshape surface --view assets/surface.html`
+a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 reshape page --view assets/page.html`
 from the checkout, merging these changes into any customized view first.
 
 # Comment Escape browser check
@@ -193,7 +193,7 @@ the new version kept the scroll, the box's scroll, focus, the typed text and its
 selection. It also reshapes a pinned tile. On the jelly page a per-frame sampler
 fails the check if a visible frame reloads in place or shows an unloaded
 document, and verb calls during a swap must not stall it. Run against a jelly page
-from before the swap (`git show <old>:assets/surface.html`, then `jelly reshape
-surface`), the sampler and focus checks fail. Existing homes keep their stored
-jelly page; use a fresh home or reshape `surface` with `assets/surface.html`.
+from before the swap (`git show <old>:assets/page.html`, then `jelly reshape
+page`), the sampler and focus checks fail. Existing homes keep their stored
+jelly page; use a fresh home or reshape `page` with `assets/page.html`.
 Stop the daemon afterward.

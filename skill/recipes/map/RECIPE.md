@@ -8,7 +8,7 @@ through the picture instead of reading a description of it.
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes map --out DIR
 jelly new map --recipe map --state state.json --about "How <the system> works"
-jelly see map                                 # fix every `!` and `error` line first
+jelly look map                                # fix every `!` and `error` line first
 jelly focus map
 ```
 
@@ -40,7 +40,7 @@ something else: columns instead of rows, a timeline, numbers on the wires.
   not every module. One box per thing that has a name people already use.
 - **Layers are a story.** Order them so most wires run downward and neighbours sit
   near each other; reorder the nodes in a layer until the long wires are few.
-  Look at a screenshot before you show it (`jelly see map --png`).
+  Look at a screenshot before you show it (`jelly look map`).
 - **A trace is the reason to open this.** Give at least one: a real path a real
   action takes, eight to fifteen steps, one short line each. Step through it
   yourself in the code while you write it. Where two steps have no wire between

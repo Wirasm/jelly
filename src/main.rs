@@ -30,7 +30,7 @@ struct Cli {
     #[arg(long, env = "JELLY_PROJECT", global = true)]
     project: Option<String>,
     /// Print JSON instead of text, for scripts. Changes print the daemon's event
-    /// (seq, version, changed paths, the item's id for asks and looks); lists print
+    /// (seq, version, changed paths, the item's id for asks); lists print
     /// an array. Commands with nothing to report as JSON refuse it.
     #[arg(long, global = true)]
     json: bool,
@@ -144,10 +144,7 @@ enum Cmd {
     Unpin { name: String },
     /// Remove a jelly and its history.
     Rm { name: String },
-    /// Print the full jelly: view, verbs, state.
-    Show { name: String },
     /// Stream events as JSON lines, for one jelly or all.
-    #[command(alias = "watch")]
     Events {
         name: Option<String>,
         /// Include the full state in each event.
@@ -159,13 +156,16 @@ enum Cmd {
     Open { name: Option<String> },
     /// Ask the person something: one question on a jelly, or a set of them.
     ///
-    /// Two forms:
+    /// Three forms:
     ///
     /// `jelly ask NAME "Which header?" --option a="Bold" --option b="Quiet" --recommend b --why "…" --at "#hero"`
     /// puts one ask on an existing jelly, next to what it is about. It shows on
     /// the jelly and in the person's attention queue. With `--wait` it blocks
     /// until the person answers and prints `a1 answered: <option> · "<note>"`.
     /// With --json it prints the ask's event, or with --wait the answered item.
+    ///
+    /// `jelly ask NAME "Check the footer links" --seen --at "#footer"` asks the
+    /// person to look at something; they answer "seen" or with a word back.
     ///
     /// `jelly ask NAME --spec spec.json` makes an ask page: one or more questions,
     /// each an attention item with options (label, does, gains, costs, effort, a
@@ -182,6 +182,9 @@ enum Cmd {
         /// An option as id=label, or id=label|what picking it does. Repeat it.
         #[arg(long = "option")]
         options: Vec<String>,
+        /// No options: the person answers "seen", or with a word back.
+        #[arg(long, conflicts_with_all = ["spec", "options", "recommend"])]
+        seen: bool,
         /// The option you recommend. Needs --why and at least two options; three or more is better.
         #[arg(long)]
         recommend: Option<String>,
@@ -192,7 +195,7 @@ enum Cmd {
         #[arg(long)]
         at: Option<String>,
         /// More to read before answering, shown under the question.
-        #[arg(long, alias = "detail", default_value = "")]
+        #[arg(long, default_value = "")]
         context: String,
         /// Block until the person answers or the ask is withdrawn, then print the answer.
         #[arg(long, conflicts_with = "spec")]
@@ -201,26 +204,49 @@ enum Cmd {
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
     },
-    /// Look at a jelly at desktop and phone width in one call, or, with WHAT, ask
-    /// the person to look at something.
+    /// Look at a jelly as the person will see it, before you show it or ask about it.
     ///
-    /// `jelly look NAME` prints what `see` does at desktop width, then what differs
-    /// at phone width, the problems measured at both widths (light and dark), and
-    /// one screenshot with desktop and phone side by side. Both widths render at
-    /// once, so it takes about as long as one `see`. With --json it prints {jelly,
-    /// version, summary, problems, png, outline, phone: {width, height, added,
-    /// removed, changed}}.
+    /// `jelly look NAME` renders it at desktop and phone width, light and dark, in
+    /// one call. It prints what the jelly is (its verbs and state, what waits on
+    /// the person, what they did lately), the problems the browser measured, the
+    /// desktop outline, what differs at phone width, and one png with desktop and
+    /// phone side by side. --json prints {jelly, version, summary, problems, png,
+    /// outline, phone: {width, height, added, removed, changed}}.
     ///
-    /// `jelly look NAME "Check the footer links" --at "#footer"` puts a look in the
-    /// person's attention queue; they answer "seen" or with a word back.
+    /// `--text` renders one width and takes no screenshot. `--width`, `--full`
+    /// and `--poster` also render one width, with a screenshot of it. --json
+    /// prints {jelly, version, summary, problems, png, outline}.
+    ///
+    /// `--compare v12` shows what changed since version 12 (or since a version
+    /// kept with `--save NAME`): the outline lines added, removed or changed, the
+    /// problems that are new or fixed, and one png with before and after side by
+    /// side. Its --json prints {jelly, version, against, against_version, summary,
+    /// problems, new_problems, fixed_problems, png, added, removed, changed}.
     Look {
         name: String,
-        /// What the person should look at. Leave out to look at the jelly yourself.
-        what: Option<String>,
-        #[arg(long, requires = "what")]
-        at: Option<String>,
-        #[arg(long, alias = "detail", requires = "what")]
-        context: Option<String>,
+        /// One width, text only: no screenshot.
+        #[arg(long, conflicts_with_all = ["full", "poster", "compare"])]
+        text: bool,
+        /// Render only this width (390 for a phone). With --compare, compare at it.
+        #[arg(long)]
+        width: Option<u32>,
+        /// One width; screenshot the whole page, not just the first screen.
+        #[arg(long)]
+        full: bool,
+        /// Print only what needs fixing: errors the page threw and `!` warnings.
+        #[arg(long, conflicts_with = "json")]
+        problems: bool,
+        /// One width; also save the screenshot as assets/poster.png, the jelly page's thumbnail.
+        #[arg(long)]
+        poster: bool,
+        /// Compare with an earlier version, `v12`, or one kept with --save. Earlier
+        /// versions come from the undo history, back to the last undo.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["full", "poster"])]
+        compare: Option<String>,
+        /// Keep this version under a name, to --compare with later. It is kept
+        /// outside the jelly, so the jelly does not change.
+        #[arg(long, value_name = "NAME")]
+        save: Option<String>,
     },
     /// Everything waiting on the person in this project (or everywhere with
     /// --all), one line per item.
@@ -230,43 +256,6 @@ enum Cmd {
         /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
         #[arg(long)]
         mine: bool,
-    },
-    /// See a jelly as an agent: what it is, its verbs and state, what waits on
-    /// the person, what they did lately, what is on screen as text, and problems
-    /// the browser measured in light and dark mode.
-    ///
-    /// --json prints {jelly, version, summary, problems, png, outline}.
-    ///
-    /// `--compare v12` shows what changed since version 12 (or since a version
-    /// kept with `--save NAME`): the outline lines added, removed or changed, the
-    /// problems that are new or fixed, and one png with before and after side by
-    /// side. Its --json prints {jelly, version, against, against_version, summary,
-    /// problems, new_problems, fixed_problems, png, added, removed, changed}.
-    See {
-        name: String,
-        /// Render at this width (390 for a phone). Default: 1280.
-        #[arg(long)]
-        width: Option<u32>,
-        /// Also save a screenshot and print its path.
-        #[arg(long)]
-        png: bool,
-        /// Screenshot the whole page, not just the first screen (implies --png).
-        #[arg(long)]
-        full: bool,
-        /// Print only what needs fixing: errors the page threw and `!` warnings.
-        #[arg(long, conflicts_with = "json")]
-        problems: bool,
-        /// Also save the screenshot as assets/poster.png, the jelly page's thumbnail.
-        #[arg(long)]
-        poster: bool,
-        /// Compare with an earlier version, `v12`, or one kept with --save. Earlier
-        /// versions come from the undo history, back to the last undo.
-        #[arg(long, value_name = "VERSION", conflicts_with_all = ["png", "full", "poster"])]
-        compare: Option<String>,
-        /// Keep this version under a name, to --compare with later. It is kept
-        /// outside the jelly, so the jelly does not change.
-        #[arg(long, value_name = "NAME")]
-        save: Option<String>,
     },
     /// Use a jelly as the person would, without changing it: do the steps in
     /// order, then print what is on screen, the verbs that ran and what they
@@ -297,7 +286,8 @@ enum Cmd {
     },
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
-    /// Write a jelly's view, verbs, state and assets into a folder to edit.
+    /// Write the full jelly into a folder: view.html, verbs.js, state.json and
+    /// assets/, the files `jelly new --from` and `jelly dev` read.
     Pull {
         name: String,
         /// Default: ./<name>
@@ -314,7 +304,7 @@ enum Cmd {
         #[arg(long)]
         set: Option<PathBuf>,
     },
-    /// Take back an ask or look that no longer applies.
+    /// Take back an ask that no longer applies.
     Withdraw { name: String, id: String },
     /// Open a jelly full size on the person's screen. No name closes it.
     Focus { name: Option<String> },
@@ -346,7 +336,6 @@ enum Cmd {
         mine: bool,
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
-    #[command(alias = "project")]
     Move { name: String, to: String },
     /// Mark a comment as dealt with.
     Resolve { name: String, id: String },
@@ -719,7 +708,6 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Pin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": true}))?),
         Cmd::Unpin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": false}))?),
         Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name)?, encode(&by))), Value::Null)?),
-        Cmd::Show { name } => print(get(&api(&format!("/{}", id(&name)?)))?),
         Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n)).transpose()?;
             let q = name.map(|n| format!("?jelly={}", encode(&n))).unwrap_or_default();
@@ -736,14 +724,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Ask { name, question: Some(q), options, recommend, why, at, context, wait, timeout, .. } => {
+        Cmd::Ask { name, question: Some(q), options, seen, recommend, why, at, context, wait, timeout, .. } => {
             let options: Vec<Value> = options.iter().map(|o| {
                 let (id, rest) = o.split_once('=').ok_or_else(|| format!("--option {o:?}: use id=label"))?;
                 let (label, does) = rest.split_once('|').unwrap_or((rest, ""));
                 Ok(json!({"id": id.trim(), "label": label.trim(), "does": does.trim()}))
             }).collect::<Result<_, String>>()?;
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
-            let body = json!({"kind": "ask", "title": q, "options": options, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
+            let body = json!({"title": q, "options": options, "seen": seen, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
             let ev = send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?;
             if !wait {
                 return report(ev);
@@ -761,20 +749,6 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let mut out = json!(item);
             out["jelly"] = json!(jelly);
             print(out)
-        }
-        Cmd::Look { name, what: None, .. } => {
-            let url = api(&format!("/{}/look{}", id(&name)?, if json { "?json=true" } else { "" }));
-            let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call().map_err(describe)?;
-            if json {
-                return print(resp.into_json().map_err(|e| e.to_string())?);
-            }
-            output(format_args!("{}", resp.into_string().map_err(|e| e.to_string())?))
-        }
-        Cmd::Look { name, what: Some(what), at, context } => {
-            let context = context.unwrap_or_default();
-            let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
-            let body = json!({"kind": "look", "title": what, "anchor": anchor, "context": context, "by": by});
-            report(send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?)
         }
         Cmd::Attention { all, mine } => {
             let p = if all { String::new() } else { project() };
@@ -907,15 +881,18 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
-        Cmd::See { name, width, png, full, problems, poster, compare, save } => {
+        Cmd::Look { name, text, width, full, problems, poster, compare, save } => {
             let mut q = vec![];
             if let Some(c) = &compare { q.push(format!("compare={}", encode(c))); }
             if let Some(s) = &save { q.push(format!("save={}", encode(s))); }
+            // Without a width the daemon renders desktop and phone side by side;
+            // these flags are about one render, so they pick one width.
+            let width = width.or((text || full || poster).then_some(1280));
             if let Some(w) = width { q.push(format!("width={w}")); }
-            if png || full || poster { q.push("png=true".into()); }
+            if width.is_some() && compare.is_none() && !text { q.push("png=true".into()); }
             if full { q.push("full=true".into()); }
             if json { q.push("json=true".into()); }
-            let url = api(&format!("/{}/see?{}", id(&name)?, q.join("&")));
+            let url = api(&format!("/{}/look?{}", id(&name)?, q.join("&")));
             // A jelly that changes while it renders (a live log, a monitor) answers 409;
             // a fresh render usually lands between changes.
             let mut tries = 0;
@@ -1328,6 +1305,9 @@ fn answer_line(item: &store::Attention) -> String {
     let option = answer.option.clone().filter(|o| !o.is_empty());
     let note = Some(&answer.text).filter(|t| !t.is_empty()).map(|t| format!("{t:?}"));
     let what: Vec<String> = option.into_iter().chain(note).collect();
+    if what.is_empty() {
+        return format!("{} answered: seen", item.id);
+    }
     format!("{} answered: {}", item.id, what.join(" · "))
 }
 
@@ -1367,7 +1347,7 @@ fn wait_line(e: &store::Event) -> String {
     format!("{} v{}: {} {}", e.jelly, e.version, e.by, e.describe())
 }
 
-/// Where an ask or look shows on the page, as the daemon found it: `anchor`
+/// Where an ask shows on the page, as the daemon found it: `anchor`
 /// says what became of its `--at`, and is absent when nothing could check.
 fn placement(ev: &Value) -> String {
     let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
@@ -1754,7 +1734,7 @@ mod tests {
     #[test]
     fn an_answer_is_one_line() {
         let item = |extra: serde_json::Value| {
-            let mut a = json!({"id": "a1", "kind": "ask", "title": "Q", "by": "agent", "at_ms": 1});
+            let mut a = json!({"id": "a1", "title": "Q", "by": "agent", "at_ms": 1});
             a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             answer_line(&serde_json::from_value(a).unwrap())
         };

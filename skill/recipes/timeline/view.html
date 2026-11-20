@@ -165,7 +165,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<span class="p">$</span>${l.slice(1)}` : l)).join("\n");
-const who = (by) => (by === jelly.by ? "You" : jelly.who(by));
+const who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 const VERDICT = { confirmed: "✓ Confirmed", ruled_out: "✕ Ruled out", next: "→ Check this next" };
 const GLYPH = { ok: "✓", bad: "×", info: "" };
 
@@ -345,20 +345,20 @@ function drawDetail(state) {
   const marks = marksOf(state), m = marks.find((m) => m.id === selMark);
   if (!m) { $("detail").innerHTML = `<p class="why">Nothing has been seen yet.</p>`; return; }
   const i = marks.indexOf(m), lane = (state.lanes || []).find((l) => l.id === m.lane), { sup, con } = hypsWith(state, m.id);
-  $("detail").innerHTML = `<div class="crumbs"><span>${i + 1} of ${marks.length}</span><span class="chip">${esc(lane?.label || m.lane)}</span><span>${esc(whenOf(state, m))}${m.dur ? ` · took ${dur(m.dur)}` : ""}</span>${jelly.isPerson(m.by) ? `<span class="chip">${esc(m.by === jelly.by ? "you" : jelly.who(m.by))} added this</span>` : ""}
+  $("detail").innerHTML = `<div class="crumbs"><span>${i + 1} of ${marks.length}</span><span class="chip">${esc(lane?.label || m.lane)}</span><span>${esc(whenOf(state, m))}${m.dur ? ` · took ${dur(m.dur)}` : ""}</span>${jelly.isPerson(m.by) ? `<span class="chip">${esc(m.by === jelly.person.by ? "you" : jelly.who(m.by))} added this</span>` : ""}
       <span class="nav"><button data-step="-1" aria-label="Earlier">‹</button><button data-step="1" aria-label="Later">›</button></span></div>
     <h2>${esc(m.label)}</h2>
     ${m.detail ? `<p class="why">${esc(m.detail)}</p>` : ""}
     ${hero(m.show, `e-${m.id}-show`)}
     ${sup.length + con.length ? `<div class="links">${sup.map((h) => `<button class="chip sup" data-hyp="${esc(h.id)}">+ for: ${esc(h.text)}</button>`).join("")}${con.map((h) => `<button class="chip con" data-hyp="${esc(h.id)}">− against: ${esc(h.text)}</button>`).join("")}</div>` : ""}
-    <div class="act"><button data-pin class="${m.pinned ? "on" : ""}">${m.pinned ? `★ This matters${m.pinned.by === jelly.by ? "" : ` (${esc(jelly.who(m.pinned.by))})`}` : "☆ This matters"}</button>${m.pinned ? `<button class="undo" data-unpin>Unpin</button>` : ""}</div>`;
+    <div class="act"><button data-pin class="${m.pinned ? "on" : ""}">${m.pinned ? `★ This matters${m.pinned.by === jelly.person.by ? "" : ` (${esc(jelly.who(m.pinned.by))})`}` : "☆ This matters"}</button>${m.pinned ? `<button class="undo" data-unpin>Unpin</button>` : ""}</div>`;
 }
 
 // ---- the explanations ----
 function drawHyps(state) {
   const hs = state.hypotheses || [], byId = Object.fromEntries((state.marks || []).map((m) => [m.id, m]));
   $("hyps").innerHTML = `<small>What could explain it</small>` + (hs.length ? "" : `<p class="why">No explanation yet.</p>`) + hs.map((h) => {
-    const on = h.id === selHyp, v = h.verdict, asks = (jelly.itemsAt?.(`#h-${h.id}`) || []).filter((a) => !a.answer).length;
+    const on = h.id === selHyp, v = h.verdict, asks = jelly.person.asks.filter((a) => a.anchor?.selector === `#h-${h.id}` && !a.answer && !a.withdrawn).length;
     const chips = (ids, c) => (ids || []).filter((id) => byId[id]).map((id) => `<button class="chip ${c}${id === selMark ? " on" : ""}" data-mark="${esc(id)}">${c === "sup" ? "+" : "−"} ${esc(byId[id].label)}</button>`).join("");
     return `<section class="hyp${on ? " on" : ""}${v ? ` v-${v.kind}` : ""}" id="h-${esc(h.id)}" data-hyp-card="${esc(h.id)}">
       <button class="hd" data-hyp="${esc(h.id)}" aria-expanded="${on}"><span class="t">${esc(h.text)}</span>
@@ -508,7 +508,7 @@ if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
   document.head.appendChild(l);
 }
 jelly.onState(render);
-jelly.onAttention?.(() => render(jelly.state));
+jelly.person.onAsk(() => render(jelly.state));
 </script>
 </body>
 </html>
