@@ -1560,6 +1560,13 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
         if !ids.contains(r.as_str()) {
             return Err(Error::Invalid(format!("{title:?}: recommend {r:?} is not one of the options")));
         }
+        // A recommendation is only useful against alternatives, and only with a reason.
+        if options.len() < 2 {
+            return Err(Error::Invalid(format!("{title:?}: a recommendation needs at least two options to choose between; three or more is better")));
+        }
+        if spec["why"].as_str().is_none_or(|w| w.trim().is_empty()) {
+            return Err(Error::Invalid(format!("{title:?}: say why you recommend {r:?} (--why, or \"why\" in a spec)")));
+        }
     }
     let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
     Ok(Attention {
@@ -2331,10 +2338,14 @@ mod tests {
     fn attention_items_are_answered_beside_state() {
         let (_d, mut s) = store();
         s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let spec = json!({"kind": "ask", "title": "Which header?", "options": [{"id": "a", "label": "Bold"}, {"id": "b", "label": "Quiet"}], "recommend": "b"});
+        let spec = json!({"kind": "ask", "title": "Which header?", "options": [{"id": "a", "label": "Bold"}, {"id": "b", "label": "Quiet"}], "recommend": "b", "why": "Calmer"});
         s.attend("j", spec, "claude").unwrap();
         s.attend("j", json!({"kind": "look", "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
         assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "z"}), "claude").is_err());
+        // A recommendation needs alternatives and a reason.
+        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "a", "why": "only one"}), "claude").is_err());
+        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a"}), "claude").is_err());
+        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a", "why": " "}), "claude").is_err());
         assert!(s.attend("j", json!({"kind": "poll", "title": "x"}), "claude").is_err());
         assert!(s.answer("j", "a1", Some("c"), "", "person").is_err(), "not an option");
         assert!(s.answer("j", "a1", None, " ", "person").is_err(), "an ask needs something");

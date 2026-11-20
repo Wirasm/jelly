@@ -181,6 +181,7 @@ enum Cmd {
         /// An option as id=label, or id=label|what picking it does. Repeat it.
         #[arg(long = "option")]
         options: Vec<String>,
+        /// The option you recommend. Needs --why and at least two options; three or more is better.
         #[arg(long)]
         recommend: Option<String>,
         /// Why you recommend it, in one sentence.
