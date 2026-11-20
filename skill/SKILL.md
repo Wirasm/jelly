@@ -12,8 +12,9 @@ http://127.0.0.1:7878. They click it, answer your questions and comment on any
 part of it, and you hear all of it.
 
 **Show, then let them react.** Do the thinking first: lay out the options, what
-each gains and costs, what each looks like, and which you recommend. Never hand
-the person an empty question.
+each gains and costs, what each looks like, and which you recommend and why.
+Give at least two options, three or more when you can; a recommendation without
+alternatives or a reason is refused. Never hand the person an empty question.
 
 The first `jelly` command starts the daemon if it is not running. `JELLY_URL` (or
 `--url`) points the CLI at another daemon; the jelly page is then at that address.

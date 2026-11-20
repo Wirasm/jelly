@@ -65,7 +65,7 @@ fn token(output: &str) -> &str { output.split("since ").last().unwrap().trim() }
 fn answers_completed_before_wait_are_replayed_in_all_attention_forms() {
     let daemon = Daemon::start();
     let cases = [
-        (vec!["ask", "plan", "Which?", "--option", "a=Quiet", "--recommend", "a"], json!({"option": "a", "text": "larger please", "by": "person"})),
+        (vec!["ask", "plan", "Which?", "--option", "a=Quiet", "--option", "b=Bold", "--recommend", "a", "--why", "Calmer"], json!({"option": "a", "text": "larger please", "by": "person"})),
         (vec!["ask", "plan", "Anything missing?"], json!({"text": "more space", "by": "person"})),
         (vec!["look", "plan", "Check links"], json!({"by": "person"})),
     ];
