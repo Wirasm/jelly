@@ -725,7 +725,8 @@
   // A view that draws its own marks it with data-send and calls jelly.person.send().
   let sendEl = null;
   function drawSend() {
-    const show = unsent > 0 && document.body && !agentMode && share?.can_act !== false && !document.querySelector("[data-send]");
+    // The jelly page is not a jelly an agent waits on: it shows no Send.
+    const show = unsent > 0 && boot.name !== "page" && document.body && !agentMode && share?.can_act !== false && !document.querySelector("[data-send]");
     if (!show) { sendEl?.remove(); sendEl = null; return; }
     if (!sendEl) {
       sendEl = document.createElement("button");

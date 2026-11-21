@@ -238,6 +238,34 @@ pub(crate) async fn remove_asset(app: &Shared, live: &Live, file: &str) -> Resul
 }
 
 /// What `jelly unshare` stops.
+/// Every shared jelly, for the jelly page: who holds a link, whether they
+/// opened it, and when the share ends. What the relay knows is asked for each
+/// time; when it cannot be reached, the people come from the local record and
+/// `people_from` says so.
+pub(crate) async fn list(app: &Shared) -> Result<Value, ApiError> {
+    let lives: Vec<Arc<Live>> = app.shares.lock().expect("shares lock").values().cloned().collect();
+    if lives.is_empty() { return Ok(json!([])); }
+    let relay = home(app).relay()?;
+    let mut out = Vec::new();
+    for live in lives {
+        let (jelly, share, links) = {
+            let r = live.record.lock().await;
+            (r.jelly.clone(), r.share.clone(), r.links.clone())
+        };
+        let (r, s) = (relay.clone(), share.clone());
+        let mut row = match blocking(move || r.people(&s)).await {
+            Ok(mut v) => { v["people_from"] = json!("relay"); v }
+            Err(_) => json!({"people_from": "record", "people": links.keys().map(|who| json!({"who": who, "can_act": !who.is_empty()})).collect::<Vec<_>>()}),
+        };
+        row["jelly"] = json!(jelly);
+        // The owner's own way in, when a link was minted here: links made with a PIN have none.
+        row["links"] = json!(links.iter().map(|(who, secret)| (who.clone(), relay.link(&share, secret))).collect::<std::collections::BTreeMap<_, _>>());
+        out.push(row);
+    }
+    out.sort_by(|a, b| a["jelly"].as_str().cmp(&b["jelly"].as_str()));
+    Ok(json!(out))
+}
+
 pub(crate) enum Stop<'a> {
     /// The whole share; its last changes stay here.
     Share,

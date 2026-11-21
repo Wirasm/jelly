@@ -107,6 +107,19 @@ this in memory by socket and drops it when the socket closes. `look`, `ask` and
 `show` report it; the jelly page counts for every jelly. People on a share link
 are not counted.
 
+## Shares on the jelly page
+
+`GET /api/shares` lists every shared jelly with its people. For each share the
+daemon asks the relay (`GET /api/live/<share>/people`) who holds a link, when
+each last opened one (`opened_ms`, set when a link's page connects) and how many
+of their pages are open now (`here`). If the relay does not answer, the people
+come from the local record and `people_from` is `record`. The jelly page shows
+this under "N shared" in its top bar and stops a link or a whole share with the
+same routes `jelly unshare` uses.
+
+At startup the daemon replaces the stored jelly page with the bundled one when
+they differ, so a home made by an older binary gets the new page.
+
 ## Feeds
 
 `jelly feed` writes `feeds.json` in the home; the daemon reads it every second

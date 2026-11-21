@@ -180,6 +180,11 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
             .and_then(|_| store.keep(PAGE, true, "jelly"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
+    // The jelly page is jelly's own: a home made by an older binary gets this one's.
+    let page = store.get(PAGE).map_err(|e| std::io::Error::other(e.to_string()))?;
+    if page.view != PAGE_VIEW || page.verbs != PAGE_VERBS {
+        store.shape(PAGE, Some(PAGE_VIEW.into()), Some(PAGE_VERBS.into()), None, "jelly").map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
     let (tx, _) = broadcast::channel(1024);
     let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
     share::resume(&app);
@@ -245,6 +250,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/assets/{file}", post(put_asset).delete(remove_asset).layer(DefaultBodyLimit::max(25 * 1024 * 1024)))
         .route("/api/jellies/{name}/share", get(share).post(share_live).delete(unshare_live))
         .route("/api/jellies/{name}/share/pin", post(pin_live).delete(unpin_live))
+        .route("/api/shares", get(shares))
         .route("/api/inbox", get(inbox).post(read_inbox))
         .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
@@ -759,6 +765,11 @@ async fn share_live(State(app): State<Shared>, Path(name): Path<String>, Json(r)
 struct UnshareQ {
     /// Revoke only this person's link ("" for the view-only link).
     to: Option<String>,
+}
+
+/// Every shared jelly with its people, for the jelly page.
+async fn shares(State(app): State<Shared>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(share::list(&app).await?))
 }
 
 async fn unshare_live(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<UnshareQ>) -> Result<Json<Value>, ApiError> {
