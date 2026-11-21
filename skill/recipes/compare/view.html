@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare</title>
+<style>
+  /* The frame gives the page no look of its own. Everything below the bar is
+     the product's stylesheets (state.css) and the HTML of the step on screen. */
+  .jc-screen[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<jelly-compare></jelly-compare>
+<div id="screens"></div>
+<script>
+// The frame: a bar to switch version, walk the steps and pick one. It lives in
+// a shadow root, so the product's CSS cannot restyle it and its CSS cannot leak
+// into the product. The screens stay in the page itself, so comments and asks
+// pin to their elements as on any jelly.
+const bar = document.querySelector("jelly-compare");
+const root = bar.attachShadow({ mode: "open" });
+root.innerHTML = `<style>
+  :host { all: initial; display: block; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; font: 13px/1.35 system-ui, sans-serif; color: #e9edf0; }
+  .bar { background: #15191c; border-bottom: 1px solid #000; padding: 8px 12px; display: grid; gap: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .q { font-weight: 600; margin-right: auto; min-width: 0; }
+  .set { display: flex; gap: 4px; flex-wrap: wrap; }
+  button { font: inherit; color: inherit; background: #23292e; border: 1px solid #343c43; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: #5b6772; }
+  button:focus-visible { outline: 2px solid #7fd4c8; outline-offset: 1px; }
+  button[aria-selected="true"], button[aria-current="step"] { background: #e9edf0; color: #15191c; border-color: #e9edf0; }
+  button:disabled { opacity: .35; cursor: default; }
+  .pick { background: #46c4b8; border-color: #46c4b8; color: #0d1716; font-weight: 600; }
+  .pick.done { background: transparent; color: #7fd4c8; }
+  .tag { font-size: 11px; opacity: .75; margin-left: 5px; }
+  .note { color: #aab4bc; min-width: 0; flex: 1 1 240px; }
+  .steps button { padding: 3px 8px; font-size: 12px; }
+  @media (max-width: 640px) {
+    .q, .note { flex-basis: 100%; }
+    .tabs { flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
+    .pick { flex: none; }
+    .tabs button { white-space: nowrap; }
+    .note { font-size: 12px; }
+  }
+</style>
+<div class="bar">
+  <div class="row"><div class="q"></div><div class="set tabs" role="tablist" aria-label="Versions"></div><button class="pick"></button></div>
+  <div class="row"><button class="prev" aria-label="Previous step">‹</button><div class="set steps"></div><button class="next" aria-label="Next step">›</button><div class="note"></div></div>
+</div>`;
+const $ = (sel) => root.querySelector(sel);
+const screens = document.getElementById("screens");
+// The page starts below the bar, however tall it wraps.
+const clear = () => { document.documentElement.style.paddingTop = bar.offsetHeight + "px"; };
+new ResizeObserver(clear).observe(bar);
+
+// Where this person is. It is theirs, not the jelly's: two people can look at
+// different versions at once.
+const KEY = "jelly-compare:" + jelly.name;
+let at = { v: null, s: 0 };
+try { at = JSON.parse(sessionStorage.getItem(KEY)) || at; } catch {}
+
+const button = (text, on) => { const b = document.createElement("button"); b.textContent = text; b.onclick = on; return b; };
+const tag = (text) => { const t = document.createElement("span"); t.className = "tag"; t.textContent = text; return t; };
+let drawn = "";
+
+function render() {
+  const s = jelly.state, versions = s.versions || [];
+  document.title = s.title || "Compare";
+  // Rebuild the screens only when they changed, so a pick does not reset a form the person is typing in.
+  const sig = JSON.stringify([s.css, versions]);
+  if (sig !== drawn) {
+    drawn = sig;
+    document.querySelectorAll("link[data-jc]").forEach((l) => l.remove());
+    for (const href of s.css || []) {
+      const l = document.createElement("link");
+      l.rel = "stylesheet"; l.href = href; l.dataset.jc = "";
+      document.head.appendChild(l);
+    }
+    screens.replaceChildren();
+    // Every step is in the page under its own id (inline-2 is version "inline",
+    // step 2), so a comment's selector says which version and step it is about.
+    for (const v of versions) (v.steps || []).forEach((step, i) => {
+      const d = document.createElement("div");
+      d.className = "jc-screen"; d.id = `${v.id}-${i + 1}`; d.hidden = true;
+      d.innerHTML = step.html || "";
+      screens.appendChild(d);
+    });
+  }
+  const v = versions.find((v) => v.id === at.v) || versions.find((v) => v.id === s.picked?.id) || versions.find((v) => v.id === s.recommend) || versions[0];
+  $(".q").textContent = s.question || s.title || "";
+  if (!v) { $(".note").textContent = "No versions yet."; return; }
+  const steps = v.steps || [];
+  at = { v: v.id, s: Math.max(0, Math.min(at.s, steps.length - 1)) };
+  try { sessionStorage.setItem(KEY, JSON.stringify(at)); } catch {}
+  for (const el of screens.children) el.hidden = el.id !== `${v.id}-${at.s + 1}`;
+
+  $(".tabs").replaceChildren(...versions.map((x) => {
+    const b = button(x.label || x.id, () => { at = { v: x.id, s: Math.min(at.s, (x.steps || []).length - 1) }; render(); });
+    b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x.id === v.id); b.dataset.version = x.id;
+    if (x.id === s.picked?.id) b.append(" ", tag("picked"));
+    else if (x.id === s.recommend) b.append(" ", tag("recommended"));
+    return b;
+  }));
+  $(".steps").replaceChildren(...steps.map((step, i) => {
+    const b = button(`${i + 1} ${step.label || ""}`.trim(), () => { at.s = i; render(); });
+    if (i === at.s) b.setAttribute("aria-current", "step");
+    return b;
+  }));
+  $(".prev").disabled = at.s === 0;
+  $(".next").disabled = at.s >= steps.length - 1;
+  $(".note").textContent = [v.note, v.id === s.recommend && s.why ? `Recommended: ${s.why}` : ""].filter(Boolean).join(" ");
+  const picked = s.picked?.id === v.id;
+  $(".pick").textContent = picked ? "Picked · undo" : "Pick this one";
+  $(".pick").classList.toggle("done", picked);
+  clear();
+}
+
+const move = (by) => { at.s += by; render(); };
+$(".prev").onclick = () => move(-1);
+$(".next").onclick = () => move(1);
+$(".pick").onclick = async () => {
+  if (jelly.state.picked?.id === at.v) return jelly.do("unpick");
+  await jelly.do("pick", { id: at.v });
+  // Picking is the decision, so it hands the turn back to the agent.
+  jelly.person.send().catch(() => {});
+};
+// A step's own controls walk the flow: data-next, data-back, data-go="3".
+// Nothing in a screen leaves the page or submits anywhere.
+screens.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-next], [data-back], [data-go], a[href]");
+  if (!el) return;
+  e.preventDefault();
+  if (el.hasAttribute("data-go")) { at.s = Number(el.dataset.go) - 1; render(); }
+  else if (el.hasAttribute("data-next")) move(1);
+  else if (el.hasAttribute("data-back")) move(-1);
+});
+screens.addEventListener("submit", (e) => e.preventDefault());
+addEventListener("keydown", (e) => {
+  if (e.target.closest?.("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "ArrowRight") move(1);
+  if (e.key === "ArrowLeft") move(-1);
+});
+jelly.onState(render);
+</script>
+</body>
+</html>

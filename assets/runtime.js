@@ -464,7 +464,8 @@
     const shown = visible();
     shown.forEach((f, i) => {
       const el = anchorOf(f).element;
-      if (!el) return;
+      // A part that is not on screen now (another tab, a closed section) shows no pin.
+      if (!el || !el.getClientRects().length) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
       const pin = document.createElement("div");
@@ -758,8 +759,10 @@
     const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
     const shown = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0"; };
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
+    // A view's own open shadow roots are part of what the person sees.
+    const kids = (el) => (el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : el.children);
     (function walk(el, depth) {
-      for (const c of el.children) {
+      for (const c of kids(el)) {
         if (lines.length > 400 || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
@@ -779,9 +782,9 @@
           if (t) add(depth, `text "${t}"`, c);
           if (!one || inside) walk(c, depth + (t ? 1 : 0));
         }
-        else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (c.id && c.children.length === 0 && !c.shadowRoot) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); const own = ownText(c); if (own) add(depth + 1, `text "${own}"`, {}); walk(c, depth + 1); continue; }
-        else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (c.children.length === 0 && !c.shadowRoot) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else walk(c, depth);
       }
     })(document.body, 0);
@@ -991,7 +994,9 @@
   // Does one step the way a person would; returns why it could not be done.
   function doStep(s) {
     let el;
-    try { el = document.querySelector(s.at); } catch { return `${s.at} is not a valid CSS selector`; }
+    // The page first, then inside the view's own open shadow roots.
+    const find = (root) => root.querySelector(s.at) || [...root.querySelectorAll("*")].reduce((hit, e) => hit || (e.shadowRoot && find(e.shadowRoot)), null);
+    try { el = find(document.body); } catch { return `${s.at} is not a valid CSS selector`; }
     if (!el) return `${s.at} matches nothing`;
     if (el.checkVisibility && !el.checkVisibility()) return `${s.at} is not visible`;
     if (el.disabled) return `${s.at} is disabled`;

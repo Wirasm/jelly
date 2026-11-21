@@ -1,0 +1,39 @@
+{
+  "title": "Invite a teammate",
+  "question": "Which flow should inviting a teammate use?",
+  "css": ["assets/example.css"],
+  "recommend": "inline",
+  "why": "Two steps instead of three, and the list stays in view the whole time.",
+  "picked": null,
+  "versions": [
+    {
+      "id": "inline",
+      "label": "Inline row",
+      "note": "The form is a row at the top of the member list.",
+      "steps": [
+        { "label": "List", "html": "<div class=\"app\"><h1>Team</h1><p>3 members</p><div class=\"card row\"><label class=\"field\" style=\"flex:1;margin:0\"><input placeholder=\"name@company.com\"></label><button class=\"btn\" data-next>Invite</button></div><ul class=\"list\"><li><span>Ana Ruiz</span><span>Admin</span></li><li><span>Bo Lind</span><span>Member</span></li><li><span>Chidi Obi</span><span>Member</span></li></ul></div>" },
+        { "label": "Sent", "html": "<div class=\"app\"><h1>Team</h1><p>3 members, 1 invited</p><div class=\"card row\"><label class=\"field\" style=\"flex:1;margin:0\"><input placeholder=\"name@company.com\"></label><button class=\"btn\">Invite</button></div><ul class=\"list\"><li><span>dana@company.com</span><span class=\"ok\">Invite sent</span></li><li><span>Ana Ruiz</span><span>Admin</span></li><li><span>Bo Lind</span><span>Member</span></li><li><span>Chidi Obi</span><span>Member</span></li></ul></div>" }
+      ]
+    },
+    {
+      "id": "sheet",
+      "label": "Sheet over the list",
+      "note": "A button opens a sheet with email and role.",
+      "steps": [
+        { "label": "List", "html": "<div class=\"app\"><div class=\"row\" style=\"justify-content:space-between\"><h1>Team</h1><button class=\"btn\" data-next>Invite</button></div><p>3 members</p><ul class=\"list\"><li><span>Ana Ruiz</span><span>Admin</span></li><li><span>Bo Lind</span><span>Member</span></li><li><span>Chidi Obi</span><span>Member</span></li></ul></div>" },
+        { "label": "Sheet", "html": "<div class=\"app\"><div class=\"row\" style=\"justify-content:space-between\"><h1>Team</h1><button class=\"btn\">Invite</button></div><p>3 members</p><div class=\"sheet\"><label class=\"field\"><span>Email</span><input value=\"dana@company.com\"></label><label class=\"field\"><span>Role</span><select><option>Member</option><option>Admin</option></select></label><div class=\"row\"><button class=\"btn\" data-next>Send invite</button><button class=\"btn quiet\" data-back>Cancel</button></div></div></div>" },
+        { "label": "Sent", "html": "<div class=\"app\"><div class=\"row\" style=\"justify-content:space-between\"><h1>Team</h1><button class=\"btn\">Invite</button></div><p>3 members, 1 invited</p><ul class=\"list\"><li><span>dana@company.com</span><span class=\"ok\">Invite sent</span></li><li><span>Ana Ruiz</span><span>Admin</span></li><li><span>Bo Lind</span><span>Member</span></li><li><span>Chidi Obi</span><span>Member</span></li></ul></div>" }
+      ]
+    },
+    {
+      "id": "page",
+      "label": "Its own page",
+      "note": "Invite is a full page with room for a message.",
+      "steps": [
+        { "label": "List", "html": "<div class=\"app\"><div class=\"row\" style=\"justify-content:space-between\"><h1>Team</h1><button class=\"btn\" data-next>Invite</button></div><p>3 members</p><ul class=\"list\"><li><span>Ana Ruiz</span><span>Admin</span></li><li><span>Bo Lind</span><span>Member</span></li><li><span>Chidi Obi</span><span>Member</span></li></ul></div>" },
+        { "label": "Form", "html": "<div class=\"app\"><h1>Invite a teammate</h1><p>They get an email with a link that works for 7 days.</p><label class=\"field\"><span>Email</span><input value=\"dana@company.com\"></label><label class=\"field\"><span>Role</span><select><option>Member</option><option>Admin</option></select></label><label class=\"field\"><span>Message (optional)</span><input placeholder=\"Welcome to the team\"></label><div class=\"row\"><button class=\"btn\" data-next>Send invite</button><button class=\"btn quiet\" data-back>Back</button></div></div>" },
+        { "label": "Sent", "html": "<div class=\"app\"><h1 class=\"ok\">Invite sent</h1><p>dana@company.com has 7 days to accept.</p><div class=\"row\"><button class=\"btn\" data-go=\"1\">Back to team</button><button class=\"btn quiet\" data-go=\"2\">Invite another</button></div></div>" }
+      ]
+    }
+  ]
+}
