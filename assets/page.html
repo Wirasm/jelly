@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html class="jy">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,27 +10,24 @@
   /* Berry by day, Night jelly by night: the blob logo's own colours. The --dark-*
      names are the kept panel and chrome, whichever theme is on. */
   :root {
-    --page: #fff8f3; --card: #ffffff; --ink: #2a1620; --muted: #7d606c; --line: #f0dfe5; --line-2: #e2c6d1;
-    --bar: #ffffff; --bar-ink: #2a1620; --bar-muted: #80626f; --bar-line: #f3e3e8; --chip-on: #2a1620; --chip-on-ink: #ffffff;
+    --page: var(--jy-page); --card: var(--jy-card); --ink: var(--jy-ink); --muted: var(--jy-muted); --line: var(--jy-line); --line-2: var(--jy-line-2);
+    --bar: var(--jy-bar); --bar-ink: var(--jy-ink); --bar-muted: #80626f; --bar-line: var(--jy-bar-line); --chip-on: var(--jy-on); --chip-on-ink: var(--jy-on-ink);
     --dark: #fdf0f4; --dark-2: #ffffff; --dark-3: #f8e6ec; --dark-line: #f0dfe5;
     --dark-ink: #2a1620; --dark-muted: #7d606c; --dark-faint: #80626f;
-    --brand: #e8336f; --brand-ink: #ffffff; --brand-soft: #ffe1ec; --brand-soft-ink: #a3134c; --brand-glow: rgba(232,51,111,.16);
-    --sun: #ffcf3f; --sun-ink: #5a3d00; --sun-soft: #fff1c7;
+    --brand: var(--jy-brand); --brand-ink: #ffffff; --brand-soft: var(--jy-brand-soft); --brand-soft-ink: var(--jy-brand-soft-ink); --brand-glow: var(--jy-glow);
+    --sun: var(--jy-sun); --sun-ink: var(--jy-sun-ink); --sun-soft: var(--jy-sun-soft);
     --accent: var(--brand); --accent-ink: var(--brand-soft-ink); --warm: var(--sun);
     --panel: rgba(42,22,32,.82); --panel-ink: #ffffff;
-    --shadow: rgba(120,30,70,.28);
+    --shadow: var(--jy-shadow);
     color-scheme: light;
     font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) { :root {
-    --page: #14111c; --card: #1d1928; --ink: #f1ecf7; --muted: #a79dbb; --line: #2e2740; --line-2: #3d3454;
-    --bar: #0e0c14; --bar-ink: #f1ecf7; --bar-muted: #8a809e; --bar-line: #262033; --chip-on: #2c2540; --chip-on-ink: #ffffff;
+    --bar-muted: #8a809e;
     --dark: #0e0c14; --dark-2: #1d1928; --dark-3: #2a2438; --dark-line: #2e2740;
     --dark-ink: #f1ecf7; --dark-muted: #a79dbb; --dark-faint: #9087a3;
-    --brand: #ff4f8b; --brand-ink: #ffffff; --brand-soft: #3a1e2e; --brand-soft-ink: #ffb3cf; --brand-glow: rgba(255,79,139,.2);
-    --sun: #ffcf3f; --sun-ink: #2a1d00; --sun-soft: #3a3014;
+    --brand-ink: #ffffff;
     --panel: rgba(29,25,40,.84); --panel-ink: #ffffff;
-    --shadow: rgba(0,0,0,.6);
     color-scheme: dark;
   } }
   * { box-sizing: border-box; }

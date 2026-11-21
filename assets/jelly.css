@@ -1,0 +1,57 @@
+/* jelly's own look: Berry by day, Night jelly by night. One file for every part
+   that is jelly's and not the jellyware: the runtime's controls, the jelly page,
+   the ask page, and the frames and tools in the recipes.
+
+   A view takes it with class "jy" on its html element. A shadow root takes it
+   by putting the text of jelly.css (window.jelly.css) in a style element of its
+   own. This file must never contain a closing style tag. The tokens follow the reader's light or dark
+   setting; .jy-dark and .jy-light force one. Raspberry and the blob are jelly's:
+   where a person sees them, that part is jelly. */
+.jy, :host {
+  color-scheme: light dark;
+  --jy-page: light-dark(#fff8f3, #14111c); --jy-card: light-dark(#ffffff, #1d1928); --jy-soft: light-dark(#fdf0f4, #241f31);
+  --jy-ink: light-dark(#2a1620, #f1ecf7); --jy-ink-2: light-dark(#4a3340, #d6cde4); --jy-muted: light-dark(#7d606c, #a79dbb);
+  --jy-line: light-dark(#f0dfe5, #2e2740); --jy-line-2: light-dark(#e2c6d1, #3d3454);
+  --jy-bar: light-dark(#ffffff, #0e0c14); --jy-bar-line: light-dark(#f3e3e8, #262033);
+  --jy-on: light-dark(#2a1620, #2c2540); --jy-on-ink: #ffffff;
+  /* brand: the jelly colour, for marks. action: a fill that carries white text. brand-text: text and thin lines. */
+  --jy-brand: light-dark(#e8336f, #ff4f8b); --jy-action: #d81b60; --jy-action-ink: #ffffff; --jy-action-edge: light-dark(#a3134c, #8a1040);
+  --jy-brand-text: light-dark(#c8255d, #ff6b9b); --jy-brand-soft: light-dark(#ffe1ec, #3a1e2e); --jy-brand-soft-ink: light-dark(#a3134c, #ffb3cf);
+  --jy-glow: light-dark(rgba(232,51,111,.16), rgba(255,79,139,.2));
+  --jy-sun: #ffcf3f; --jy-sun-ink: light-dark(#5a3d00, #2a1d00); --jy-sun-soft: light-dark(#fff1c7, #3a3014);
+  --jy-good: light-dark(#237a3d, #6fd38a); --jy-good-soft: light-dark(#e3f3e6, #1d3324);
+  --jy-warn: light-dark(#c98a00, #ffcf3f); --jy-warn-soft: light-dark(#fff1c7, #3a3014);
+  --jy-bad: light-dark(#b8382f, #ff7a70); --jy-bad-soft: light-dark(#fde7e4, #3d1f1d);
+  --jy-idle: light-dark(#b9b0b5, #5a5266);
+  --jy-shadow: light-dark(rgba(120,30,70,.28), rgba(0,0,0,.6));
+  --jy-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --jy-mono: ui-monospace, Menlo, monospace;
+  --jy-blob: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><defs><radialGradient id='g' cx='35%' cy='30%'><stop offset='0' stop-color='%23ffb3cf'/><stop offset='.55' stop-color='%23ff4f8b'/><stop offset='1' stop-color='%23d81b60'/></radialGradient></defs><path d='M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z' fill='url(%23g)'/><ellipse cx='15' cy='16' rx='4' ry='2.4' fill='%23fff' opacity='.7'/><circle cx='16' cy='24' r='1.7' fill='%233b0a1e'/><circle cx='24' cy='24' r='1.7' fill='%233b0a1e'/><path d='M18 27.5 Q20 29.3 22 27.5' stroke='%233b0a1e' stroke-width='1.3' fill='none' stroke-linecap='round'/></svg>");
+}
+.jy.jy-light, :host(.jy-light) { color-scheme: light; }
+.jy.jy-dark, :host(.jy-dark) { color-scheme: dark; }
+:where(html.jy) body { margin: 0; background: var(--jy-page); color: var(--jy-ink); font: 15px/1.5 var(--jy-font); }
+
+/* The parts. A bar holds chips and one action; a card holds content. */
+.jy-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 16px; background: var(--jy-bar); color: var(--jy-ink); border-bottom: 1px solid var(--jy-bar-line); font: 13px/1.45 var(--jy-font); }
+.jy-card { background: var(--jy-card); color: var(--jy-ink); border: 1px solid var(--jy-line-2); border-radius: 12px; box-shadow: 0 18px 40px -18px var(--jy-shadow); }
+.jy-chip, .jy-btn, .jy-action { font: inherit; cursor: pointer; white-space: nowrap; border-radius: 7px; }
+.jy-chip { color: var(--jy-muted); background: none; border: 0; padding: 4px 10px; }
+.jy-chip:hover { color: var(--jy-ink); background: var(--jy-brand-soft); }
+.jy-chip.on, .jy-chip[aria-selected="true"], .jy-chip[aria-current] { color: var(--jy-on-ink); background: var(--jy-on); }
+.jy-btn { color: var(--jy-ink); background: var(--jy-card); border: 1px solid var(--jy-line); padding: 4px 10px; }
+.jy-btn:hover { border-color: var(--jy-line-2); background: var(--jy-brand-soft); }
+/* The one thing to press: a raspberry pill with the landing page's pressed edge. */
+.jy-action { color: var(--jy-action-ink); background: var(--jy-action); border: 0; border-radius: 999px; padding: 5px 14px; font-weight: 600;
+  box-shadow: 0 3px 0 var(--jy-action-edge); transition: transform .08s, box-shadow .08s; }
+.jy-action:hover { filter: brightness(1.06); }
+.jy-action:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--jy-action-edge); }
+.jy-action.done { color: var(--jy-brand-soft-ink); background: var(--jy-brand-soft); box-shadow: none; }
+.jy-chip:focus-visible, .jy-btn:focus-visible, .jy-action:focus-visible { outline: 2px solid var(--jy-brand); outline-offset: 2px; }
+.jy-chip:disabled, .jy-btn:disabled, .jy-action:disabled { opacity: .35; cursor: default; }
+.jy-tag { display: inline-block; font: 600 10.5px var(--jy-font); border-radius: 999px; padding: 1px 8px; background: var(--jy-sun); color: var(--jy-sun-ink); }
+.jy-tag.brand { background: var(--jy-action); color: var(--jy-action-ink); }
+.jy-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--jy-idle); }
+.jy-dot.live { background: var(--jy-brand); box-shadow: 0 0 0 3px var(--jy-glow); }
+/* The blob: jelly's mark on anything that is jelly's. */
+.jy-mark { display: inline-block; flex: none; width: 20px; height: 20px; background: var(--jy-blob) center / contain no-repeat; }

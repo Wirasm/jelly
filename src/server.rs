@@ -36,7 +36,13 @@ use hear::*;
 pub(crate) use look::ago;
 use look::*;
 
-const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
+/// jelly's own look, for every part that is jelly's and not the jellyware.
+const JELLY_CSS: &str = include_str!("../assets/jelly.css");
+/// The runtime as browsers get it: `assets/runtime.js` carrying `assets/jelly.css`,
+/// so a view, a shared page and an exported file all have the stylesheet with it.
+static RUNTIME_JS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    include_str!("../assets/runtime.js").replace("\"__JELLY_CSS__\"", &serde_json::to_string(JELLY_CSS).expect("a string serializes").replace("</", "<\\/"))
+});
 const PAGE_VIEW: &str = include_str!("../assets/page.html");
 const PAGE_VERBS: &str = include_str!("../assets/page.verbs.js");
 const SNAPSHOT_JS: &str = include_str!("../assets/snapshot.js");
@@ -225,7 +231,7 @@ fn router(app: Shared) -> Router {
     Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
         .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into()), Query(ViewQ::default())).await }))
-        .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS) }))
+        .route("/runtime.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], RUNTIME_JS.as_str()) }))
         // Views live at /j/<name>/ so a view can use relative `assets/<file>` paths.
         .route("/j/{name}", get(|Path(name): Path<String>| async move { Redirect::permanent(&format!("/j/{name}/")) }))
         .route("/j/{name}/", get(view))
@@ -1040,7 +1046,7 @@ mod tests {
         });
         eval(include_str!("../tests/runtime-browser.js"));
         eval(&format!("window.__JELLY__={boot};"));
-        eval(RUNTIME_JS);
+        eval(&RUNTIME_JS);
         eval("loaded();");
         while rt.execute_pending_job().unwrap() {}
         let request: Value = ctx.with(|ctx| {

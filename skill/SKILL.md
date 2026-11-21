@@ -18,6 +18,23 @@ component code first. jelly has no component library on purpose; what it gives
 you is frames, such as the `compare` recipe, that hold your screens and make
 them easy to walk through and act on.
 
+**What is jelly's looks like jelly.** jelly has one stylesheet for its own
+parts: the Comment and Send buttons, the pins, the stack of questions, the jelly
+page, and the frames and tools in the recipes. Raspberry and the blob are
+jelly's, so a person can tell jelly's part from the jellyware at a glance. Use
+it only for what is jelly's:
+
+- A tool you make that is not the person's product (a plan, a review, a board):
+  write `<html class="jy">` and use the tokens, `var(--jy-page)`,
+  `var(--jy-card)`, `var(--jy-ink)`, `var(--jy-muted)`, `var(--jy-line)`,
+  `var(--jy-brand-text)`, `var(--jy-good)`, `var(--jy-warn)`, `var(--jy-bad)`.
+  They follow light and dark by themselves.
+- A frame around the person's product: put it in a shadow root with
+  `<style>${jelly.css}</style>` and build it from `jy-bar`, `jy-chip`,
+  `jy-btn`, `jy-action` (the one thing to press), `jy-tag`, `jy-dot` and
+  `jy-mark` (the blob). The product's screens get none of it.
+- Never use raspberry or the blob inside the person's product.
+
 **Show, then let them react.** Do the thinking first: lay out the options, what
 each gains and costs, what each looks like, and which you recommend and why.
 Give at least two options, three or more when you can; a recommendation without
