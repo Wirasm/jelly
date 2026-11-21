@@ -123,7 +123,8 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
     assert_eq!(bad_name.status.code(), Some(1));
     for bad in ["v2", "seq:-1", "seq:", "seq:+2", "seq:18446744073709551616"] {
         let result = daemon.cli(&["hear", "--wait", "--json", "plan", "--since", bad]);
-        assert_eq!(result.status.code(), Some(2));
+        // A bad argument is not a timeout: only "nobody acted in time" exits 2.
+        assert_eq!(result.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&result.stderr).contains("use seq:N"));
     }
     let too_long = daemon.cli(&["hear", "--wait", "--json", "plan", "--since", "seq:0", "--timeout", "18446744073709551615"]);

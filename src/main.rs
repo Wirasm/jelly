@@ -494,7 +494,13 @@ fn output(args: std::fmt::Arguments<'_>) -> Result<(), CommandError> {
 }
 
 fn main() -> ExitCode {
-    let matches = Cli::command().get_matches();
+    // Exit 2 means one thing: nobody acted in time (`hear --wait`, `ask --wait`).
+    // A mistyped command exits 1, so a script cannot take it for a timeout, and a
+    // prompt hook that runs a command this build no longer has does not block the prompt.
+    let matches = Cli::command().try_get_matches().unwrap_or_else(|e| {
+        let _ = e.print();
+        std::process::exit(if e.use_stderr() { 1 } else { 0 })
+    });
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     if let (Cmd::Try { steps, .. }, Some(m)) = (&mut cli.cmd, matches.subcommand_matches("try")) {
         match try_steps(m) {

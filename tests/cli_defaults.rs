@@ -144,3 +144,14 @@ fn new_outside_a_repo_says_the_jelly_is_in_no_project() {
     assert_eq!(new("chai", &["--project", ""]), "");
     assert_eq!(new("mate", &["--project", "kitchen"]), "");
 }
+
+/// Exit 2 is kept for "nobody acted in time". A command that does not exist exits 1.
+#[test]
+fn an_unknown_command_exits_1_not_2() {
+    let run = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_jelly")).args(args).output().unwrap();
+    let unknown = run(&["inbox", "--hook"]);
+    assert_eq!(unknown.status.code(), Some(1), "{unknown:?}");
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unrecognized subcommand"), "{unknown:?}");
+    assert_eq!(run(&["--help"]).status.code(), Some(0));
+    assert_eq!(run(&["--version"]).status.code(), Some(0));
+}
