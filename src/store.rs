@@ -86,6 +86,10 @@ pub struct Jelly {
     /// verbs are meant to be used, what the person said. `jelly look` shows them.
     #[serde(default)]
     pub notes: Vec<Value>,
+    /// What people did here since they last pressed Send. The view's Send
+    /// button shows it; `send` sets it back to zero.
+    #[serde(default)]
+    pub unsent: u32,
 }
 
 /// One ask for the person's attention. It wants an option or words, or, when
@@ -413,6 +417,8 @@ pub enum EventKind {
     Ask,
     Answer,
     Unask,
+    /// The person hands the turn back: "I am done here for now, go on".
+    Send,
     Set,
     /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
     Lock,
@@ -421,7 +427,7 @@ pub enum EventKind {
 impl EventKind {
     /// Things the person did that an agent should hear about.
     pub fn is_for_agent(self) -> bool {
-        matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer)
+        matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer | EventKind::Send)
     }
 }
 
@@ -475,6 +481,7 @@ impl Event {
             EventKind::Undo => "undid the last state change".into(),
             EventKind::Ask => format!("asked {:?}", s(&a["title"])),
             EventKind::Unask => format!("unasked {}", s(&a)),
+            EventKind::Send => match a.as_u64() { Some(1) => "sent 1 change: your turn".into(), Some(n) => format!("sent {n} changes: your turn"), None => "sent: your turn".into() },
             EventKind::Set => match s(&a["pointer"]).as_str() { "" => "set the whole state".into(), p => format!("set {p}") },
             EventKind::Working => match a.as_str() { Some(w) => format!("started working: {w}"), None => "finished working".into() },
             EventKind::Note => format!("left a note: {}", clip(s(&a))),
@@ -647,6 +654,7 @@ impl Store {
             asks: Vec::new(),
             working: None,
             notes: Vec::new(),
+            unsent: 0,
         };
         let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new(), history_from: 1 });
         self.commit(name, EventKind::Make, by, None, None, vec![String::new()], previous_entry)
@@ -1030,6 +1038,14 @@ impl Store {
         self.commit(name, EventKind::Unask, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
     }
 
+    /// The person is done for now and hands the turn back. The event carries
+    /// how many things they did since the last send.
+    pub fn send(&mut self, name: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
+        let unsent = self.entry(name)?.jelly.unsent;
+        self.commit(name, EventKind::Send, by, None, Some(unsent.into()), Vec::new(), previous_entry)
+    }
+
     /// `Some("rebuilding the header")` while an agent works on the jelly, `None` when done.
     pub fn set_working(&mut self, name: &str, what: Option<&str>, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
@@ -1132,6 +1148,11 @@ impl Store {
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
         entry.jelly.updated_ms = now_ms();
+        if kind == EventKind::Send {
+            entry.jelly.unsent = 0;
+        } else if is_person(by) && kind.is_for_agent() {
+            entry.jelly.unsent += 1;
+        }
         if kind != EventKind::Archive {
             entry.jelly.archived = false;
         }

@@ -10,6 +10,18 @@ pub(super) struct WaitQ {
     pub(super) project_jelly: Option<String>,
     pub(super) jelly: Option<String>,
     pub(super) timeout: Option<u64>,
+    /// Return on any change. Without it only a `send` ends the wait: the
+    /// person works through a jelly and says when they are done.
+    #[serde(default)]
+    pub(super) every: bool,
+}
+
+/// The person hands the turn back (the view's Send button).
+pub(super) async fn send(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+    if let Some(live) = app.live(&name) {
+        return share::forward(&app, &live, json!({"op": "send", "by": by(r.by)?})).await;
+    }
+    app.change(|s| s.send(&name, &by(r.by)?))
 }
 
 pub(super) async fn wait(State(app): State<Shared>, Query(q): Query<WaitQ>) -> Result<Response, ApiError> {
@@ -28,7 +40,7 @@ pub(super) fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Op
     let mut line = String::new();
     while reader.read_line(&mut line).map_err(history_error)? != 0 {
         let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
-        if ev.seq > q.since && ev.by != q.by
+        if ev.seq > q.since && ev.by != q.by && (q.every || ev.kind == crate::store::EventKind::Send)
             && q.jelly.as_ref().map_or(ev.jelly != PAGE, |j| *j == ev.jelly)
         {
             return Ok(Some(ev));
@@ -189,11 +201,11 @@ mod wait_tests {
             store.make(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
-        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() })
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() })
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
-        WaitQ { since, by: "agent".into(), project_jelly: None, jelly: jelly.map(String::from), timeout: Some(0) }
+        WaitQ { since, by: "agent".into(), project_jelly: None, jelly: jelly.map(String::from), timeout: Some(0), every: true }
     }
 
     fn note(app: &App, jelly: &str, who: &str) -> Event {
@@ -207,7 +219,7 @@ mod wait_tests {
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
-            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() };
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() };
             let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
@@ -243,6 +255,26 @@ mod wait_tests {
         assert_eq!(wait_since(&app, &query(Some(PAGE), start.seq)).await.unwrap().unwrap().seq, page.seq);
         assert!(wait_since(&app, &query(None, u64::MAX)).await.unwrap().is_none());
         assert!(matches!(wait_since(&app, &query(Some("missing"), 0)).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn a_wait_ends_on_send_and_counts_what_the_person_did() {
+        let (_dir, app) = fixture(16);
+        let start = note(&app, "j", "agent");
+        let send = {
+            let mut store = app.store.lock().unwrap();
+            store.comment("j", json!(null), "first", "person").unwrap();
+            store.comment("j", json!(null), "second", "person").unwrap();
+            store.note("j", "not the person", "helper").unwrap();
+            assert_eq!(store.get("j").unwrap().unsent, 2);
+            let send = store.send("j", "person").unwrap();
+            assert_eq!(store.get("j").unwrap().unsent, 0);
+            send
+        };
+        let on_send = WaitQ { every: false, ..query(Some("j"), start.seq) };
+        let woke = wait_since(&app, &on_send).await.unwrap().unwrap();
+        assert_eq!((woke.seq, woke.args), (send.seq, Some(json!(2))));
+        assert!(wait_since(&app, &WaitQ { every: false, ..query(Some("j"), send.seq) }).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -536,7 +568,7 @@ mod wait_tests {
         let store = Store::open(dir.path()).unwrap();
         let path = store.events_path();
         let (events, _) = broadcast::channel(1);
-        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() };
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() };
         let q = WaitQ { timeout: Some(1), ..query(None, 0) };
         let waiting = wait_since(&app, &q);
         tokio::pin!(waiting);

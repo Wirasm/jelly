@@ -43,7 +43,7 @@ impl Daemon {
     /// Runs `jelly hear --wait ARGS` while the person clicks on `p:w`, and returns its stdout.
     /// It clicks until `wait` exits, because `wait` subscribes some time after it starts.
     fn wait(&self, client: &Path, args: &[&str]) -> String {
-        let mut wait = self.command(client, "p", &[&["hear", "--wait"], args].concat())
+        let mut wait = self.command(client, "p", &[&["hear", "--wait", "--every"], args].concat())
             .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while wait.try_wait().unwrap().is_none() {

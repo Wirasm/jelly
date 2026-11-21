@@ -301,6 +301,10 @@ pub enum Cmd {
     /// Take back an ask that no longer applies.
     Unask { name: String, id: String },
     /// Open a jelly full size on the person's screen. No name closes it.
+    ///
+    /// Give an HTML file instead of a name (`jelly show sketch.html`) to make a
+    /// jelly from that one file and show it: no verbs, no state, named after
+    /// the file. The same file again changes its view in place.
     Show { name: Option<String> },
     /// Say you are changing a jelly, so the person waits ("rebuilding the header").
     /// `--done` says you are finished.
@@ -394,9 +398,10 @@ pub enum Cmd {
     /// With --hook, starts silently and prints nothing when there is nothing new,
     /// so it can run at the start of every agent turn.
     ///
-    /// `--wait` blocks instead, until someone other than you changes NAME (or any
-    /// jelly), then prints what they did in one line. Exit 2 on --timeout. This
-    /// is how an agent waits for the person.
+    /// `--wait` blocks instead, until the person presses Send in NAME (or in any
+    /// jelly): they worked through it and hand the turn back. Then run `jelly
+    /// hear` for what they did. `--every` returns on the first change by anyone
+    /// but you. Exit 2 on --timeout. Run it in the background and it wakes you.
     ///
     /// Who is listening: --as / JELLY_AS, then --session-id / JELLY_SESSION_ID,
     /// Claude's session, then the invoking parent process.
@@ -412,6 +417,9 @@ pub enum Cmd {
         /// With --wait: give up after this many seconds (exit 2).
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
+        /// With --wait: return on any change, not only when the person presses Send.
+        #[arg(long, requires = "wait")]
+        every: bool,
         #[arg(long)]
         hook: bool,
         /// Only your jellies: ones made or last shaped under your --as / JELLY_AS name.

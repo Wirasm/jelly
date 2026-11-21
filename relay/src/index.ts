@@ -30,7 +30,7 @@ interface Env {
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 interface Comment { id: string; anchor: Json; text: string; by: string; at_ms: number; resolved: boolean; replies: { text: string; by: string; at_ms: number }[] }
 interface Ask { id: string; seen?: boolean; title: string; options?: { id: string }[]; group?: string | null; answer?: Json; unasked?: Json; [k: string]: Json | undefined }
-interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[] }
+interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[]; unsent?: number }
 interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; version: number; view_rev: number }
 type Op = { op: string; by?: string; [k: string]: any };
 /** Who a socket belongs to: the owner's daemon, or a link. */
@@ -41,7 +41,7 @@ const LINK = new RegExp(`^/j/(${SHARE})([A-Za-z0-9]{22})(/ws)?/?$`);
 const ASSET = new RegExp(`^/a/(${SHARE})/assets/([^/]+)$`);
 const OWNER = new RegExp(`^/api/live/(${SHARE})(/.*)?$`);
 /** What a link that may act can do. Everything else is the owner's. */
-const PERSON_OPS = ["do", "comment", "reply", "resolve", "answer"];
+const PERSON_OPS = ["do", "comment", "reply", "resolve", "answer", "send"];
 /** SQLite rows hold at most 2 MB, so assets are kept in parts. */
 const PART = 1 << 20;
 const MAX_DAYS = 365;
@@ -241,6 +241,9 @@ export class Live extends DurableObject<Env> {
         comment(op.id).resolved = true;
         args = op.id;
         break;
+      case "send":
+        args = d.unsent ?? 0;
+        break;
       case "lock":
         args = { tries: op.tries };
         break;
@@ -248,6 +251,9 @@ export class Live extends DurableObject<Env> {
         throw new Refusal(`no such change: ${op.op}`);
     }
     if (bump) d.version++;
+    // What people did since they last pressed Send, as the daemon counts it.
+    if (op.op === "send") d.unsent = 0;
+    else if (by.startsWith("person") && PERSON_OPS.includes(op.op)) d.unsent = (d.unsent ?? 0) + 1;
     const ev: Ev = { seq: ++this.seq, at_ms: now, kind: op.op, by, version: d.version, view_rev: d.view_rev };
     if (verb !== undefined) ev.verb = verb;
     if (args !== undefined) ev.args = args;

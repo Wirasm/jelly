@@ -251,7 +251,7 @@ fn creation_and_asset_uploads_finish_before_output() {
 
 #[test]
 fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
-    for cmd in [&["events"][..], &["hear", "--wait"]] {
+    for cmd in [&["events"][..], &["hear", "--wait", "--every"]] {
         let fixture = Fixture::new();
         let mut child = spawn(command(&fixture.url, cmd).stdout(closed_pipe()));
         let mut req = fixture.request();
@@ -344,7 +344,7 @@ fn serve_keeps_serving_with_closed_stdout() {
 #[test]
 fn wait_retains_its_timeout_exit_with_closed_stdout() {
     let fixture = Fixture::new();
-    let mut child = spawn(command(&fixture.url, &["hear", "--wait", "--timeout", "1"]).stdout(closed_pipe()));
+    let mut child = spawn(command(&fixture.url, &["hear", "--wait", "--every", "--timeout", "1"]).stdout(closed_pipe()));
     let mut req = fixture.request();
     write!(
         req.stream,
@@ -379,12 +379,12 @@ fn non_broken_pipe_stdout_failure_exits_with_a_diagnostic() {
 fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
     for json in [false, true] {
         let fixture = Fixture::new();
-        let mut args = vec!["hear", "--wait", "probe:x", "--since", "seq:1"];
+        let mut args = vec!["hear", "--wait", "--every", "probe:x", "--since", "seq:1"];
         if json { args.push("--json"); }
         let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.method, "GET");
-        assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax");
+        assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax&every=true");
         req.reply(r#"{"seq":2,"at_ms":1,"kind":"do","version":2,"view_rev":1,"by":"person","jelly":"probe:x"}"#);
         child.quiet();
 

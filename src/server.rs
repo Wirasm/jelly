@@ -56,10 +56,19 @@ struct App {
     shares: Mutex<std::collections::HashMap<String, Arc<share::Live>>>,
     /// One share or unshare at a time.
     sharing: tokio::sync::Mutex<()>,
+    /// The jelly each open browser page shows and whether its tab is in front,
+    /// by socket. Memory only.
+    open: Mutex<std::collections::HashMap<u64, (String, bool)>>,
 }
 type Shared = Arc<App>;
 
 impl App {
+    /// How many browser pages have this jelly in front of someone right now.
+    /// The jelly page counts for every jelly: it shows them all.
+    fn visible(&self, name: &str) -> usize {
+        self.open.lock().expect("open lock").values().filter(|(n, visible)| *visible && (n == name || n == PAGE)).count()
+    }
+
     /// The jelly's share, when it is shared: then its relay holds the live copy.
     fn live(&self, name: &str) -> Option<Arc<share::Live>> {
         self.shares.lock().expect("shares lock").get(name).cloned()
@@ -167,7 +176,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
     share::resume(&app);
 
     // Jellies nobody keeps or touched for a week are archived: hidden from the
@@ -240,6 +249,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/asks/round", post(ask_round))
         .route("/api/jellies/{name}/asks/{id}/answer", post(answer))
         .route("/api/jellies/{name}/asks/{id}/unask", post(unask))
+        .route("/api/jellies/{name}/send", post(send))
         .route("/api/jellies/{name}/working", post(working))
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
@@ -550,10 +560,12 @@ async fn events(State(app): State<Shared>, Query(q): Query<ByQ>) -> Sse<impl Str
 /// the browser's six-connections-per-host limit and stall every request.
 async fn ws(State(app): State<Shared>, up: WebSocketUpgrade) -> Response {
     let rx = app.events.subscribe();
-    up.on_upgrade(move |socket| pump(socket, rx))
+    up.on_upgrade(move |socket| pump(app, socket, rx))
 }
 
-async fn pump(mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
+async fn pump(app: Shared, mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     loop {
         tokio::select! {
             ev = rx.recv() => {
@@ -567,9 +579,21 @@ async fn pump(mut socket: WebSocket, mut rx: broadcast::Receiver<Event>) {
                     break;
                 }
             }
-            msg = socket.recv() => if !matches!(msg, Some(Ok(_))) { break },
+            msg = socket.recv() => match msg {
+                // The page says which jelly it shows and whether its tab is in front.
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(Value::Object(m)) = serde_json::from_str(&text) {
+                        if let (Some(name), Some(visible)) = (m.get("open").and_then(Value::as_str), m.get("visible").and_then(Value::as_bool)) {
+                            app.open.lock().expect("open lock").insert(id, (name.into(), visible));
+                        }
+                    }
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            },
         }
     }
+    app.open.lock().expect("open lock").remove(&id);
 }
 
 #[derive(Deserialize, Default)]
@@ -587,7 +611,7 @@ async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
     let store = app.store.lock().expect("store lock");
     let j = store.get(&name)?;
     let owner = app.snapshot_owner(&name, j.view_rev)?;
-    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "asks": j.asks, "working": j.working});
+    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "asks": j.asks, "working": j.working, "unsent": j.unsent});
     if let Some(token) = q.trial {
         if let Some(t) = app.trials.lock().expect("trials lock").get(&token).filter(|t| t.name == j.name) {
             boot["state"] = t.state.clone();
@@ -769,11 +793,15 @@ struct ShowReq {
 }
 
 /// Opens a jelly full size on the person's screen (or closes it with no name).
-async fn show_full(State(app): State<Shared>, Json(r): Json<ShowReq>) -> Result<Json<Event>, ApiError> {
+async fn show_full(State(app): State<Shared>, Json(r): Json<ShowReq>) -> Result<Json<Value>, ApiError> {
     if let Some(n) = &r.name {
         app.store.lock().expect("store lock").get(n)?;
     }
-    app.change(|s| s.do_verb(PAGE, "show", json!({"name": r.name}), &by(r.by)?))
+    let Json(ev) = app.change(|s| s.do_verb(PAGE, "show", json!({"name": r.name}), &by(r.by)?))?;
+    let mut out = json!(ev);
+    // `show` only moves the jelly page, so it reaches nobody unless that page is open.
+    out["visible"] = json!(app.visible(PAGE));
+    Ok(Json(out))
 }
 
 // ---- DESIGN.md per project --------------------------------------------------
@@ -809,7 +837,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
         (dir, app)
     }
 
@@ -994,8 +1022,8 @@ mod tests {
         assert_eq!(request["url"], "/api/jellies/test%3Ax/screen");
         assert_eq!(post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap(), StatusCode::NO_CONTENT);
         eval("if (reloads !== 0) throw Error('accepted post reloaded');");
-        eval("message({jelly:'other:x', kind:'new', view_rev:1}); if (reloads !== 0) throw Error('other jelly reloaded');");
-        eval("message({jelly:'test:x', kind:'new', view_rev:1, version:1}); if (reloads !== 1) throw Error('same-revision replacement did not reload');");
+        eval("message({jelly:'other:x', kind:'make', view_rev:1}); if (reloads !== 0) throw Error('other jelly reloaded');");
+        eval("message({jelly:'test:x', kind:'make', view_rev:1, version:1}); if (reloads !== 1) throw Error('same-revision replacement did not reload');");
         create_page(&app, "REPLACEMENT", true).await;
         let stale_status = post(&app, serde_json::from_value(request["body"].clone()).unwrap()).await.unwrap_err().into_response().status();
         assert_eq!(stale_status, StatusCode::CONFLICT);
@@ -1153,7 +1181,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());

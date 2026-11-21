@@ -153,6 +153,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Ok(store::resolve_name(name, &project(), list.as_array().into_iter().flatten()
             .filter_map(|j| j["name"].as_str())))
     };
+    // `show` moves the jelly page, so it reaches nobody unless that page is open.
+    let show = |name: Value| -> Result<(), CommandError> {
+        let ev = send("POST", &format!("{}/api/show", cli.url), json!({"name": name, "by": by}))?;
+        if ev["visible"] == 0 && !name.is_null() {
+            eprintln!("jelly: nobody has the jelly page open, so nobody sees this yet. Give the person {}/", cli.url);
+        }
+        report(ev)
+    };
     match cli.cmd {
         Cmd::Serve { port, home, temp } => {
             let port = port.unwrap_or(if temp { 0 } else { 7878 });
@@ -397,7 +405,30 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             Ok(())
         }
         Cmd::Unask { name, id: aid } => report(send("POST", &api(&format!("/{}/asks/{}/unask", id(&name)?, encode(&aid))), json!({"by": by}))?),
-        Cmd::Show { name } => report(send("POST", &format!("{}/api/show", cli.url), json!({"name": name.map(|n| id(&n)).transpose()?, "by": by}))?),
+        // A file instead of a name: one command from an HTML file to the person's screen.
+        Cmd::Show { name: Some(file) } if file.ends_with(".html") && std::path::Path::new(&file).is_file() => {
+            let path = PathBuf::from(&file);
+            let short = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let view = read(&path)?;
+            let full = id(&short)?;
+            let exists = get(&api(""))?.as_array().into_iter().flatten().any(|j| j["name"] == full.as_str());
+            let name = if exists {
+                // The same file again changes the view in place; comments and state stay.
+                if get(&api(&format!("/{full}")))?["view"] != view.as_str() {
+                    send("POST", &api(&format!("/{full}/shape")), json!({"view": view, "by": by}))?;
+                }
+                if !json { output(format_args!("{full}: view taken from {file}\n"))?; }
+                full
+            } else {
+                let about = view.split_once("<title>").and_then(|(_, rest)| rest.split_once("</title>")).map_or("", |(t, _)| t.trim());
+                let body = json!({"name": short, "view": view, "verbs": "const verbs = {};", "state": {}, "by": by, "replace": false, "about": about, "project": project()});
+                let made = send("POST", &api(""), body)?["jelly"].as_str().unwrap_or(&short).to_string();
+                if !json { output(format_args!("{made}: made from {file}\n"))?; }
+                made
+            };
+            show(json!(name))
+        }
+        Cmd::Show { name } => show(json!(name.map(|n| id(&n)).transpose()?)),
         // `--done` sends no `what`, which clears it.
         Cmd::Working { name, what, .. } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
@@ -415,7 +446,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
         }
-        Cmd::Hear { wait: true, name, timeout, since, .. } => {
+        Cmd::Hear { wait: true, name, timeout, since, every, .. } => {
             let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
                 .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
@@ -427,10 +458,11 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                     req = req.query("project_jelly", &preferred);
                 }
                 if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
+                if every { req = req.query("every", "true"); }
                 let resp = req.call().map_err(describe)?;
                 if resp.status() == 204 {
                     let what = name.as_deref().unwrap_or("any jelly");
-                    eprintln!("jelly: nobody changed {what} in time");
+                    eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
                     std::process::exit(2);
                 }
                 let ev = resp.into_json().map_err(|e| e.to_string())?;
@@ -452,14 +484,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 let line = match line {
                     Ok(l) => l,
                     Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                        eprintln!("jelly: nobody changed {what} in time");
+                        eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
                         std::process::exit(2);
                     }
                     Err(e) => return Err(e.to_string().into()),
                 };
                 let Some(data) = line.strip_prefix("data:") else { continue };
                 let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
-                if ev["by"] != by.as_str() && (name.is_some() || ev["jelly"] != store::PAGE) {
+                if ev["by"] != by.as_str() && (every || ev["kind"] == "send") && (name.is_some() || ev["jelly"] != store::PAGE) {
                     if json {
                         return print(ev);
                     }
@@ -925,7 +957,8 @@ fn report_line(ev: &Value) -> String {
     let s = |v: &Value| v.as_str().unwrap_or("").to_string();
     let what = match ev["kind"].as_str().unwrap_or("") {
         "do" => format!("{} ran", s(&ev["verb"])),
-        "ask" => format!("asked {} {:?}; {}. Answers arrive in `jelly hear`", s(&ev["args"]["id"]), s(&ev["args"]["title"]), shown(ev)),
+        "ask" => format!("asked {} {:?}; {}. Answers arrive in `jelly hear`{}", s(&ev["args"]["id"]), s(&ev["args"]["title"]), shown(ev),
+            if ev["visible"] == 0 { ". Nobody has it on screen: tell the person, or `jelly show` it" } else { "" }),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
         "make" => "made".into(),
         k => k.to_string(),
