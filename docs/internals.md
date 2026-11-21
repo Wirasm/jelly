@@ -89,6 +89,33 @@ not scan the log on each request. Initial one-hour inbox windows and timestamp
 queries use an in-memory timestamp index to read only matching event byte ranges,
 then return them in sequence order, even when the wall clock moves backwards.
 
+## Send and waiting
+
+A jelly counts what people did since the last `send` in `unsent` (comments,
+answers, verb calls, undos; `store::record`). The runtime shows the count on its
+Send button, or a view draws its own (`data-send`, `jelly.person.send()`). `send`
+sets the count to zero and is the only event that ends `GET /api/wait` and the
+`jelly hear --wait` stream, unless `every=true` (`--every`). The relay keeps the
+same count for a shared jelly.
+
+## Who is looking
+
+Each open page tells the daemon, over its WebSocket, which jelly it shows and
+whether its tab is in front (`{"open": name, "visible": bool}`), on connect and
+on `visibilitychange`. Agent renders (`look`, `try`) do not. The daemon keeps
+this in memory by socket and drops it when the socket closes. `look`, `ask` and
+`show` report it; the jelly page counts for every jelly. People on a share link
+are not counted.
+
+## Feeds
+
+`jelly feed` writes `feeds.json` in the home; the daemon reads it every second
+and never writes it, and no HTTP route touches it. A due feed's command runs
+without a shell in the folder the feed was made in, for at most 60 seconds, one
+run at a time per jelly. Its standard output, parsed as JSON, becomes the
+arguments of the verb, called as `feed`. How the last run went is kept in memory
+and shown by `jelly look`. An archived jelly's feed does not run.
+
 ## Pull
 
 `jelly pull` gets asset names and bytes from the selected daemon, regardless of

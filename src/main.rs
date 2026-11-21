@@ -3,6 +3,7 @@
 mod cli;
 mod design;
 mod disk;
+mod feed;
 mod recipes;
 mod relay;
 mod server;
@@ -429,6 +430,41 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             show(json!(name))
         }
         Cmd::Show { name } => show(json!(name.map(|n| id(&n)).transpose()?)),
+        Cmd::Feed { name: None, .. } => {
+            let feeds = feed::read(&default_home()?)?;
+            if feeds.is_empty() {
+                return output(format_args!("No feeds.\n")).map_err(Into::into);
+            }
+            for f in feeds {
+                output(format_args!("{}  {} · in {}\n", f.jelly, f.line(), f.cwd.display()))?;
+            }
+            Ok(())
+        }
+        Cmd::Feed { name: Some(name), verb, every, stop, command } => {
+            // The file in the home is the feed: the daemon reads it and never
+            // takes a command over HTTP.
+            let home = default_home()?;
+            let mut feeds = feed::read(&home)?;
+            let jelly = id(&name)?;
+            let had = feeds.len();
+            feeds.retain(|f| f.jelly != jelly && f.jelly != name);
+            if stop {
+                if feeds.len() == had { return Err(format!("{jelly} has no feed").into()); }
+                feed::write(&home, &feeds)?;
+                return output(format_args!("{jelly}: feed stopped\n")).map_err(Into::into);
+            }
+            let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --stop)")?;
+            if command.is_empty() { return Err("give the command after `--`: jelly feed NAME VERB -- COMMAND".into()); }
+            if every < feed::FASTEST { return Err(format!("--every is in seconds, {} or more", feed::FASTEST).into()); }
+            get(&api(&format!("/{jelly}/state")))?; // fail on a wrong name
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let new = feed::Feed { jelly: jelly.clone(), verb, every, command, cwd };
+            let line = new.line();
+            feeds.push(new);
+            feed::write(&home, &feeds)?;
+            output(format_args!("{jelly}: feed {line}. `jelly look {name}` says how the last run went\n"))?;
+            Ok(())
+        }
         // `--done` sends no `what`, which clears it.
         Cmd::Working { name, what, .. } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),

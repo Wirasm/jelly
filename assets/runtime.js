@@ -332,7 +332,7 @@
     .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px -apple-system, sans-serif;
       background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
     .jf-btn.on { background: #e0a24f; color: #1b2221; border-color: #e0a24f; opacity: 1; }
-    .jf-btn.jf-send { inset: var(--jelly-send-inset, auto auto 10px 10px); background: #46c4b8; color: #0d1716; border-color: #46c4b8; font-weight: 600; opacity: 1; }
+    .jf-btn.jf-send { inset: var(--jelly-send-inset, auto auto 10px 10px); background: #e8336f; color: #fff; border-color: #e8336f; font-weight: 600; opacity: 1; }
     .jf-hover { outline: 2px dashed #e0a24f !important; outline-offset: 2px; cursor: crosshair !important; }
     .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
       font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }

@@ -175,7 +175,7 @@ mod ask_shown_tests {
         let mut store = Store::open(dir.path()).unwrap();
         store.make("shown", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
-        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
         for (drawn, anchor, line) in [
             (false, "matched", "it shows in jelly's stack of questions, with a pin on #tile"),
             (false, "missing", "#tile matches nothing on the page, so it has no pin; it shows in jelly's stack of questions"),

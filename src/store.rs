@@ -435,6 +435,9 @@ impl EventKind {
 /// browser writes as `person:<name>`. Agents use their own names.
 pub const PERSON: &str = "person";
 
+/// The daemon running a jelly's feed (`jelly feed`), as recorded in `by`.
+pub const FEED: &str = "feed";
+
 /// Made by a person, named or not.
 pub fn is_person(by: &str) -> bool {
     by == PERSON || viewer(by).is_some()
@@ -1154,13 +1157,18 @@ impl Store {
         previous: Option<Entry>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
-        entry.jelly.updated_ms = now_ms();
+        // A feed keeps data fresh; it does not count as someone using the jelly,
+        // so a fed jelly nobody opens still goes quiet and is archived.
+        let fed = by == FEED;
+        if !fed {
+            entry.jelly.updated_ms = now_ms();
+        }
         if kind == EventKind::Send {
             entry.jelly.unsent = 0;
         } else if is_person(by) && kind.is_for_agent() {
             entry.jelly.unsent += 1;
         }
-        if kind != EventKind::Archive {
+        if kind != EventKind::Archive && !fed {
             entry.jelly.archived = false;
         }
         let bytes = serde_json::to_vec(entry).expect("a jelly serializes");
@@ -2433,6 +2441,8 @@ mod tests {
         assert!(s.forgotten(60_000).is_empty(), "archived just now, so it stays for a while");
         std::thread::sleep(std::time::Duration::from_millis(2));
         assert_eq!(s.forgotten(0), ["old"], "only archived jellies are ever forgotten");
+        s.do_verb("old", "label", json!({"id": "a", "value": "fed"}), FEED).unwrap();
+        assert!(s.get("old").unwrap().archived, "a feed is not someone using the jelly");
         s.do_verb("old", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
         assert!(!s.get("old").unwrap().archived, "a change brings it back");
     }

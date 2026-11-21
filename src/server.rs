@@ -24,6 +24,7 @@ use tokio_stream::{Stream, StreamExt};
 
 mod ask;
 mod export;
+mod feed;
 mod hear;
 mod look;
 mod share;
@@ -61,6 +62,8 @@ struct App {
     /// The jelly each open browser page shows and whether its tab is in front,
     /// by socket. Memory only.
     open: Mutex<std::collections::HashMap<u64, (String, bool)>>,
+    /// How each jelly's feed last ran, by jelly. Memory only.
+    feeds: Mutex<std::collections::HashMap<String, feed::FeedRun>>,
 }
 type Shared = Arc<App>;
 
@@ -178,8 +181,9 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
     share::resume(&app);
+    feed::start(app.clone());
 
     // Jellies nobody keeps or touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -849,7 +853,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
         (dir, app)
     }
 
@@ -1193,7 +1197,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());

@@ -201,7 +201,7 @@ mod wait_tests {
             store.make(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
-        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() })
+        (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() })
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
@@ -219,7 +219,7 @@ mod wait_tests {
             let store = Store::open(dir.path()).unwrap();
             let path = store.events_path();
             let (events, _) = broadcast::channel(1);
-            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() };
+            let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() };
             let q = WaitQ { timeout: Some(1), ..query(None, since) };
             let waiting = wait_since(&app, &q);
             tokio::pin!(waiting);
@@ -568,7 +568,7 @@ mod wait_tests {
         let store = Store::open(dir.path()).unwrap();
         let path = store.events_path();
         let (events, _) = broadcast::channel(1);
-        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default() };
+        let app = App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() };
         let q = WaitQ { timeout: Some(1), ..query(None, 0) };
         let waiting = wait_since(&app, &q);
         tokio::pin!(waiting);

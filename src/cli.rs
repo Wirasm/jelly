@@ -306,6 +306,27 @@ pub enum Cmd {
     /// jelly from that one file and show it: no verbs, no state, named after
     /// the file. The same file again changes its view in place.
     Show { name: Option<String> },
+    /// Keep a jelly's data fresh after your session ends: the daemon runs COMMAND
+    /// on a timer and passes what it prints, as JSON, to VERB.
+    ///
+    /// `jelly feed prs refresh --every 120 -- gh pr list --json number,title`
+    ///
+    /// The command runs without a shell, from the folder you ran `jelly feed`
+    /// in; use `sh -c '...'` for a pipe. A jelly has one feed: a new one
+    /// replaces it. `jelly look NAME` says when it last ran and why it failed.
+    /// The feed rests while the jelly is archived. Without a NAME, list feeds.
+    Feed {
+        name: Option<String>,
+        verb: Option<String>,
+        /// Seconds between runs (5 or more).
+        #[arg(long, default_value_t = 60)]
+        every: u64,
+        /// Stop feeding NAME.
+        #[arg(long, requires = "name", conflicts_with_all = ["verb", "command"])]
+        stop: bool,
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     /// Say you are changing a jelly, so the person waits ("rebuilding the header").
     /// `--done` says you are finished.
     Working {

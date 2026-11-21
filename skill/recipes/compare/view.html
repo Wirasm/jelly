@@ -21,32 +21,44 @@
 const bar = document.querySelector("jelly-compare");
 const root = bar.attachShadow({ mode: "open" });
 root.innerHTML = `<style>
-  :host { all: initial; display: block; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; font: 13px/1.35 system-ui, sans-serif; color: #e9edf0; }
-  .bar { background: #15191c; border-bottom: 1px solid #000; padding: 8px 12px; display: grid; gap: 6px; }
+  /* jelly's own look, as on the jelly page: warm white bar, ink chips, raspberry for the one action. */
+  :host { all: initial; display: block; position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink);
+    --bar: #ffffff; --ink: #2a1620; --muted: #80626f; --line: #f3e3e8; --line-2: #e2c6d1; --on: #2a1620; --on-ink: #ffffff;
+    --brand: #e8336f; --brand-ink: #ffffff; --soft: #ffe1ec; --soft-ink: #a3134c; --glow: rgba(232,51,111,.16); --sun: #ffcf3f; --sun-ink: #5a3d00; }
+  @media (prefers-color-scheme: dark) { :host {
+    --bar: #0e0c14; --ink: #f1ecf7; --muted: #8a809e; --line: #262033; --line-2: #3d3454; --on: #2c2540; --on-ink: #ffffff;
+    --brand: #ff4f8b; --soft: #3a1e2e; --soft-ink: #ffb3cf; --glow: rgba(255,79,139,.2); --sun-ink: #2a1d00; } }
+  * { box-sizing: border-box; }
+  .bar { background: var(--bar); border-bottom: 1px solid var(--line); padding: 7px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .q { font-weight: 600; margin-right: auto; min-width: 0; }
-  .set { display: flex; gap: 4px; flex-wrap: wrap; }
-  button { font: inherit; color: inherit; background: #23292e; border: 1px solid #343c43; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-  button:hover { border-color: #5b6772; }
-  button:focus-visible { outline: 2px solid #7fd4c8; outline-offset: 1px; }
-  button[aria-selected="true"], button[aria-current="step"] { background: #e9edf0; color: #15191c; border-color: #e9edf0; }
-  button:disabled { opacity: .35; cursor: default; }
-  .pick { background: #46c4b8; border-color: #46c4b8; color: #0d1716; font-weight: 600; }
-  .pick.done { background: transparent; color: #7fd4c8; }
-  .tag { font-size: 11px; opacity: .75; margin-left: 5px; }
-  .note { color: #aab4bc; min-width: 0; flex: 1 1 240px; }
-  .steps button { padding: 3px 8px; font-size: 12px; }
+  .q { font-weight: 600; font-size: 14px; letter-spacing: -.01em; margin-right: auto; min-width: 0; display: flex; gap: 9px; align-items: center; }
+  .q::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 3px var(--glow); }
+  .set { display: flex; gap: 2px; flex-wrap: wrap; }
+  button { font: inherit; color: var(--muted); background: none; border: 0; border-radius: 7px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  button:hover { color: var(--ink); background: var(--soft); }
+  button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  button[aria-selected="true"], button[aria-current="step"] { color: var(--on-ink); background: var(--on); }
+  button:disabled { opacity: .35; cursor: default; background: none; }
+  .prev, .next { border: 1px solid var(--line); padding: 2px 9px; }
+  .pick { background: var(--brand); color: var(--brand-ink); font-weight: 600; padding: 5px 13px; }
+  .pick:hover { background: var(--brand); color: var(--brand-ink); filter: brightness(1.06); }
+  .pick.done { background: var(--soft); color: var(--soft-ink); }
+  .tag { font: 600 10.5px -apple-system, sans-serif; border-radius: 999px; padding: 1px 8px; margin-left: 4px; background: var(--sun); color: var(--sun-ink); }
+  .tag.picked { background: var(--brand); color: var(--brand-ink); }
+  .note { color: var(--muted); font-size: 12.5px; min-width: 0; flex: 1 1 240px; }
+  .steps button { font-size: 12.5px; padding: 2px 9px; }
   @media (max-width: 640px) {
+    .bar { padding: 7px 10px; }
     .q, .note { flex-basis: 100%; }
+    .note { order: 1; }
     .tabs { flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
-    .pick { flex: none; }
-    .tabs button { white-space: nowrap; }
-    .note { font-size: 12px; }
+    .pick { margin-left: auto; }
   }
 </style>
 <div class="bar">
-  <div class="row"><div class="q"></div><div class="set tabs" role="tablist" aria-label="Versions"></div><button class="pick"></button></div>
-  <div class="row"><button class="prev" aria-label="Previous step">‹</button><div class="set steps"></div><button class="next" aria-label="Next step">›</button><div class="note"></div></div>
+  <div class="row"><div class="q"></div><div class="set tabs" role="tablist" aria-label="Versions"></div></div>
+  <div class="row"><button class="prev" aria-label="Previous step">‹</button><div class="set steps"></div><button class="next" aria-label="Next step">›</button><div class="note"></div><button class="pick"></button></div>
 </div>`;
 const $ = (sel) => root.querySelector(sel);
 const screens = document.getElementById("screens");
@@ -61,7 +73,7 @@ let at = { v: null, s: 0 };
 try { at = JSON.parse(sessionStorage.getItem(KEY)) || at; } catch {}
 
 const button = (text, on) => { const b = document.createElement("button"); b.textContent = text; b.onclick = on; return b; };
-const tag = (text) => { const t = document.createElement("span"); t.className = "tag"; t.textContent = text; return t; };
+const tag = (text) => { const t = document.createElement("span"); t.className = "tag " + text; t.textContent = text; return t; };
 let drawn = "";
 
 function render() {

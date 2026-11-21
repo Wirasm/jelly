@@ -28,8 +28,16 @@ it in their browser while it runs, and you keep changing it.
   element they clicked. Comments are pinned to elements. Answers name the option
   picked. No guessing from a paragraph of prose.
 - **You do not wait blind.** `jelly hear` at the start of a turn (or as a hook),
-  `jelly hear --wait` to block until they act, `jelly ask ... --wait` to block on one
-  answer.
+  `jelly ask ... --wait` to block on one answer. The person works through a
+  jelly and presses Send once; a `jelly hear --wait` you left in the background
+  wakes you then, not on every click. `look`, `ask` and `show` tell you whether
+  anyone has the jelly on screen.
+- **Small things cost nothing.** `jelly show sketch.html` puts one HTML file on
+  their screen. Jellies nobody keeps are archived after a quiet week and removed
+  a month later.
+- **Live data outlives your session.** `jelly feed prs refresh --every 120 --
+  gh pr list --json number,title` has the daemon run a command on a timer and
+  pass its JSON to a verb.
 - **Your work outlives your context.** A jelly keeps its state, undo history,
   open questions and comments in the daemon. The next session, or another agent,
   picks it up with `jelly look` and the note you left with `jelly note`.
@@ -78,14 +86,15 @@ show, ask, hear.
 
 ```bash
 jelly make plan --from ./scratch --about "One line: why this exists"   # view.html, verbs.js, state.json
-jelly recipes                              # starting points: review, plan, triage, map, scope, timeline, monitor, quiz
+jelly recipes                              # starting points: review, plan, compare, triage, map, scope, timeline, monitor, quiz
 jelly look plan                            # desktop and phone: outline, problems, one png
 jelly try plan --click "#add" --type "#title=Tea" --click "#save"     # use it; nothing is saved
 jelly show plan                           # put it in front of them
 jelly ask plan "Which layout?" --option dense="Dense" --option roomy="Roomy" \
   --recommend roomy --why "Easier to scan on a phone" --at "#grid"
 jelly hear                                # what they did since you last looked
-jelly hear --wait plan --since seq:42             # block until they act
+jelly show sketch.html                    # or one HTML file, straight to their screen
+jelly hear --wait plan                    # block until they press Send; --every for any change
 jelly do plan add '{"title":"Tea"}'      # run a verb, as a button in the view would
 jelly shape plan --view v2.html          # new view or verbs while it runs; state stays
 jelly undo plan                            # undo the last change to view, verbs or state
@@ -102,7 +111,9 @@ A local daemon holds every jelly and serves them on 127.0.0.1 only, without
 authentication: anything that can reach the port can run verbs. Verbs run one at
 a time in QuickJS with a 1 second, 64 MB limit and no network, which keeps every
 change attributable and undoable. Live data is pushed in from outside with
-`jelly do`. Data lives in `$JELLY_HOME` or `~/.jelly`.
+`jelly do`, or by a feed: a command the daemon runs on a timer. Feeds live in a
+file in the home that only `jelly feed` writes, so nothing that reaches the port
+can make the daemon run a command. Data lives in `$JELLY_HOME` or `~/.jelly`.
 
 Sharing live goes through a relay on your person's own Cloudflare account:
 [`relay/README.md`](relay/README.md).

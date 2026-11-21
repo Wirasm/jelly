@@ -357,6 +357,7 @@ pub(super) fn summary(app: &App, j: &crate::store::Jelly) -> String {
         if j.kept { " · kept" } else { "" }, if j.archived { " · archived" } else { "" }));
     line(&mut out, if app.visible(&j.name) > 0 { "screen   someone has it open, in front".to_string() } else { "screen   nobody has it open right now".to_string() });
     if j.unsent > 0 { line(&mut out, format!("unsent   {} change{} by the person since their last Send", j.unsent, if j.unsent == 1 { "" } else { "s" })); }
+    if let Some(feed) = feed::line(app, app.store.lock().expect("store lock").home(), &j.name) { line(&mut out, feed); }
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
     for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
     let verbs = crate::verbs::check(&j.verbs).unwrap_or_default();
