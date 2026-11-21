@@ -107,6 +107,13 @@ this in memory by socket and drops it when the socket closes. `look`, `ask` and
 `show` report it; the jelly page counts for every jelly. People on a share link
 are not counted.
 
+The jelly page has a "Notify me" button while the browser has not been asked.
+Once allowed, the page shows a browser notification for an agent's ask when its
+tab is not in front; clicking it brings the tab forward on that jelly. The page
+reports `notifies` with its presence, so `jelly ask` can tell the agent
+"their browser showed a notification" instead of "tell the person". It works
+only while a jelly page is open in some tab, and not on share links.
+
 ## The jelly stylesheet
 
 `assets/jelly.css` holds jelly's tokens (`--jy-*`, each a `light-dark()` pair) and
