@@ -121,3 +121,9 @@ Sharing live goes through a relay on your person's own Cloudflare account:
 To change jelly itself, read [`AGENTS.md`](AGENTS.md) for the invariants and
 [`docs/internals.md`](docs/internals.md) for the contracts between the CLI, the
 daemon and the runtime.
+
+## License
+
+[FSL-1.1-MIT](LICENSE.md). You may use jelly, change it and host it for
+yourself or your company. You may not offer it to others as a competing product
+or hosted service. Each release becomes MIT two years after it is published.
