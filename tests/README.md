@@ -92,13 +92,16 @@ playwright-cli -s=keys close
 ```
 
 The script creates and deletes only its own fixtures through the existing API.
-It clicks into a jelly and checks that j, k, a and p still drive the page, that c
-turns comment mode on and a second c (now typed inside the jelly) turns it off,
-that upper-case keys (Caps Lock) work, that letters typed into a jelly's own input
-stay there, that a jelly which calls `preventDefault()` on a key keeps it, and that
-a and c work in the full view after a click into its frame. It also checks the
-Escape ordering: in comment mode one Escape only ends comment mode, and the next
-closes the full view. Stop the daemon afterward. Existing homes retain their stored
+It clicks into a jelly and checks that j, k, arrows, a and p still drive the page,
+that Enter opens the jelly that has focus, that Escape closes the dock from inside
+a jelly and from the full view, that c turns comment mode on and a second c (now
+typed inside the jelly) turns it off, that upper-case keys (Caps Lock) work on the
+page and inside a jelly, that Ctrl, Alt and Meta combinations inside a jelly change
+nothing, that letters typed into a jelly's own input stay there, that Enter on a
+focused button, link or summary activates it without opening the full view, that a
+jelly which calls `preventDefault()` on a key keeps it, and that a and c work in the
+full view after a click into its frame. It also checks the Escape ordering: in
+comment mode one Escape only ends comment mode, and the next closes the full view. Stop the daemon afterward. Existing homes retain their stored
 jelly page; use a fresh home, or update it with
 `jelly --url http://127.0.0.1:17851 reshape surface --view assets/surface.html`
 from the checkout, merging these changes into any customized view first.

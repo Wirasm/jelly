@@ -598,8 +598,8 @@
     const d = e.data;
     if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
-    if (d?.type === "jelly:escape" && full) closeFull();
-    if (d?.type === "jelly:key" && frameOf(d.name)?.contentWindow === e.source) shortcut(String(d.key).toLowerCase());
+    if (d?.type === "jelly:escape") shortcut("Escape");
+    if (d?.type === "jelly:key" && frameOf(d.name)?.contentWindow === e.source) { if (!full) select(d.name); shortcut(String(d.key)); }
   });
 
   // ---- actions --------------------------------------------------------------
@@ -637,8 +637,9 @@
     if (s.scrollTop < 200) $("newpill").hidden = true;
   });
 
-  // Keys typed on the page itself, and letter shortcuts a focused jelly forwards as `jelly:key`.
+  // Keys typed on the page itself, and keys a focused jelly forwards as `jelly:key` or `jelly:escape`.
   function shortcut(key, e) {
+    if (key.length === 1) key = key.toLowerCase();
     if (key === "Escape" && dockOpen) return setDock(false);
     if (key === "a") return setDock(!dockOpen);
     if (key === "Escape" && full) return closeFull();
@@ -653,7 +654,7 @@
   }
   addEventListener("keydown", (e) => {
     if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
-    shortcut(e.key.length === 1 ? e.key.toLowerCase() : e.key, e);
+    shortcut(e.key, e);
   });
 
   // ---- live -----------------------------------------------------------------

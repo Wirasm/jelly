@@ -41,7 +41,9 @@ async page => {
     assert((await state()).active === `IFRAME[${name}]`, `focus inside ${name}`);
   };
   try {
-    const view = '<!doctype html><p id="text" style="height:120px">Some words to click</p><input id="field">';
+    const view = '<!doctype html><p id="text" style="height:120px">Some words to click</p><input id="field">'
+      + '<button id="btn" onclick="this.dataset.clicks = (+this.dataset.clicks || 0) + 1">Act</button> <a id="link" href="#x">Link</a>'
+      + '<details><summary id="sum">More</summary>Hidden</details>';
     for (const name of names) {
       const keeps = name === keepsJ ? '<script>addEventListener("keydown", e => { if (e.key === "j") e.preventDefault(); });</script>' : '';
       await post('/api/jellies', {name, about:name, view: view + keeps, verbs:'const verbs = {};', state:{}});
@@ -63,10 +65,49 @@ async page => {
     await page.keyboard.press('p'); await until('p inside a jelly hides pinned', {nopinned: true});
     await page.keyboard.press('p'); await until('p again shows pinned', {nopinned: false});
 
-    // Caps Lock reports an upper-case key.
+    // Arrows and Enter inside a jelly; Enter opens the jelly that has focus.
+    await page.keyboard.press('ArrowDown'); await until('ArrowDown inside a jelly moves down', {sel: keepsJ});
+    await page.keyboard.press('ArrowUp'); await until('ArrowUp inside a jelly moves up', {sel: top});
+    await focusInside(keepsJ);
+    await page.keyboard.press('Enter');
+    await page.locator('#full').waitFor({state:'visible'});
+    assert(await page.evaluate(() => document.querySelector('#full iframe').title) === keepsJ, 'Enter opens the jelly that has focus');
+    results.push('Enter inside a jelly opens that jelly');
+    await page.keyboard.press('Escape');
+    await page.locator('#full').waitFor({state:'hidden'});
+    await until('closing the full view selects it', {sel: keepsJ});
+
+    // Escape inside a jelly closes the dock, and only the dock.
+    await focusInside(top);
+    await page.keyboard.press('a'); await until('a inside a jelly opens the dock again', {dock: true, sel: top});
+    await page.keyboard.press('Escape'); await until('Escape inside a jelly closes the dock', {dock: false});
+
+    // Enter on a control inside a jelly belongs to the jelly.
+    for (const id of ['btn', 'link', 'sum']) {
+      await inside(top).locator('#' + id).focus();
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(400);
+      assert(await page.locator('#full').isHidden(), `Enter on #${id} does not open the full view`);
+    }
+    assert(await inside(top).locator('#btn').getAttribute('data-clicks') === '1', 'the button was activated');
+    assert(await inside(top).locator('details').evaluate(d => d.open), 'the summary was toggled');
+    results.push('Enter on a button, link and summary stays in the jelly');
+
+    // Caps Lock reports an upper-case key, on the page and inside a jelly.
     await focusPage();
     await page.keyboard.press('J'); await until('J with page focus moves down', {sel: keepsJ});
     await page.keyboard.press('K'); await until('K with page focus moves up', {sel: top});
+    await focusInside(top);
+    await page.keyboard.press('J'); await until('J inside a jelly moves down', {sel: keepsJ});
+    await page.keyboard.press('K'); await until('K inside a jelly moves up', {sel: top});
+
+    // A modifier makes it the browser's or the jelly's key, not a shortcut.
+    const modified = await state();
+    for (const combo of ['Control+j', 'Alt+j', 'Meta+j', 'Control+a', 'Alt+a', 'Meta+a']) {
+      await page.keyboard.press(combo);
+      await unchanged(`${combo} inside a jelly`, modified);
+    }
+    await focusPage();
 
     // c moves focus into the jelly; a second c must still turn comment mode off.
     await page.keyboard.press('c'); await until('c turns comment mode on', {commenting: true});
@@ -100,6 +141,9 @@ async page => {
     assert((await state()).active === `IFRAME[${top}]`, 'focus inside the full view');
     await page.keyboard.press('a'); await until('a in the full view opens the dock', {dock: true});
     await page.keyboard.press('a'); await until('a in the full view closes it', {dock: false});
+    await page.keyboard.press('a'); await until('a in the full view opens the dock again', {dock: true});
+    await page.keyboard.press('Escape'); await until('Escape in the full view closes the dock first', {dock: false});
+    assert(await page.locator('#full').isVisible(), 'the full view stays open');
     const fcomment = on => page.waitForFunction(on => document.querySelector('#fcomment').classList.contains('on') === on, on);
     await page.keyboard.press('c'); await fcomment(true);
     await page.keyboard.press('c'); await fcomment(false);
