@@ -93,8 +93,11 @@ playwright-cli -s=keys close
 
 The script creates and deletes only its own fixtures through the existing API.
 It clicks into a jelly and checks that j, k, arrows, a and p still drive the page,
+that a click back into the jelly that already has focus selects it again,
 that Enter opens the jelly that has focus and that a and c still work afterwards
-while focus stays in the stream frame, that repeated j inside one jelly walks the
+while focus stays in the stream frame, that comment mode begun in the stream and
+followed by Enter is ended by Escape on the stream's own button so that c works
+again after the full view closes, that repeated j inside one jelly walks the
 stream and Enter then opens the jelly the ring marks, that c inside an unselected
 jelly comments on that jelly, that Escape closes the dock from inside a jelly and
 from the full view, that c turns comment mode on and a second c (now typed inside
@@ -102,7 +105,9 @@ the jelly) turns it off, that upper-case keys (Caps Lock) work on the page and
 inside a jelly, that Ctrl, Alt and Meta combinations inside a jelly change nothing,
 that letters and Escape typed into a jelly's own input stay there, that Enter on a
 focused button, link or summary activates it without opening the full view, that a
-jelly which calls `preventDefault()` on a key (j or Escape) keeps it, and that a
+jelly which calls `preventDefault()` on a key (j or Escape) keeps it, that Escape
+with a comment pop open closes the pop and nothing else even when focus is outside
+the pop's text box, and that a
 and c work in the full view after a click into its frame. It also checks the Escape ordering: in
 comment mode one Escape only ends comment mode, and the next closes the full view. Stop the daemon afterward. Existing homes retain their stored
 jelly page; use a fresh home, or update it with

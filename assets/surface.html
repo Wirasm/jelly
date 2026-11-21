@@ -583,10 +583,15 @@
     button.classList.toggle("on", on);
     button.textContent = on ? "Click a part · Esc" : "Comment";
   }
-  const frameOf = (name) => (full ? $("full").querySelector("iframe") : entries.get(name)?.querySelector("iframe"));
-  // A jelly's stream frame keeps focus while its full view is open, so a key may come from either.
-  const sentBy = (e, name) => [entries.get(name)?.querySelector("iframe"), full === name ? $("full").querySelector("iframe") : null].some((f) => f?.contentWindow === e.source);
-  const buttonOf = (name) => (full ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
+  const fullFrame = () => $("full").querySelector("iframe");
+  const streamFrame = (name) => entries.get(name)?.querySelector("iframe");
+  const streamButton = (name) => entries.get(name)?.querySelector('[data-act="comment"]');
+  const frameOf = (name) => (full ? fullFrame() : streamFrame(name));
+  const buttonOf = (name) => (full ? $("fcomment") : streamButton(name));
+  // A jelly's stream frame keeps focus while its full view is open, so a message may come from either.
+  const sentBy = (e, name) => [streamFrame(name), full === name ? fullFrame() : null].some((f) => f?.contentWindow === e.source);
+  // Each frame reports its own comment mode, so its button is the sender's, not the page mode's.
+  const buttonFor = (e, name) => (e.source === fullFrame()?.contentWindow ? $("fcomment") : streamButton(name));
   function toggleComment(name) {
     const f = frameOf(name), b = buttonOf(name);
     if (!f || !b) return;
@@ -598,7 +603,7 @@
   addEventListener("message", (e) => {
     if (e.origin !== location.origin) return;
     const d = e.data;
-    if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
+    if (d?.type === "jelly:commenting" && sentBy(e, d.name)) { const b = buttonFor(e, d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
     if (d?.type === "jelly:focus" && sentBy(e, d.name) && !full) select(d.name);
     if (d?.type === "jelly:escape" && sentBy(e, d.name)) shortcut("Escape");

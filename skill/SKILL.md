@@ -112,7 +112,7 @@ and so does Enter on a focused button, link or summary. A view that handles one 
 these keys itself keeps it by calling `preventDefault()` in its `keydown` listener;
 the page ignores a key the view prevented. Escape follows the same rules once
 comment mode is off: while the view is in comment mode, or a comment pop is open,
-Escape ends that and goes no further.
+Escape typed anywhere in the view ends that and goes no further.
 
 ## Recipes
 

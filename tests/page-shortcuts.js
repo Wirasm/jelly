@@ -74,6 +74,8 @@ async page => {
     await page.keyboard.press('j'); await until('j inside a jelly moves down', {sel: keepsJ});
     assert((await state()).active === `IFRAME[${top}]`, 'forwarded j leaves focus in the jelly');
     await page.keyboard.press('k'); await until('k inside a jelly moves up', {sel: top});
+    await page.keyboard.press('j'); await until('j moves the ring away from the focused jelly', {sel: keepsJ});
+    await focusInside(top);
     await page.keyboard.press('a'); await until('a inside a jelly opens the dock', {dock: true});
     await page.keyboard.press('a'); await until('a again closes it', {dock: false});
     await page.keyboard.press('p'); await until('p inside a jelly hides pinned', {nopinned: true});
@@ -97,6 +99,19 @@ async page => {
     await page.keyboard.press('Escape');
     await page.locator('#full').waitFor({state:'hidden'});
     await until('closing the full view selects it', {sel: keepsJ});
+
+    // Comment mode begun in the stream survives a forwarded Enter; Escape ends it on the stream button, and c works again.
+    await focusInside(keepsJ);
+    await page.keyboard.press('c'); await until('c inside the stream turns comment mode on', {commenting: true, sel: keepsJ});
+    await page.keyboard.press('Enter');
+    await page.locator('#full').waitFor({state:'visible'});
+    await fcomment(false);
+    await page.keyboard.press('Escape'); await until('Escape ends stream comment mode behind the full view', {commenting: false});
+    assert(await page.locator('#full').isVisible(), 'the full view stays open after Escape ends comment mode');
+    await page.keyboard.press('Escape');
+    await page.locator('#full').waitFor({state:'hidden'});
+    await page.keyboard.press('c'); await until('c after that sequence turns comment mode on again', {commenting: true});
+    await page.keyboard.press('c'); await until('c turns it off again', {commenting: false});
 
     // Repeated j inside one jelly walks the stream from the selection, and Enter opens the jelly the ring marks.
     await focusPage();
@@ -181,6 +196,19 @@ async page => {
     await page.keyboard.press('Escape'); await unchanged('Escape prevented by the jelly', keepsEscape);
     await focusInside(plain);
     await page.keyboard.press('Escape'); await until('Escape inside another jelly closes the dock', {dock: false});
+
+    // Escape while a comment pop is open closes the pop and goes no further, wherever focus is in the view.
+    await page.keyboard.press('a'); await until('a opens the dock before the pop check', {dock: true});
+    await page.keyboard.press('c'); await until('c inside the jelly turns comment mode on for the pop', {commenting: true, sel: plain});
+    await inside(plain).locator('#text').click({position:{x:10, y:10}});
+    await inside(plain).locator('.jf-pop textarea').waitFor();
+    await until('a click in comment mode opens a pop', {commenting: false});
+    await inside(plain).locator('.jf-pop textarea').evaluate(t => t.blur());
+    assert((await state()).active === `IFRAME[${plain}]`, 'focus is in the view but outside the pop');
+    await page.keyboard.press('Escape');
+    await inside(plain).locator('.jf-pop').waitFor({state:'detached'});
+    await until('Escape outside the pop closes the pop and leaves the dock', {dock: true});
+    await page.keyboard.press('Escape'); await until('the next Escape closes the dock', {dock: false});
 
     // Full view: shortcuts after a click into the frame, and Escape ordering.
     await focusPage();

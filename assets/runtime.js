@@ -896,15 +896,18 @@
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
   // A click or Tab into a jelly never reaches the jelly page's click handler, so the jelly reports
-  // the focus itself and the page selects it.
-  addEventListener("focus", () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); });
+  // it and the page selects the jelly. A click into a jelly that already has focus fires no focus
+  // event, so the pointer reports too.
+  const reportFocus = () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); };
+  addEventListener("focus", reportFocus);
+  addEventListener("pointerdown", reportFocus);
   // Keys typed while a jelly has focus reach the jelly page, which decides which are its shortcuts.
-  // Escape ends comment mode first and reaches the page only when there was none to end; the page
-  // still listens for it as `jelly:escape`. A view keeps a key by calling preventDefault(); the
-  // check waits a tick because this listener runs before the view's.
+  // Escape ends comment mode or closes an open comment pop first, and reaches the page only when
+  // there was neither; the page still listens for it as `jelly:escape`. A view keeps a key by
+  // calling preventDefault(); the check waits a tick because this listener runs before the view's.
   addEventListener("keydown", (e) => {
-    const endsCommenting = e.key === "Escape" && commenting;
-    if (e.key === "Escape") setMode(false);
+    const endsCommenting = e.key === "Escape" && (commenting || !!pop?.isConnected);
+    if (e.key === "Escape") { setMode(false); pop?.remove(); pop = null; }
     if (!embedded || endsCommenting || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.target.closest?.("input, textarea, select") || e.target.isContentEditable || pop?.isConnected) return;
     if (e.key === "Enter" && e.target.closest?.("button, a[href], summary")) return;
