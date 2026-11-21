@@ -599,6 +599,7 @@
     if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
     if (d?.type === "jelly:escape" && full) closeFull();
+    if (d?.type === "jelly:key" && frameOf(d.name)?.contentWindow === e.source) shortcut(String(d.key).toLowerCase());
   });
 
   // ---- actions --------------------------------------------------------------
@@ -636,19 +637,23 @@
     if (s.scrollTop < 200) $("newpill").hidden = true;
   });
 
-  addEventListener("keydown", (e) => {
-    if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "Escape" && dockOpen) return setDock(false);
-    if (e.key === "a") return setDock(!dockOpen);
-    if (e.key === "Escape" && full) return closeFull();
-    if (e.key === "c") return toggleComment(full || sel);
+  // Keys typed on the page itself, and letter shortcuts a focused jelly forwards as `jelly:key`.
+  function shortcut(key, e) {
+    if (key === "Escape" && dockOpen) return setDock(false);
+    if (key === "a") return setDock(!dockOpen);
+    if (key === "Escape" && full) return closeFull();
+    if (key === "c") return toggleComment(full || sel);
     if (full) return;
     const names = [...entries.keys()].sort((a, b) => byName(b).created_ms - byName(a).created_ms);
     const i = names.indexOf(sel);
-    if (e.key === "j" || e.key === "ArrowDown") { select(names[Math.min(names.length - 1, i + 1)], true); e.preventDefault(); }
-    if (e.key === "k" || e.key === "ArrowUp") { select(names[Math.max(0, i - 1)], true); e.preventDefault(); }
-    if (e.key === "Enter" && sel) openFull(sel);
-    if (e.key === "p") $("app").classList.toggle("nopinned");
+    if (key === "j" || key === "ArrowDown") { select(names[Math.min(names.length - 1, i + 1)], true); e?.preventDefault(); }
+    if (key === "k" || key === "ArrowUp") { select(names[Math.max(0, i - 1)], true); e?.preventDefault(); }
+    if (key === "Enter" && sel) openFull(sel);
+    if (key === "p") $("app").classList.toggle("nopinned");
+  }
+  addEventListener("keydown", (e) => {
+    if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+    shortcut(e.key.length === 1 ? e.key.toLowerCase() : e.key, e);
   });
 
   // ---- live -----------------------------------------------------------------
