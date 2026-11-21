@@ -43,8 +43,8 @@
   .node .n { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: nowrap; }
   .node .q { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 12px -apple-system, sans-serif; display: grid; place-items: center; }
   .open { --c: var(--accent); --c-on: #fff; } .approved { --c: var(--good); } .change, .question { --c: var(--warn); --c-on: #1f1a1d; } .mech { --c: var(--idle); --c-on: var(--ink); }
-  .seen, .tested { --c: var(--good); } .unverified { --c: var(--warn); --c-on: #1f1a1d; }
-  .node.gap { border-style: dashed; cursor: default; --c: var(--warn); --c-on: #1f1a1d; } .node.gap.outside { --c: var(--bad); --c-on: var(--on); }
+  .seen, .tested { --c: var(--good); } .unverified { --c: var(--warn); --c-on: #1f1a1d; } .fails { --c: var(--bad); --c-on: var(--on); }
+  .node.gap { border-style: dashed; cursor: default; --c: var(--warn); --c-on: #1f1a1d; } .node.gap.outside, .node.gap.regression { --c: var(--bad); --c-on: var(--on); }
 
   /* Every changed line, as one bar: a segment per change, red for lines in none. */
   #lines { margin-top: 18px; }
@@ -137,9 +137,9 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const STATUS = { seen: "Seen working", tested: "Covered by a test", unverified: "Not verified" };
-const MARK = { seen: "✓", tested: "✓", unverified: "?", approved: "✓", change: "↩", question: "?", open: "", mech: "" };
-const KIND = { skipped: "Skipped", unverified: "Not verified", outside: "Outside your ask" };
+const STATUS = { seen: "Seen working", tested: "Covered by a test", unverified: "Not verified", fails: "Checked: it fails" };
+const MARK = { seen: "✓", tested: "✓", unverified: "?", fails: "✕", approved: "✓", change: "↩", question: "?", open: "", mech: "" };
+const KIND = { skipped: "Skipped", unverified: "Not verified", outside: "Outside your ask", regression: "Broke" };
 
 // Changed lines in a unified diff: + and - lines, not the file headers.
 const count = (diff, sign) => String(diff || "").split("\n").filter((l) => l[0] === sign && !/^(\+\+\+|---)( |$)/.test(l)).length;
@@ -227,7 +227,7 @@ function render(state) {
 
   $("outs").innerHTML = `<small>You asked for</small>` + outcomes.map((o) => `<button class="node ${esc(o.status)}${sel === `o:${o.id}` ? " on" : ""}" data-sel="o:${esc(o.id)}" data-node="o:${esc(o.id)}" title="${STATUS[o.status] || ""}">
       <span class="dot">${MARK[o.status] ?? ""}</span><span class="t">${esc(o.text)}</span></button>`).join("")
-    + (state.not_done || []).filter((n) => n.kind !== "outside" || !/^none\b/i.test(n.text)).map((n, i) => `<div class="node gap ${esc(n.kind)}" id="nd-${i}" title="${KIND[n.kind] || ""}"><span class="dot">${n.kind === "outside" ? "!" : "–"}</span><span class="t"><b>${KIND[n.kind] || esc(n.kind)}.</b> ${esc(n.text)}</span></div>`).join("");
+    + (state.not_done || []).filter((n) => n.kind !== "outside" || !/^none\b/i.test(n.text)).map((n, i) => `<div class="node gap ${esc(n.kind)}" id="nd-${i}" title="${KIND[n.kind] || ""}"><span class="dot">${n.kind === "outside" || n.kind === "regression" ? "!" : "–"}</span><span class="t"><b>${KIND[n.kind] || esc(n.kind)}.</b> ${esc(n.text)}</span></div>`).join("");
   $("blocks").innerHTML = `<small>What changed</small>` + groups.map((g) => { const q = asksAt(g); return `<button class="node ${st(g)}${sel === `g:${g.id}` ? " on" : ""}" data-sel="g:${esc(g.id)}" data-node="g:${esc(g.id)}" data-for="${esc(serves(g).join(" "))}" style="min-height:${Math.min(96, 44 + changed(g.diff) * 3)}px">
       <span class="dot">${MARK[st(g)]}</span><span class="t">${esc(g.intent)}</span>${q ? `<span class="q" title="The agent asks you something here">?</span>` : ""}<span class="n">${changed(g.diff)}</span></button>`; }).join("");
 

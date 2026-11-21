@@ -27,10 +27,10 @@ something else: before/after screenshots, a rendered preview, a table of rows.
 | `range` | What was compared, e.g. `main...HEAD`. |
 | `total_lines` | Added plus removed lines of the whole change (`git diff --numstat`). Not needed when `assets/full.diff` is attached. |
 | `next` | What you do when they say go: "Commit and push to x". |
-| `outcomes[]` | `id`, `text`, `status` (`seen`, `tested` or `unverified`), `evidence`. One per thing they asked for. |
+| `outcomes[]` | `id`, `text`, `status` (`seen`, `tested`, `unverified` or `fails`), `evidence`. One per thing they asked for. |
 | `groups[]` | `id`, `intent` (a few words: it is a label on the map), `outcome` (an outcome id, or a list of them), `risk` (`low`, `medium`, `high`), `why`, `show`, `evidence`, `files[]`, `diff`, and `mechanical: true` when there is nothing to decide. |
 | `groups[].show` | The picture of the change: `{"kind", "before", "after", "caption"}`. `terminal` (the default) takes command output, `image` takes two assets (`assets/before.png`) and gives a slider, `html` takes two pages and runs them live. Leave `before` out when there was nothing before. `labels` renames the two sides, `compare: "side"` puts two images next to each other, and a list of these shows several pictures. |
-| `not_done[]` | `kind` (`skipped`, `unverified` or `outside`) and `text`. |
+| `not_done[]` | `kind` (`skipped`, `unverified`, `outside` or `regression`) and `text`. |
 
 ## Rules that make it worth their time
 
@@ -56,6 +56,21 @@ something else: before/after screenshots, a rendered preview, a table of rows.
   If more than a few groups carry a question, decide more yourself.
 - **Say what is outside the ask.** Anything you changed that they did not ask for
   is a `not_done` item of kind `outside`, even when you think it is an improvement.
+
+## Reviewing someone else's change
+
+The same page works for a pull request you did not write. The person then
+decides whether to merge it, not whether you did what they asked.
+
+- `ask` is what the change says it does: quote the PR title and description.
+  One outcome per claim.
+- `fails` means you checked a claim and it does not hold. Paste the command and
+  the output that shows it, as for `seen`. Do not soften it to `unverified`.
+- Something that worked before and is broken now is a `not_done` item of kind
+  `regression`: say what broke and how you saw it. Show it on the group that
+  caused it, with the old output as `before` and the new as `after`.
+- Set a group's `risk` from what you found, not from what the author wrote.
+- `next` is what you do with the verdict: "Post this as a review on PR 142".
 
 ## Hearing them and answering
 

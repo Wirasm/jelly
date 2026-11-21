@@ -58,11 +58,11 @@ const verbs = {
     if (files !== undefined) g.files = files;
     state.go = null;
   },
-  // An outcome's status changed: "seen", "tested" or "unverified".
+  // An outcome's status changed: "seen", "tested", "unverified" or "fails".
   outcome(state, { id, status, evidence }) {
     const o = (state.outcomes || []).find((o) => o.id === id);
     if (!o) throw new Error(`no outcome ${id}`);
-    if (!["seen", "tested", "unverified"].includes(status)) throw new Error("status is seen, tested or unverified");
+    if (!["seen", "tested", "unverified", "fails"].includes(status)) throw new Error("status is seen, tested, unverified or fails");
     o.status = status;
     if (evidence !== undefined) o.evidence = evidence;
   },
