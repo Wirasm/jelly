@@ -3,6 +3,7 @@ name = "jelly"
 version = "0.1.0"
 edition = "2021"
 description = "Jellyware: small live apps that agents and people shape while they run"
+license = "FSL-1.1-MIT"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
