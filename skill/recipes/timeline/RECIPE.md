@@ -7,9 +7,9 @@ Start it as soon as you have two observations, and add to it as you go.
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes timeline --out DIR
-jelly new timeline --recipe timeline --state state.json --about "Why <the thing> happened"
+jelly make timeline --recipe timeline --state state.json --about "Why <the thing> happened"
 jelly look timeline                            # fix every `!` and `error` line first
-jelly focus timeline
+jelly show timeline
 ```
 
 The example `state.json` is a real investigation: why `jelly look` sometimes took
@@ -52,12 +52,12 @@ both stay readable; the cut says how long it was.
   conclusion. `conclude` only when a `settle` was run and a mark shows the result.
 - **Ask only what they can know and you cannot.** Put it on the hypothesis or
   the mark: `jelly ask timeline "…" --option … --recommend … --why "…" --at "#h-<id>"`
-  (or `--at "#e-<mark id>"`, which shows below the axis).
+  (or `--at "#e-<mark id>"`).
 
 ## Hearing them and answering
 
 The person picks a hypothesis to light up what is for and against it, opens any
-mark to see the evidence, and reacts. It arrives in `jelly inbox` as:
+mark to see the evidence, and reacts. It arrives in `jelly hear` as:
 
 - `judge` `{hypothesis, verdict, note}`: `confirmed`, `ruled_out`, or `next`
   ("check this next": do that before anything else). `take_back` undoes it.
@@ -68,11 +68,11 @@ mark to see the evidence, and reacts. It arrives in `jelly inbox` as:
 
 ```bash
 # As you find things. A mark that arrives while they watch is shown arriving.
-jelly call timeline mark @mark.json   # {"lane","t","dur","label","kind","detail","show","when"}; with "id", revises
-jelly call timeline hypothesis '{"text":"Runs collide on the shared profile","confidence":25,"settle":"…","supports":["disk-lock"]}'
-jelly call timeline hypothesis '{"id":"lock","confidence":10,"why":"It renders even with the lock held."}'
-jelly call timeline link '{"hypothesis":"lock","mark":"ask-8s","as":"contradicts"}'   # or supports, none
-jelly call timeline lane '{"id":"net","label":"Network"}'
+jelly do timeline mark @mark.json   # {"lane","t","dur","label","kind","detail","show","when"}; with "id", revises
+jelly do timeline hypothesis '{"text":"Runs collide on the shared profile","confidence":25,"settle":"…","supports":["disk-lock"]}'
+jelly do timeline hypothesis '{"id":"lock","confidence":10,"why":"It renders even with the lock held."}'
+jelly do timeline link '{"hypothesis":"lock","mark":"ask-8s","as":"contradicts"}'   # or supports, none
+jelly do timeline lane '{"id":"net","label":"Network"}'
 jelly set timeline --at /status '"Fixed in 3f2a1c; watching for a day."'
-jelly call timeline conclude '{"text":"Chrome did not exit because …","hypothesis":"linger"}'   # reopen takes it back
+jelly do timeline conclude '{"text":"Chrome did not exit because …","hypothesis":"linger"}'   # reopen takes it back
 ```

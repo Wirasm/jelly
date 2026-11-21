@@ -8,9 +8,9 @@ metric.
 
 ```bash
 jelly recipes monitor --out /tmp/monitor       # then edit start.json and driver.sh there
-jelly new monitor --from /tmp/monitor --state /tmp/monitor/start.json --about "Run: <what is running>"
+jelly make monitor --from /tmp/monitor --state /tmp/monitor/start.json --about "Run: <what is running>"
 jelly look monitor                             # fix every `!` and `error` line first
-jelly focus monitor
+jelly show monitor
 /tmp/monitor/driver.sh monitor 40 &            # the run: it pushes, and obeys the person
 ```
 
@@ -70,24 +70,24 @@ something else: a table of the worst items, a map, a picture per anomaly.
 `driver.sh` is the whole loop. Its shape, with the work left out:
 
 ```bash
-call() { jelly call "$M" "$@" >/dev/null; }
+verb() { jelly do "$M" "$@" >/dev/null; }
 read_state() { jelly state "$M" "$1" 2>/dev/null | tr -d '"'; }   # empty when nothing is there
 
 obey() {   # before every step: acknowledge, wait while paused, return 1 on stop
   while :; do
     seq=$(read_state /control/seq); acked=$(read_state /control/acked/seq); want=$(read_state /control/requested/want)
-    [ "${seq:-0}" -gt "${acked:-0}" ] && call ack "{\"seq\":$seq,\"note\":\"between steps, at $DONE of $TOTAL\"}"
+    [ "${seq:-0}" -gt "${acked:-0}" ] && verb ack "{\"seq\":$seq,\"note\":\"between steps, at $DONE of $TOTAL\"}"
     case "$want" in stop) return 1 ;; pause) sleep 1 ;; *) return 0 ;; esac
   done
 }
 
 for i in $(seq 1 "$TOTAL"); do
-  obey || { call finish '{"status":"stopped","headline":"Stopped at '"$DONE"' of '"$TOTAL"'"}'; exit 0; }
+  obey || { verb finish '{"status":"stopped","headline":"Stopped at '"$DONE"' of '"$TOTAL"'"}'; exit 0; }
   step "$i"; DONE=$i                               # your work: sets MS, RESULT, LABEL
   limit=$(read_state /metrics/0/threshold/value)   # their limit steers the run
-  call push "{\"points\":[{\"m\":\"latency\",\"v\":$MS}],\"items\":[{\"r\":\"$RESULT\",\"label\":\"$LABEL\"}],\"done\":$DONE,\"total\":$TOTAL}"
+  verb push "{\"points\":[{\"m\":\"latency\",\"v\":$MS}],\"items\":[{\"r\":\"$RESULT\",\"label\":\"$LABEL\"}],\"done\":$DONE,\"total\":$TOTAL}"
 done
-call finish '{"status":"done","headline":"Median '"$MED"' ms"}'
+verb finish '{"status":"done","headline":"Median '"$MED"' ms"}'
 ```
 
 Other verbs the driver uses: `phase '{"id":"measure"}'`, `log '{"text":"…","level":"warn"}'`,
@@ -95,7 +95,7 @@ Other verbs the driver uses: `phase '{"id":"measure"}'`, `log '{"text":"…","le
 
 ## Hearing them and answering
 
-Everything the person does arrives in `jelly inbox` as `pause`, `resume`, `stop`,
+Everything the person does arrives in `jelly hear` as `pause`, `resume`, `stop`,
 `threshold` and `judge` calls, and the driver sees it in `control` without you.
 
 - **Pause, resume, stop**: the driver handles them. If you are not running a

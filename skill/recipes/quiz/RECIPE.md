@@ -6,9 +6,9 @@ understood. It answers "what did everyone pick, and who was fast and right?"
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes quiz --out DIR
-jelly new quiz --recipe quiz --state state.json --about "Quiz: <what it is about>"
+jelly make quiz --recipe quiz --state state.json --about "Quiz: <what it is about>"
 jelly try quiz --type "#who=Ana" --click "#go"   # check joining without changing anything
-jelly focus quiz
+jelly show quiz
 ```
 
 People join with a name (it becomes `person:<name>` on their events) and wait in
@@ -31,17 +31,17 @@ A right answer scores 500 plus up to 500 for speed.
 ## Running it
 
 ```bash
-jelly call quiz open '{}'                 # the next round; prints `since seq:N`
-jelly wait quiz --since seq:N --json      # one event per vote; repeat until all voted or time is up
-jelly call quiz reveal '{}'               # scores, the right answer and the vote bars
-jelly call quiz add '{"q":"…","options":["…","…"],"correct":0}'   # a round written from what you just saw
-jelly call quiz finish '{}'               # final scores
+jelly do quiz open '{}'                 # the next round; prints `since seq:N`
+jelly hear --wait quiz --since seq:N --json      # one event per vote; repeat until all voted or time is up
+jelly do quiz reveal '{}'               # scores, the right answer and the vote bars
+jelly do quiz add '{"q":"…","options":["…","…"],"correct":0}'   # a round written from what you just saw
+jelly do quiz finish '{}'               # final scores
 ```
 
 - **Write later rounds from earlier answers.** After a reveal, read
   `jelly state quiz /votes` and ask about what people got wrong. That is what a
   quiz you run can do that a fixed one cannot.
-- **Reshape between rounds, not during one.** Open pages swap to the new view and
-  keep their state, but a reshape mid-question costs people seconds.
+- **Shape between rounds, not during one.** Open pages swap to the new view and
+  keep their state, but a shape mid-question costs people seconds.
 - **Not a secret ballot.** Anyone with the page can read the votes in state before
   the reveal. Use it for games and quick checks, not for decisions that must stay private.

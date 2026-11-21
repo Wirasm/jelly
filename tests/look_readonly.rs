@@ -21,7 +21,7 @@ fn look_never_changes_anything_as_the_person() {
     let url = common::served_url(&mut daemon);
     let view = r#"<p id="n">loading</p><script>
         jelly.onState((s) => { document.getElementById("n").textContent = "opens " + s.opens; });
-        jelly.call("open").catch(() => {});
+        jelly.do("open").catch(() => {});
     </script>"#;
     ureq::post(&format!("{url}/api/jellies"))
         .send_json(json!({"name": "t:x", "view": view, "verbs": "const verbs = { open(s) { s.opens++; } };", "state": {"opens": 0}, "by": "test"}))

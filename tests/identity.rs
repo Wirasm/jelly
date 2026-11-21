@@ -59,18 +59,18 @@ fn short_name_commands_stop_when_identity_lookup_fails() {
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let commands = [
-        vec!["rm", "plan"], vec!["call", "plan", "tick"], vec!["set", "plan", "{}"],
-        vec!["state", "plan"], vec!["reshape", "plan", "--about", "updated"],
-        vec!["undo", "plan"], vec!["pin", "plan"], vec!["unpin", "plan"],
+        vec!["rm", "plan"], vec!["do", "plan", "tick"], vec!["set", "plan", "{}"],
+        vec!["state", "plan"], vec!["shape", "plan", "--about", "updated"],
+        vec!["undo", "plan"], vec!["keep", "plan"], vec!["unkeep", "plan"],
         vec!["look", "plan"], vec!["events", "plan"], vec!["ask", "plan", "Which?"],
-        vec!["ask", "plan", "Check", "--seen"], vec!["withdraw", "plan", "a1"], vec!["focus", "plan"],
-        vec!["working", "plan", "updating"], vec!["done", "plan"],
-        vec!["ask", "plan", "--spec", "spec.json"], vec!["wait", "plan", "--timeout", "0"],
-        vec!["wait", "plan", "--since", "seq:0", "--timeout", "0"], vec!["comments", "plan"],
+        vec!["ask", "plan", "Check", "--seen"], vec!["unask", "plan", "a1"], vec!["show", "plan"],
+        vec!["working", "plan", "updating"], vec!["working", "plan", "--done"],
+        vec!["ask", "plan", "--spec", "spec.json"], vec!["hear", "--wait", "plan", "--timeout", "0"],
+        vec!["hear", "--wait", "plan", "--since", "seq:0", "--timeout", "0"], vec!["waiting", "plan"],
         vec!["reply", "plan", "c1", "answer"], vec!["move", "plan", "other"],
         vec!["look", "plan", "--text"], vec!["note", "plan", "note"], vec!["pull", "plan"],
-        vec!["dev", "plan", "missing"], vec!["archive", "plan"], vec!["restore", "plan"],
-        vec!["asset", "plan", "asset.txt"], vec!["share", "plan"], vec!["resolve", "plan", "c1"],
+        vec!["dev", "plan", "missing"],
+        vec!["asset", "plan", "asset.txt"], vec!["share", "plan"], vec!["reply", "plan", "c1", "--resolve"],
         vec!["open", "plan"],
     ];
     let mut failures = Vec::new();

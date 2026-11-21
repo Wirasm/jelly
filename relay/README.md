@@ -3,7 +3,7 @@
 Live share links for jellies, on your own Cloudflare account. `jelly share plan
 --to ana@example.com` puts the jelly on your relay and prints a link for Ana:
 she opens it on any device and uses the jelly (clicks, answers, comments), and
-you hear her in `jelly inbox` as `person:ana@example.com`. Nobody else's relay
+you hear her in `jelly hear` as `person:ana@example.com`. Nobody else's relay
 is involved: each person runs their own.
 
 ## Set up (once)
@@ -51,7 +51,7 @@ PIN ends, until the share does.
   new PIN and the old one stops.
 - 10 wrong PINs, from anyone, lock every PIN live on the relay: a wrong guess
   is a guess at all of them. That bounds a guesser's chance at 10 in a million
-  per PIN. You hear the lock in `jelly inbox`; run `--pin` again for a new one.
+  per PIN. You hear the lock in `jelly hear`; run `--pin` again for a new one.
 - One IP gets 5 wrong tries per 10 minutes. That is fewer than 10, so one
   person or script cannot lock a room alone. Right PINs never count.
 - Expired, ended and locked PINs all answer the same "does not work", and
@@ -65,7 +65,7 @@ PIN ends, until the share does.
   comments and asks, runs verbs in QuickJS (the daemon's engine, as
   WebAssembly) with the same 1 s limit, and keeps an event log.
 - While shared, the relay's copy is the live one. The daemon forwards local
-  changes (`call`, `set`, `reshape`, `ask`, `withdraw`, `reply`, `resolve`) to
+  changes (`call`, `set`, `shape`, `ask`, `withdraw`, `reply`, `resolve`) to
   it, and mirrors every change back over a WebSocket, so `inbox`, `wait` and
   `look` work as before. It keeps working while your laptop sleeps; the daemon
   catches up when it reconnects.
@@ -78,7 +78,7 @@ PIN ends, until the share does.
   never holds a working link. A PIN is stored as an HMAC keyed with the relay's
   secret, since a plain hash of 6 digits is reversed in a moment.
 - Only the holder of the publish secret (in `$JELLY_HOME/relay.json`) can
-  publish, reshape, mint or revoke. Links can call verbs, answer and comment,
+  publish, shape, mint or revoke. Links can call verbs, answer and comment,
   nothing else; view-only links can do none of that.
 - The view runs in a sandboxed iframe with an opaque origin and reaches the
   jelly only through `postMessage`, so it cannot read the link, the socket or

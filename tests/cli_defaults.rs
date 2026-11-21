@@ -118,3 +118,40 @@ fn find_resolves_a_loosely_named_jelly() {
     assert!(!text.contains("b:other"), "{text}");
     assert!(!find(&["nothing", "like", "this"]).0);
 }
+
+/// A jelly made outside a git repo lands in no project, where `jelly hear` run
+/// from the person's repo never looks. `new` says so, unless that was asked for.
+#[test]
+fn new_outside_a_repo_says_the_jelly_is_in_no_project() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let d = daemon(home.path());
+    std::fs::write(cwd.path().join("view.html"), "<p>hi</p>").unwrap();
+    std::fs::write(cwd.path().join("verbs.js"), "const verbs = {};").unwrap();
+    let new = |name: &str, more: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
+            .args(["--url", &d.1]).args(more).args(["make", name, "--from", "."])
+            .current_dir(cwd.path())
+            // A temp dir inside a checkout must not count as that repo.
+            .env("GIT_CEILING_DIRECTORIES", cwd.path().parent().unwrap())
+            .env_remove("JELLY_PROJECT")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    assert!(new("tea", &[]).contains("tea is in no project"));
+    assert_eq!(new("chai", &["--project", ""]), "");
+    assert_eq!(new("mate", &["--project", "kitchen"]), "");
+}
+
+/// Exit 2 is kept for "nobody acted in time". A command that does not exist exits 1.
+#[test]
+fn an_unknown_command_exits_1_not_2() {
+    let run = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_jelly")).args(args).output().unwrap();
+    let unknown = run(&["inbox", "--hook"]);
+    assert_eq!(unknown.status.code(), Some(1), "{unknown:?}");
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unrecognized subcommand"), "{unknown:?}");
+    assert_eq!(run(&["--help"]).status.code(), Some(0));
+    assert_eq!(run(&["--version"]).status.code(), Some(0));
+}

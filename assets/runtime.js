@@ -3,20 +3,20 @@
 // This jelly:
 //   jelly.state                 current state (read only; change it with verbs)
 //   jelly.onState(fn)           fn(state, event) now and after every change, from anyone
-//   jelly.call(verb, args)      run a verb; resolves to the event, rejects with the reason
+//   jelly.do(verb, args)      run a verb; resolves to the event, rejects with the reason
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
 //   jelly.events(fn)            fn(event) for every event of every jelly; returns unsubscribe
 //
 // Other jellies ("plan" means plan in this project):
 //   jelly.other(name).state     a promise of its state
-//   jelly.other(name).watch(fn) fn(state, event) now and after its changes; returns unsubscribe
+//   jelly.other(name).onState(fn) fn(state, event) now and after its changes; returns unsubscribe
 //   jelly.other(name).open()    put it on screen: full size on the jelly page, else navigate
 //
 // The person:
 //   jelly.person.name           this browser's name, "" if unset; assign to rename (kept per browser)
 //   jelly.person.by             what this browser writes as: "person", or "person:<name>" once named
-//   jelly.person.asks           every ask on this jelly, answered and withdrawn ones too;
-//                               open ones have no .answer and no .withdrawn; .answer.option is the pick
+//   jelly.person.asks           every ask on this jelly, answered and unasked ones too;
+//                               open ones have no .answer and no .unasked; .answer.option is the pick
 //   jelly.person.onAsk(fn)      fn() now and whenever asks or comments change
 //   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the dock; returns unsubscribe
 //   jelly.person.comments       comment threads on this jelly
@@ -25,16 +25,21 @@
 //   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
 //   jelly.isPerson(by)          true for "person" and "person:<name>"
 //
+// Asks: an ask you do not draw shows as a card in jelly's stack of questions,
+// fixed over the bottom of the page, with a pin on the element it is about.
+// To draw one yourself, put `data-ask="<ask id>"` on its element and answer
+// with jelly.person.answer; jelly then leaves that ask to you.
+//
 // Comments anywhere: hold Option (Alt) and click any element, or press the
 // Comment button, to pin a comment to it. The agent gets a `comment` event that
-// names the element. Give elements an `id` so comments survive a reshape.
+// names the element. Give elements an `id` so comments survive a shape.
 // Agents answer on the pin (`jelly reply`); the thread shows when you click it.
 //
 // On a share link (`jelly share --to`) the same runtime runs, with a few
 // differences: jelly.other() is not available, jelly.person.name is whom the
 // link is for and cannot be changed, and a view-only link refuses changes.
 //
-// A reshape or an undo that changes the view reloads the page. State lives in
+// A shape or an undo that changes the view reloads the page. State lives in
 // the daemon, so nothing is lost; scroll and the focused field (by id) carry
 // over. On the jelly page the new version loads unseen and replaces the old
 // one once it has drawn.
@@ -64,6 +69,20 @@
   // `jelly try` renders carry steps to do as a person would. Their verb calls run
   // against a throwaway copy of the state in the daemon, so nothing is saved.
   const trial = agentMode ? boot.try : undefined;
+  // Nobody is at an agent render to close a dialog, and an open one stops the
+  // page until the render times out. Each is reported instead, and answered the
+  // way that lets the page go on: OK to a confirm, Cancel to a prompt.
+  const dialogs = [];
+  if (agentMode) {
+    const dialog = (kind, answer, said) => (text = "") => {
+      if (dialogs.length < 10) dialogs.push(`${kind} ${JSON.stringify(String(text).slice(0, 200))}${said}`);
+      postSnapshot();
+      return answer;
+    };
+    window.alert = dialog("alert", undefined, "");
+    window.confirm = dialog("confirm", true, ", answered OK");
+    window.prompt = dialog("prompt", null, ", cancelled");
+  }
   const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
   addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
@@ -72,9 +91,9 @@
   let state = boot.state;
   let version = boot.version;
   let comments = boot.comments || [];
-  let attention = boot.attention || [];
-  const attentionSubs = [];
-  const attendSubs = new Set();
+  let asks = boot.asks || [];
+  const askSubs = [];
+  const openSubs = new Set();
   let working = boot.working || null;
   const subs = [];
   const enc = encodeURIComponent;
@@ -99,7 +118,7 @@
   for (const type of ["pointerdown", "keydown"]) {
     addEventListener(type, (e) => {
       const el = e.target?.closest?.("button, a, input, select, textarea, [data-verb], [role=button], label") || e.target;
-      if (el?.nodeType === 1 && !el.closest(".jf-pop, .jf-marker, .jf-ask")) lastUsed = { el, at: Date.now() };
+      if (el?.nodeType === 1 && !isOurs(el)) lastUsed = { el, at: Date.now() };
     }, true);
   }
   function source() {
@@ -123,7 +142,7 @@
     // Nobody is at an agent render, so nothing it does may be recorded as the person.
     if (agentMode) throw new Error("jelly look only looks; this change was not made");
     if (share) return viaShare(op, body);
-    const r = await fetch(`${api}/${op === "answer" ? `attention/${enc(body.id)}/answer` : op}`, {
+    const r = await fetch(`${api}/${op === "answer" ? `asks/${enc(body.id)}/answer` : op}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...body, by: me() }),
@@ -223,7 +242,7 @@
     }
     if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { reload(); return; }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
-    if (ev.kind === "attention" || ev.kind === "answer" || ev.kind === "withdraw") refreshThreads().catch(console.error);
+    if (ev.kind === "ask" || ev.kind === "answer" || ev.kind === "unask") refreshThreads().catch(console.error);
 
     if (ev.kind === "working") { working = ev.args ? { what: ev.args, by: ev.by } : null; drawWorking(); }
     apply(ev);
@@ -242,8 +261,8 @@
     about: boot.about,
     get state() { return state; },
     onState(fn) { subs.push(fn); fn(state, null); },
-    async call(verb, args = {}) {
-      const ev = trial ? await trialCall(verb, args) : await post("call", { verb, args, source: source() });
+    async do(verb, args = {}) {
+      const ev = trial ? await trialCall(verb, args) : await post("do", { verb, args, source: source() });
       apply(ev);
       return ev;
     },
@@ -254,7 +273,7 @@
       return {
         name,
         get state() { return readState(name); },
-        watch(fn) {
+        onState(fn) {
           let seen = 0;
           readState(name).then((s) => fn(s, null), (e) => console.warn(e.message));
           return events((ev) => {
@@ -276,9 +295,9 @@
         try { name ? localStorage.setItem("jelly.viewer", name) : localStorage.removeItem("jelly.viewer"); } catch {}
       },
       get by() { return me(); },
-      get asks() { return attention; },
-      onAsk(fn) { attentionSubs.push(fn); fn(); },
-      onOpen(fn) { attendSubs.add(fn); return () => attendSubs.delete(fn); },
+      get asks() { return asks; },
+      onAsk(fn) { askSubs.push(fn); fn(); },
+      onOpen(fn) { openSubs.add(fn); return () => openSubs.delete(fn); },
       get comments() { return comments; },
       /** An option id, text, or both. A seen ask takes nothing ("seen"). */
       answer: (id, { option, text } = {}) => post("answer", { id, option, text: text || "" }),
@@ -292,7 +311,7 @@
 
   // ---- comments: markers on the elements they are about ------------------------
 
-  // Views place Comment via --jelly-comment-inset inherited from root or body.
+  // Views place Comment with --jelly-comment-inset on :root.
   const css = `
     .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px -apple-system, sans-serif;
       background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
@@ -301,6 +320,7 @@
     .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
       font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
     .jf-marker.agent { background: #46c4b8; }
+    .jf-marker.ask { background: #e8336f; color: #fff; border-radius: 50%; }
     .jf-marker.done { opacity: .55; }
     .jf-pop { color-scheme: light; position: absolute; z-index: 2147483001; width: 260px; background: #fff; color: #1b2221; border: 1px solid #e2e7e5; border-radius: 10px;
       box-shadow: 0 14px 34px -10px rgba(0,0,0,.45); padding: 8px; font: 12px -apple-system, sans-serif; }
@@ -326,14 +346,24 @@
   btn.title = "Pin a comment to any part of this jelly (or hold Option and click)";
 
   // Everything the runtime adds to a view. Selectors name view elements only.
-  const OURS = ".jf-btn, .jf-pop, .jf-marker, .jf-ask, .jf-work";
-  const isOurs = (el) => el.closest(OURS);
+  // Everything jelly adds to a page lives in one element beside <body>, never
+  // among the view's own elements: the view's selectors and layout see only the view.
+  let layer = null;
+  function ui() {
+    if (!layer?.isConnected) {
+      layer = document.createElement("jelly-ui");
+      layer.style.cssText = "position:absolute;top:0;left:0;width:0;height:0";
+      document.documentElement.appendChild(layer);
+    }
+    return layer;
+  }
+  const isOurs = (el) => el.closest?.("jelly-ui");
   function selectorFor(el) {
     const parts = [];
     for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
       if (n.id) { parts.unshift("#" + CSS.escape(n.id)); break; }
       let i = 1;
-      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName && !isOurs(s)) i++;
+      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) i++;
       parts.unshift(`${n.tagName.toLowerCase()}:nth-of-type(${i})`);
     }
     return parts.join(" > ") || "body";
@@ -357,7 +387,7 @@
     pop = document.createElement("div");
     pop.className = "jf-pop";
     pop.innerHTML = html;
-    document.body.appendChild(pop);
+    ui().appendChild(pop);
     const w = document.documentElement.clientWidth;
     pop.style.left = Math.max(8, Math.min(x, w - 276)) + scrollX + "px";
     pop.style.top = y + scrollY + 10 + "px";
@@ -411,13 +441,12 @@
   }
 
   function drawMarkers() {
-    drawAttention();
+    drawAsks();
     markerEls.forEach((p) => p.remove());
     markerEls = [];
     const shown = visible();
-    const anchors = attentionAnchors(shown.map((f) => ({ anchor: { selector: f.anchor.selector } })), keepFocus());
     shown.forEach((f, i) => {
-      const el = anchors[i].element;
+      const el = anchorOf(f).element;
       if (!el) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
@@ -430,25 +459,47 @@
       pin.style.left = Math.max(2, r.left - 24) + scrollX + "px";
       pin.style.top = r.top + Math.min(r.height, 40) / 2 - 10 + scrollY + "px";
       pin.onclick = (e) => { e.stopPropagation(); thread(f, r.left, r.bottom); };
-      document.body.appendChild(pin);
+      ui().appendChild(pin);
       markerEls.push(pin);
     });
   }
-  // ---- attention: questions sit on the page, right below what they are about ----
-  // Each question is a card in the page flow, after its anchor row (or at the
-  // top when it has none). It lives in a shadow root so the page's CSS and ours
-  // never touch. Answered questions shrink to one line for a day, with Change.
+  // ---- asks: the view draws them, or they show in jelly's own stack ------------
+  // A view that draws an ask itself marks an element `data-ask="<id>"` and
+  // answers with jelly.person.answer. Every other ask gets a card in one stack
+  // that jelly owns, fixed over the bottom of the page and never part of the
+  // view's layout, and a pin on the element it is about. An answered ask stays
+  // in the stack as one line for a day, with Change.
   const DAY_MS = 86400000;
-  const cards = new Map(); // item id -> host element, reused so drafts survive redraws
-  const isOpen = (a) => !a.answer && !a.withdrawn;
-  const shownItems = () => attention.filter((a) => !a.withdrawn && (!a.answer || Date.now() - a.answer.at_ms < DAY_MS));
-  const editing = new Set(); // answered items the person reopened with Change
+  const cards = new Map(); // ask id -> its card in the stack, reused so drafts survive redraws
+  const isOpen = (a) => !a.answer && !a.unasked;
+  const shownItems = () => asks.filter((a) => !a.unasked && (!a.answer || Date.now() - a.answer.at_ms < DAY_MS));
+  const editing = new Set(); // answered asks the person reopened with Change
+  const drawnByView = (id) => document.querySelector(`[data-ask="${CSS.escape(id)}"]`);
+  // The element an ask or a comment is about: `element` is null when the
+  // selector matches nothing, `invalid` is set when it is not a selector.
+  function anchorOf(item) {
+    const selector = item.anchor?.selector;
+    if (typeof selector !== "string") return {};
+    try { return { element: document.querySelector(selector) }; } catch { return { invalid: true }; }
+  }
+  // Brings an element into view and outlines it for a moment.
+  function point(el) {
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("jf-hover");
+    setTimeout(() => el.classList.remove("jf-hover"), 1600);
+  }
   const CARD_CSS = `
-    :host { all: initial; display: block; margin: 14px 0; --bg:#fff; --ink:#2a1620; --soft:#6b5260; --line:#f0dfe5; --tint:#fdf0f4; --accent:#e8336f; --accent-ink:#a3134c; }
-    :host([dark]) { --bg:#25162c; --ink:#f6e8f2; --soft:#c3a9bd; --line:#43294d; --tint:#33203b; --accent:#ff5c95; --accent-ink:#ff8fb6; }
+    :host { all: initial; position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147482998; display: flex; justify-content: center; pointer-events: none; }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: normal; text-transform: none; }
-    .c { background: var(--bg); color: var(--ink); border: 1.5px solid var(--line); border-left: 4px solid var(--accent); border-radius: 14px; padding: 16px 18px; font-size: 14px; line-height: 1.5; text-align: left; }
+    .sheet { pointer-events: auto; width: min(640px, calc(100vw - 16px)); margin-bottom: 8px; display: grid; justify-items: center; gap: 6px;
+      --bg:#fff; --ink:#2a1620; --soft:#6b5260; --line:#f0dfe5; --tint:#fdf0f4; --accent:#e8336f; --accent-ink:#a3134c; }
+    .sheet.dark { --bg:#25162c; --ink:#f6e8f2; --soft:#c3a9bd; --line:#43294d; --tint:#33203b; --accent:#ff5c95; --accent-ink:#ff8fb6; }
+    .tab { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: var(--ink); color: var(--bg); box-shadow: 0 6px 18px -6px rgba(0,0,0,.5); }
+    .list { width: 100%; max-height: min(70vh, 560px); overflow-y: auto; display: grid; gap: 8px; padding: 2px; }
+    .shut .list { display: none; }
+    .c { background: var(--bg); color: var(--ink); border: 1.5px solid var(--line); border-left: 4px solid var(--accent); border-radius: 14px; padding: 16px 18px; font-size: 14px; line-height: 1.5; text-align: left; box-shadow: 0 14px 34px -14px rgba(0,0,0,.5); }
     .c.flash { animation: flash 1.2s ease-out; } @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--accent); } 40% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent); } }
+    .about { all: unset; cursor: pointer; display: block; color: var(--soft); font-size: 12px; margin-bottom: 6px; text-decoration: underline; }
     .who { font: 600 12px ui-monospace, Menlo, monospace; color: var(--accent-ink); }
     h3 { margin: 4px 0 0; font-size: 18px; line-height: 1.3; font-weight: 700; }
     .ctx { margin: 6px 0 0; color: var(--soft); white-space: pre-wrap; } .ctx:empty { display: none; }
@@ -457,17 +508,15 @@
     .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
     .o { all: unset; box-sizing: border-box; cursor: pointer; padding: 11px 13px; border: 1.5px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); }
     button:focus-visible, textarea:focus-visible, .c:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-    .exposure { color: var(--soft); font-size: 12px; margin-bottom: 8px; }
-    .exposure:empty { display: none; }
     .o:hover { border-color: var(--accent); }
     .o b { display: block; font-size: 15px; font-weight: 650; }
     .o span { display: block; font-size: 13px; color: var(--soft); margin-top: 2px; } .o span:empty { display: none; }
-    .o.rec-o b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
+    .o.rec-o b::after { content: "recommended"; margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--bg); background: var(--accent-ink); border-radius: 99px; padding: 1px 7px; vertical-align: 2px; }
     .o.on { border-color: var(--accent); background: var(--tint); }
     .row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
     textarea { flex: 1; min-width: 0; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
     textarea:focus { outline: none; border-color: var(--accent); }
-    .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent); color: #fff; white-space: nowrap; }
+    .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent-ink); color: var(--bg); white-space: nowrap; }
     .go[disabled] { opacity: .4; cursor: default; }
     .hint { font-size: 12px; color: var(--soft); margin-top: 6px; }
     .done { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
@@ -485,111 +534,13 @@
     const scheme = getComputedStyle(document.documentElement).colorScheme + " " + (document.querySelector('meta[name="color-scheme"]')?.content || "");
     return /dark/.test(scheme) && matchMedia("(prefers-color-scheme: dark)").matches;
   }
-  function normalBoundary(el) {
-    while (el?.parentElement && el.parentElement !== document.body) {
-
-      const p = el.parentElement, d = getComputedStyle(p).display;
-      if (/grid|flex|table|inline/.test(d) || ["UL", "OL", "TR", "TBODY", "THEAD", "TFOOT", "TABLE", "P", "BUTTON", "A", "LABEL"].includes(p.tagName)) el = p;
-      else break;
-    }
-    return el === document.body || el === document.documentElement ? null : el;
-  }
-  function fallback(group) {
-    return { kind: "block", after: normalBoundary(group), observe: group, status: "fallback", reason: "this layout cannot take a full-width question row" };
-  }
-  function rowPlacement(group, item) {
-    const cs = getComputedStyle(group), grid = cs.display.includes("grid");
-    if (cs.transform !== "none" || [...group.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) ||
-        cs.writingMode !== "horizontal-tb" || cs.direction !== "ltr" ||
-        (grid ? cs.gridAutoFlow !== "row" : cs.flexDirection !== "row" || cs.flexWrap !== "wrap")) return fallback(group);
-    const children = [...group.children].filter((el) => !isOurs(el) && el.getClientRects().length && !["absolute", "fixed"].includes(getComputedStyle(el).position));
-    const rows = [];
-    for (const el of children) {
-      const style = getComputedStyle(el), r = el.getBoundingClientRect();
-      if (style.order !== "0" || style.transform !== "none" || style.position === "relative" && [style.top, style.right, style.bottom, style.left].some((v) => v !== "auto" && parseFloat(v) !== 0) ||
-          (grid && [style.gridRowStart, style.gridRowEnd, style.gridColumnStart, style.gridColumnEnd].some((v) => v !== "auto"))) return fallback(group);
-      if (!r.width || !r.height) continue;
-      let row = rows.at(-1);
-      if (!row || r.top >= row.bottom - 1) { row = { top: r.top, bottom: r.bottom, members: [] }; rows.push(row); }
-      else if (r.bottom <= row.top + 1 || row.members.some((peer) => {
-        const pr = peer.getBoundingClientRect();
-        return r.left < pr.right - 1 && r.right > pr.left + 1;
-      })) return fallback(group);
-      row.top = Math.min(row.top, r.top); row.bottom = Math.max(row.bottom, r.bottom); row.members.push(el);
-    }
-    const i = rows.findIndex((row) => row.members.includes(item));
-    if (i < 0) return fallback(group);
-    return { kind: grid ? "grid" : "flex", group, after: rows[i].members.at(-1), peers: rows[i].members, later: rows.slice(i + 1).flatMap((row) => row.members) };
-  }
-  function tablePlacement(row) {
-    const table = row.closest("table"), rows = [...table.rows].filter((r) => !isOurs(r));
-    let occupied = [], rowGroup = null;
-    let columns = 0, crossing = false;
-    for (const r of rows) {
-      if (r.parentElement !== rowGroup) { occupied = []; rowGroup = r.parentElement; }
-      let col = 0;
-      for (const cell of r.cells) {
-        while (occupied[col] > 0) col++;
-        const span = cell.rowSpan || Infinity;
-        for (let i = 0; i < cell.colSpan; i++) occupied[col++] = span;
-      }
-      columns = Math.max(columns, occupied.length);
-      if (r === row) crossing = occupied.some((span) => span > 1);
-      for (let i = 0; i < occupied.length; i++) occupied[i] = Math.max(0, occupied[i] - 1);
-    }
-    return crossing ? fallback(table) : { kind: "table", group: table, after: row, columns, peers: [row], later: rows.slice(rows.indexOf(row) + 1) };
-  }
-  function listCanInsert(group) {
-    // Without an explicit start, a reversed list counts every li, including slots.
-    if (group.reversed && !group.hasAttribute("start")) return false;
-    return [...group.children].filter((el) => !isOurs(el)).every((el) => {
-      const increment = getComputedStyle(el).counterIncrement;
-      return ["none", "list-item 1", "list-item -1"].includes(increment) &&
-        ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(el, pseudo).content));
-    });
-  }
-  function resolvePlacement(a, { element: el, invalid }) {
-    if (invalid) return { kind: "block", after: null, status: "invalid" };
-    if (!el) return { kind: "block", after: null, status: a.anchor?.selector ? "missing" : "direct" };
-    if (el === document.body || el === document.documentElement || isOurs(el)) return { kind: "block", after: null, status: "floating" };
-    const hidden = !available(el);
-    const svg = !!el.ownerSVGElement;
-    while (el.ownerSVGElement) el = el.ownerSVGElement;
-    for (let n = el; n && n !== document.body; n = n.parentElement) if (["fixed", "absolute", "sticky"].includes(getComputedStyle(n).position)) return { kind: "block", after: null, status: "floating" };
-    if (hidden) return { kind: "block", after: null, status: "hidden" };
-    let result;
-    for (let item = el; item && item !== document.body; item = item.parentElement) {
-      const group = item.parentElement;
-      if (!group) break;
-      const display = getComputedStyle(group).display;
-      if (["TD", "TH"].includes(item.tagName)) { result = tablePlacement(item.parentElement); break; }
-      if (item.tagName === "TR") { result = tablePlacement(item); break; }
-      if (["UL", "OL"].includes(group.tagName) && !listCanInsert(group)) { result = fallback(group); break; }
-      if (display.includes("grid") || display.includes("flex")) {
-        const restricted = group.closest("button, a, label, p");
-        if (restricted === group) continue;
-        result = restricted ? fallback(restricted) : rowPlacement(group, item);
-        break;
-      }
-      if (item.tagName === "LI" && ["UL", "OL"].includes(group.tagName)) {
-        const siblings = [...group.children].filter((el) => !isOurs(el));
-        result = { kind: "list", after: item, group, peers: [item], later: siblings.slice(siblings.indexOf(item) + 1) };
-        break;
-      }
-    }
-    result ||= { kind: "block", after: normalBoundary(el) };
-    if (!result.status && result.kind === "block" && result.after !== el) { result.status = "fallback"; result.reason = "the anchor cannot contain a question card"; }
-    if (svg && !result.status) { result.status = "fallback"; result.reason = "the anchor is inside a drawing"; }
-    return result;
-  }
   function renderCard(host, a) {
-    const root = host.shadowRoot;
     const isAsk = !a.seen; // a seen ask can be answered with nothing
     const opts = a.options || [];
     const answered = a.answer && !editing.has(a.id);
-    const draft = root.querySelector("textarea")?.value || "";
-    root.innerHTML = `<style>${CARD_CSS}</style><div class="c${answered ? " answered" : ""}"></div>`;
-    const c = root.querySelector(".c");
+    const draft = host.querySelector("textarea")?.value || "";
+    host.innerHTML = `<div class="c${answered ? " answered" : ""}"></div>`;
+    const c = host.querySelector(".c");
     c.tabIndex = -1;
     c.setAttribute("aria-label", a.title);
     if (answered) {
@@ -598,15 +549,20 @@
       c.querySelector(".q").textContent = a.title;
       c.querySelector(".a").textContent = "✓ " + (o ? o.label || o.id : a.seen ? "Seen" : "Answered");
       c.querySelector(".n").textContent = a.answer.text || "";
-      c.querySelector(".chg").onclick = () => { editing.add(a.id); drawAttention(); };
+      c.querySelector(".chg").onclick = () => { editing.add(a.id); drawAsks(); };
       return;
     }
     const rec = opts.find((o) => o.id === a.recommend);
-    c.innerHTML = `<div class="who"></div><h3></h3><p class="ctx"></p>
+    const about = anchorOf(a).element;
+    c.innerHTML = `${about ? '<button class="about"></button>' : ""}<div class="who"></div><h3></h3><p class="ctx"></p>
       ${rec ? '<div class="rec"><b></b> <span></span></div>' : ""}
       ${opts.length ? '<div class="opts"></div>' : ""}
       <div class="row"><textarea rows="1"></textarea><button class="go"></button></div>
       <div class="hint">${opts.length ? "Click an option to answer. Add a note first if you like." : "Enter to send · Shift+Enter for a new line"}</div>`;
+    if (about) {
+      c.querySelector(".about").textContent = `About ${a.anchor.quote ? `"${a.anchor.quote}"` : a.anchor.selector} · show it`;
+      c.querySelector(".about").onclick = () => point(about);
+    }
     c.querySelector(".who").textContent = `${a.by} ${isAsk ? "asks" : "asks you to look"}`;
     c.querySelector("h3").textContent = a.title;
     c.querySelector(".ctx").textContent = a.context || "";
@@ -634,229 +590,52 @@
     go.onclick = () => send(undefined);
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(undefined); } };
   }
-  function anchorElement(a) {
-    const selector = a.anchor?.selector;
-    const question = inline() && selector?.startsWith("#q-") ? document.getElementById(selector.slice(1)) : null;
-    if (question) return question;
-    try { return selector ? document.querySelector(selector) : null; } catch { return null; }
-  }
-  function available(el, whole = false) {
-    if (!el?.isConnected || el.closest("[inert]")) return false;
-    if (getComputedStyle(el).display === "contents") return [...el.children].some((c) => available(c, whole));
-    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) return false;
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      const cs = getComputedStyle(p), b = p.getBoundingClientRect();
-      const left = b.left + p.clientLeft, top = b.top + p.clientTop;
-      const right = left + p.clientWidth, bottom = top + p.clientHeight;
-      if (["hidden", "clip"].includes(cs.overflowX) && (whole ? r.left < left - 1 || r.right > right + 1 : r.right <= left || r.left >= right)) return false;
-      if (["hidden", "clip"].includes(cs.overflowY) && (whole ? r.top < top - 1 || r.bottom > bottom + 1 : r.bottom <= top || r.top >= bottom)) return false;
-    }
-    return true;
-  }
-  // Hiding a subtree can blur its control before the placement observer runs.
-  let blurredCardControl = null;
-  addEventListener("focusin", () => { blurredCardControl = null; });
-  addEventListener("focusout", (e) => { blurredCardControl = e.target.matches?.(".jf-ask") && !available(e.target) ? e.composedPath()[0] : null; });
-  let topStack = null;
-  function exposureLabel(host, a, rescued) {
-    let label = host.shadowRoot.querySelector(".exposure");
-    if (!label) {
-      label = document.createElement("div");
-      label.className = "exposure";
-      host.shadowRoot.querySelector(".c").prepend(label);
-    }
-    const text = rescued ? `About ${a.anchor?.quote || a.anchor?.selector} · The question is shown here so you can answer it.` : "";
-    if (label.textContent !== text) label.textContent = text;
-    host.toggleAttribute("data-exposed", rescued);
-  }
-  let outcomes = new Map();
-  const slots = new Map();
-  const groupObserver = new ResizeObserver(() => queueDraw());
-  let observedGroups = new Set();
-  function slotFor(id, host, place) {
-    // The form's intrinsic width must not widen an auto-layout table.
-    host.style.contain = place.kind === "table" ? "inline-size" : "";
-    const tag = place.kind === "table" ? "tr" : place.kind === "list" || ["UL", "OL"].includes(place.group?.tagName) ? "li" : "div";
-    let slot = slots.get(id);
-    if (!slot || slot.localName !== tag) {
-      slot?.remove();
-      slot = document.createElement(tag);
-      slot.className = "jf-ask jf-slot";
-      slots.set(id, slot);
-      if (tag === "tr") slot.appendChild(document.createElement("td"));
-    }
-    const container = tag === "tr" ? slot.firstElementChild : slot;
-    if (host.parentElement !== container) container.appendChild(host);
-    let style = "display:block;min-width:0;box-sizing:border-box;";
-    if (tag === "li") style += "list-style:none;counter-increment:list-item 0;padding:0;";
-    if (place.kind === "grid") style += "grid-column:1 / -1;grid-row:auto;align-self:stretch;justify-self:stretch;";
-    if (place.kind === "flex") style += "flex:0 0 100%;";
-    if (tag === "tr") {
-      style = "";
-      const cell = slot.firstElementChild;
-      cell.colSpan = place.columns;
-      cell.style.cssText = "padding:0;min-width:0;";
-    }
-    if (slot.style.cssText !== style) slot.style.cssText = style;
-    return slot;
-  }
-  function insertSlot(slot, place, tails) {
-    if (place.after) {
-      const tail = tails.get(place.after) || place.after;
-      if (tail.nextElementSibling !== slot) tail.after(slot);
-      tails.set(place.after, slot);
-    } else {
-      if (!topStack?.isConnected) { topStack = document.createElement("div"); topStack.className = "jf-ask jf-ask-top"; }
-      if (document.body.firstElementChild !== topStack) document.body.prepend(topStack);
-      const style = "display:block;grid-column:1/-1;flex-basis:100%;box-sizing:border-box;width:100%;min-width:0;max-width:calc(100vw - 32px);margin:14px 0";
-      if (topStack.style.cssText !== style) topStack.style.cssText = style;
-      const tail = tails.get(topStack);
-      if (tail) { if (tail.nextElementSibling !== slot) tail.after(slot); }
-      else if (topStack.firstElementChild !== slot) topStack.prepend(slot);
-      tails.set(topStack, slot);
-    }
-  }
-  function rowFits(place, slot) {
-    const r = slot.getBoundingClientRect(), g = place.group.getBoundingClientRect(), cs = getComputedStyle(place.group);
-    if (place.kind === "table") {
-      const peer = place.after.getBoundingClientRect();
-      return Math.abs(r.left - peer.left) <= 1 && Math.abs(r.right - peer.right) <= 1 &&
-        peer.bottom <= r.top + 1 && place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
-    }
-    const left = g.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
-    const right = g.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
-    return Math.abs(r.left - left) <= 1 && Math.abs(r.right - right) <= 1 &&
-      place.peers.every((el) => el.getBoundingClientRect().bottom <= r.top + 1) &&
-      place.later.every((el) => el.getBoundingClientRect().top >= r.bottom - 1);
-  }
-  function attentionAnchors(items, restoreFocus) {
-    const focusStates = ["focus", "focus-visible", "focus-within"].map((pseudo) => ({
-      pseudo, elements: [...document.querySelectorAll(`:${pseudo}`)].filter((el) => !isOurs(el)),
-    }));
-    // Structural selectors need owned siblings absent, but detachment clears
-    // focus pseudos. Match saved elements by their paths in the original tree.
-    // A style rule's selectorText is the browser's own serialization: escapes
-    // resolved, names lowercased, invalid forgiving arguments dropped.
-    const sheet = new CSSStyleSheet();
-    sheet.replaceSync("*{}");
-    const rule = sheet.cssRules[0];
-    const elementPath = (el) => {
-      const path = [];
-      for (let node = el; node.parentElement; node = node.parentElement) {
-        let index = 1;
-        for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) index++;
-        path.unshift(`:nth-child(${index})`);
-      }
-      return [":root", ...path].join(" > ");
-    };
-    const owned = [...document.querySelectorAll(OURS)]
-      .filter((el) => !el.parentElement || !isOurs(el.parentElement));
-    const positions = owned.map((el) => [el, el.parentNode, el.nextSibling]);
-    try {
-      for (const el of owned) el.remove();
-      const focusSelectors = focusStates.map(({ pseudo, elements }) => ({
-        pseudo, selector: elements.map(elementPath).join(",") || ":not(*)",
-      }));
-      const selectorWithFocus = (selector) => {
-        // An invalid selector leaves selectorText as it was, so reject it first.
-        document.createDocumentFragment().querySelector(selector);
-        rule.selectorText = selector;
-        return rule.selectorText.replace(/"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|:[\w-]+/g, (token) => {
-          const state = focusSelectors.find((state) => `:${state.pseudo}` === token);
-          return state ? `:is(${state.selector})` : token;
-        });
-      };
-      return items.map((a) => {
-        try {
-          const selector = a.anchor?.selector;
-          if (inline() && selector?.startsWith("#q-")) {
-            const element = document.getElementById(selector.slice(1));
-            if (!element) document.createDocumentFragment().querySelector(selector);
-            return { element };
-          }
-          return { element: typeof selector === "string" ? document.querySelector(selectorWithFocus(selector)) : null };
-        } catch { return { element: null, invalid: true }; }
-      });
-    } finally {
-      for (const [el, parent, next] of positions.reverse()) parent.insertBefore(el, next);
-      restoreFocus();
-    }
-  }
-  // Returns a function that puts focus and selection back where they are now.
-  function keepFocus() {
-    const focusedHost = document.hasFocus() ? [...cards.values()].find((h) => h.shadowRoot.activeElement || (h.shadowRoot.contains(blurredCardControl) && !available(h))) : null;
-    const focused = focusedHost?.shadowRoot.activeElement || (focusedHost ? blurredCardControl : document.activeElement);
-    const oldSlotParent = focusedHost?.parentElement?.parentElement;
-    const selection = focused && "selectionStart" in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
-    return () => {
-      if (focused?.isConnected && focused.getRootNode().activeElement !== focused) {
-        focused.focus({ preventScroll: true });
-        if (selection) focused.setSelectionRange(...selection);
-      }
-      if (focusedHost?.isConnected && oldSlotParent !== focusedHost.parentElement?.parentElement) focused.scrollIntoView({ block: "nearest" });
-    };
-  }
-  function drawAttention() {
-    const restoreFocus = keepFocus();
-    const allItems = shownItems();
-    const selfRendered = inline();
-    const items = selfRendered ? [] : allItems;
-    const keep = new Set(items.map((a) => a.id));
-    for (const [id, host] of cards) if (!keep.has(id)) { slots.get(id)?.remove(); slots.delete(id); host.remove(); cards.delete(id); editing.delete(id); }
+  let stack = null, stackOpen = false, askPins = [];
+  function drawAsks() {
     if (!document.body) return;
-    const anchors = attentionAnchors(allItems, restoreFocus);
-    const positions = [...slots.values()].filter((slot) => slot.isConnected).map((slot) => [slot, slot.style.cssText]);
-    let placements;
-    try {
-      // Keep focus and :focus-within live while taking cards out of row flow.
-      for (const [slot] of positions) slot.style.setProperty("position", "absolute", "important");
-      placements = allItems.map((a, i) => resolvePlacement(a, anchors[i]));
-    } finally {
-      for (const [slot, style] of positions) slot.style.cssText = style;
+    const items = shownItems().filter((a) => !drawnByView(a.id));
+    for (const [id, card] of cards) if (!items.some((a) => a.id === id)) { card.remove(); cards.delete(id); editing.delete(id); }
+    askPins.forEach((p) => p.remove());
+    askPins = [];
+    if (!items.length) { stack?.remove(); stack = null; return postSnapshot(); }
+    if (!stack?.isConnected) {
+      stack = document.createElement("jelly-asks");
+      stack.className = "jf-ask";
+      (stack.shadowRoot || stack.attachShadow({ mode: "open" })).innerHTML = `<style>${CARD_CSS}</style><div class="sheet"><button class="tab"></button><div class="list"></div></div>`;
+      stack.shadowRoot.querySelector(".tab").onclick = () => { stackOpen = !stackOpen; drawAsks(); };
+      cards.clear();
+      ui().appendChild(stack);
     }
-    const groups = new Set(placements.map((p) => p.group || p.observe).filter(Boolean));
-    for (const g of observedGroups) if (!groups.has(g)) groupObserver.unobserve(g);
-    for (const g of groups) if (!observedGroups.has(g)) groupObserver.observe(g);
-    observedGroups = groups;
-    const dark = pageIsDark(), tails = new Map();
+    const sheet = stack.shadowRoot.querySelector(".sheet"), list = sheet.querySelector(".list");
     items.forEach((a, i) => {
-      let host = cards.get(a.id);
-      if (!host) {
-        host = document.createElement("div"); host.className = "jf-ask"; host.id = `jf-q-${a.id}`;
-        host.attachShadow({ mode: "open" }); cards.set(a.id, host);
+      let card = cards.get(a.id);
+      if (!card) {
+        card = document.createElement("div");
+        card.id = `jf-q-${a.id}`;
+        cards.set(a.id, card);
+        // A new question opens the stack, unless the page is too short to share with it.
+        if (isOpen(a) && innerHeight >= 480) stackOpen = true;
       }
-      host.toggleAttribute("dark", dark);
-      const sig = JSON.stringify([a.title, a.context, a.options, a.answer, editing.has(a.id)]);
-      if (host.dataset.sig !== sig) { host.dataset.sig = sig; renderCard(host, a); }
-      exposureLabel(host, a, false);
-      insertSlot(slotFor(a.id, host, placements[i]), placements[i], tails);
+      const sig = JSON.stringify([a.title, a.context, a.options, a.answer, a.anchor, editing.has(a.id)]);
+      if (card.dataset.sig !== sig) { card.dataset.sig = sig; renderCard(card, a); }
+      if (list.children[i] !== card) list.insertBefore(card, list.children[i] || null);
+      const el = isOpen(a) && anchorOf(a).element;
+      if (!el || isOurs(el) || !el.getClientRects().length) return;
+      const r = el.getBoundingClientRect(), pin = document.createElement("div");
+      pin.className = "jf-marker ask";
+      pin.textContent = "?";
+      pin.title = a.title;
+      // On the element's top right corner; comment pins sit in the left margin.
+      pin.style.left = Math.min(r.right - 10, document.documentElement.clientWidth - 22) + scrollX + "px";
+      pin.style.top = r.top - 10 + scrollY + "px";
+      pin.onclick = (e) => { e.stopPropagation(); openAsk(a.id).catch(console.error); };
+      ui().appendChild(pin);
+      askPins.push(pin);
     });
-    restoreFocus();
-    const failed = items.map((a, i) => placements[i].peers && !rowFits(placements[i], slots.get(a.id)));
-    if (failed.some(Boolean)) {
-      failed.forEach((fail, i) => { if (fail) placements[i] = fallback(placements[i].group); });
-      const settledTails = new Map();
-      items.forEach((a, i) => insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], settledTails));
-    }
-    restoreFocus();
-    const rescued = items.map((a, i) => placements[i].status === "hidden" || !available(cards.get(a.id), true));
-    if (rescued.some(Boolean)) {
-      const visibleTails = new Map();
-      items.forEach((a, i) => {
-        if (rescued[i]) placements[i] = { kind: "block", after: null, status: placements[i].status, reason: placements[i].reason };
-        insertSlot(slotFor(a.id, cards.get(a.id), placements[i]), placements[i], visibleTails);
-      });
-    }
-    items.forEach((a, i) => exposureLabel(cards.get(a.id), a, rescued[i]));
-    restoreFocus();
-    outcomes = new Map((refreshingAttention ? [] : allItems).map((a, i) => {
-      const p = placements[i];
-      const status = selfRendered && !["invalid", "missing", "floating", "hidden"].includes(p.status) ? "unchecked" : p.status || "direct";
-      return [a.id, { status, destination: p.after ? { kind: "after", selector: selectorFor(p.after) } : { kind: "top" }, reason: p.reason }];
-    }));
-    if (topStack && !topStack.children.length) topStack.remove();
+    const open = items.filter(isOpen).length;
+    sheet.classList.toggle("dark", pageIsDark());
+    sheet.classList.toggle("shut", !stackOpen);
+    sheet.querySelector(".tab").textContent = (open ? `${open} question${open > 1 ? "s" : ""}` : "Answered") + (stackOpen ? " · hide" : " · show");
     postSnapshot();
   }
   let drawQueued = false;
@@ -874,14 +653,13 @@
     openingMessage.setAttribute("role", "alert");
     openingMessage.tabIndex = -1;
     openingMessage.textContent = text;
-    openingMessage.style.cssText = "display:block;padding:16px;background:#fff;color:#1b2221;border:2px solid #b26a12;font:16px system-ui";
-    document.body.prepend(openingMessage);
-    openingMessage.scrollIntoView({ block: "center" });
+    openingMessage.style.cssText = "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483001;padding:16px;background:#fff;color:#1b2221;border:2px solid #b26a12;font:16px system-ui";
+    ui().appendChild(openingMessage);
     openingMessage.focus();
   }
-  async function openAttention(id) {
+  async function openAsk(id) {
     const request = ++opening;
-    let item = attention.find((a) => a.id === id);
+    let item = asks.find((a) => a.id === id);
     if (!item) {
       try {
         await refreshThreads();
@@ -891,40 +669,39 @@
         return;
       }
       if (request !== opening) return;
-      item = attention.find((a) => a.id === id);
+      item = asks.find((a) => a.id === id);
     }
     openingMessage?.remove();
-    if (!item || item.withdrawn) {
+    if (!item || item.unasked) {
       showOpeningMessage("This question is no longer waiting for an answer.");
       return;
     }
-    for (const fn of attendSubs) { try { fn(item); } catch (e) { console.error(e); } }
-    drawAttention();
-    const host = inline() ? anchorElement(item) : cards.get(id);
-    if (!host) return;
-    const root = host.shadowRoot || host;
-    let control = root.querySelector("button.o:not(:disabled), [data-pick]") || root.querySelector("textarea:not(:disabled)") || root.querySelector("button:not(:disabled)") || root.querySelector(".c") || host;
-    host.scrollIntoView({ block: inline() ? "start" : "center" });
-    if (inline()) {
+    for (const fn of openSubs) { try { fn(item); } catch (e) { console.error(e); } }
+    const own = drawnByView(id);
+    if (own) {
+      own.scrollIntoView({ block: "start" });
+      let control = own.querySelector("button:not(:disabled), textarea:not(:disabled), input:not(:disabled)") || own;
+      // A control out of sight must not take Enter: focus the question's heading instead.
       const r = control.getBoundingClientRect();
-      if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) {
-        control = root.querySelector("h1, h2, h3") || host;
-        control.tabIndex = -1;
-      }
+      if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) control = own.querySelector("h1, h2, h3") || own;
+      if (!control.matches("button, textarea, input")) control.tabIndex = -1;
+      return control.focus({ preventScroll: true });
     }
-    if (!control.hasAttribute("tabindex") && control === host) control.tabIndex = -1;
-    control.focus({ preventScroll: true });
-    if (!inline()) control.scrollIntoView({ block: "nearest" });
-    const c = root.querySelector(".c");
-    if (c) { c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash"); }
+    stackOpen = true;
+    drawAsks();
+    const card = cards.get(id);
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest" });
+    const about = anchorOf(item).element;
+    if (about && !isOurs(about)) point(about);
+    (card.querySelector("button.o:not(:disabled)") || card.querySelector("textarea:not(:disabled)") || card.querySelector(".c")).focus({ preventScroll: true });
+    const c = card.querySelector(".c");
+    c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash");
   }
   addEventListener("message", (e) => {
-    if (e.origin === location.origin && e.data?.type === "jelly:attend") openAttention(e.data.id).catch(console.error);
+    if (e.origin === location.origin && e.data?.type === "jelly:ask") openAsk(e.data.id).catch(console.error);
   });
 
-  // A page that shows its own questions (the ask page) opts out:
-  // <meta name="jelly-attention" content="inline">.
-  const inline = () => document.querySelector('meta[name="jelly-attention"]')?.content === "inline";
   let workEl = null;
   function drawWorking() {
     workEl?.remove();
@@ -934,7 +711,7 @@
     workEl.className = "jf-work";
     workEl.innerHTML = "<i></i><span></span>";
     workEl.querySelector("span").textContent = `${working.by} is working on this${working.what ? ": " + working.what : ""}`;
-    document.body.appendChild(workEl);
+    ui().appendChild(workEl);
   }
 
   // ---- agent view: what is on screen, as text, for `jelly look` ---------------
@@ -951,7 +728,7 @@
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
     (function walk(el, depth) {
       for (const c of el.children) {
-        if (lines.length > 400 || c.matches(OURS) || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
+        if (lines.length > 400 || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
         else if (tag === "button" || role === "button") add(depth, `button "${label(c)}"${c.disabled ? " (disabled)" : ""}`, c);
@@ -1120,7 +897,7 @@
       const r = rects.get(c), name = `${c.tagName.toLowerCase()} ${named(c)} ${shortSelector(c)}`;
       if ((r.right > W + 1 || r.left < -1) && !scrolls(c)) { off.push(name); continue; }
       const p = r.top >= 0 && r.bottom <= innerHeight ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
-      if (p && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p) && !clipped(c, r)) {
+      if (p && (!isOurs(p) || p.closest(".jf-btn")) && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p) && !clipped(c, r)) {
         covered.push(`${name} under ${p.closest(".jf-btn") ? "jelly's Comment button (move it with --jelly-comment-inset)" : shortSelector(p)}`);
       }
       // A labelled checkbox or radio is tapped through its label; a link inside text is exempt.
@@ -1149,16 +926,20 @@
     snapT = setTimeout(() => {
       snapT = null;
       fetch(screenUrl, { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors,
+        body: JSON.stringify({ owner: boot.snapshotOwner, text: agentSnapshot(), width: innerWidth, height: innerHeight, version, errors, dialogs,
           // Only `jelly look`'s own renders measure problems; a person's browser does not pay for them.
           ...(agentMode && { dark: darkRender, contrast: contrast(), problems: darkRender ? [] : problems() }),
-          inline: inline(), page_height: document.documentElement.scrollHeight, below: anchorsThat("direct"), invalid: anchorsThat("invalid"), missing: anchorsThat("missing"), floating: anchorsThat("floating"), hidden: anchorsThat("hidden"),
-          exposed: [...cards].filter(([, h]) => h.hasAttribute("data-exposed") && available(h, true)).map(([id]) => id),
-          fallback: attention.filter(isOpen).filter((a) => outcomes.get(a.id)?.status === "fallback").map((a) => ({ id: a.id, destination: outcomes.get(a.id).destination, reason: outcomes.get(a.id).reason })) }) }).then((r) => { if (r.status === 409) reload(); }).catch(() => {});
+          page_height: document.documentElement.scrollHeight, asks: askReport() }) }).then((r) => { if (r.status === 409) reload(); }).catch(() => {});
     }, agentMode ? 400 : 1200);
   }
-  function anchorsThat(kind) {
-    return attention.filter((a) => isOpen(a) && typeof a.anchor?.selector === "string" && outcomes.get(a.id)?.status === kind).map((a) => `${a.id} ${a.anchor.selector}`);
+  // How each open ask shows: drawn by the view or in jelly's stack, and whether
+  // the element it is about is on the page.
+  function askReport() {
+    return asks.filter(isOpen).map((a) => {
+      const at = anchorOf(a);
+      return { id: a.id, drawn: !!drawnByView(a.id), at: typeof a.anchor?.selector === "string" ? a.anchor.selector : "",
+        anchor: at.invalid ? "invalid" : at.element ? "matched" : at.element === null ? "missing" : "none" };
+    });
   }
   addEventListener("load", postSnapshot);
   subs.push(() => postSnapshot());
@@ -1168,7 +949,7 @@
   async function trialCall(verb, args) {
     trialCalls++;
     try {
-      const r = await fetch(`/api/tries/${trial.token}/call`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args, by: me() }) });
+      const r = await fetch(`/api/tries/${trial.token}/do`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ verb, args, by: me() }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText);
       return j;
@@ -1218,17 +999,14 @@
     }
     await pause(30);
     await fetch(`/api/tries/${trial.token}`, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, errors, failed }) }).catch(() => {});
+      body: JSON.stringify({ text: agentSnapshot(), width: innerWidth, height: innerHeight, errors, dialogs, failed }) }).catch(() => {});
   }
   if (trial) addEventListener("load", () => setTimeout(runTrial, 300));
   // Text a page fills in later (fetches, timers) counts too.
   new MutationObserver(() => postSnapshot()).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
-  let refreshingAttention = false;
   let latestRefresh;
   function refreshThreads() {
-    refreshingAttention = true;
-    outcomes.clear();
     const refresh = (async () => {
       let j;
       try {
@@ -1243,10 +1021,10 @@
         throw e;
       }
       if (refresh !== latestRefresh) return latestRefresh;
-      refreshingAttention = false;
-      comments = j.comments || []; attention = j.attention || []; working = j.working || null;
+      comments = j.comments || []; asks = j.asks || []; working = j.working || null;
+      // The view first: an ask it draws must not flash in the stack.
+      for (const fn of askSubs) { try { fn(); } catch (e) { console.error(e); } }
       drawMarkers(); drawWorking();
-      for (const fn of attentionSubs) { try { fn(); } catch (e) { console.error(e); } }
     })();
     latestRefresh = refresh;
     return refresh;
@@ -1258,7 +1036,7 @@
     document.head.appendChild(style);
     // A view that draws its own comment control opts out with <meta name="jelly-comment" content="off">.
     const optOut = document.querySelector('meta[name="jelly-comment"]')?.content === "off";
-    if (!embedded && !optOut && share?.can_act !== false) document.body.appendChild(btn);
+    if (!embedded && !optOut && share?.can_act !== false) ui().appendChild(btn);
     drawMarkers();
     drawWorking();
     new ResizeObserver(queueDraw).observe(document.body);

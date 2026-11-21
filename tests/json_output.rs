@@ -51,25 +51,25 @@ fn changes_print_their_event() {
     let view = file("view.html", r#"<ul id="list"></ul>"#);
     let verbs = file("verbs.js", "const verbs = { add(s, { title }) { s.items = (s.items || []).concat([title]); } };");
 
-    let made = d.json(&["new", "x", "--view", &view, "--verbs", &verbs]);
-    assert_eq!((made["kind"].as_str(), made["jelly"].as_str(), made["version"].as_u64()), (Some("new"), Some("t:x"), Some(1)), "{made}");
-    let called = d.json(&["call", "x", "add", r#"{"title":"Milk"}"#]);
-    assert_eq!((called["kind"].as_str(), called["verb"].as_str()), (Some("call"), Some("add")), "{called}");
+    let made = d.json(&["make", "x", "--view", &view, "--verbs", &verbs]);
+    assert_eq!((made["kind"].as_str(), made["jelly"].as_str(), made["version"].as_u64()), (Some("make"), Some("t:x"), Some(1)), "{made}");
+    let called = d.json(&["do", "x", "add", r#"{"title":"Milk"}"#]);
+    assert_eq!((called["kind"].as_str(), called["verb"].as_str()), (Some("do"), Some("add")), "{called}");
     assert_eq!(called["changed"], json!(["/items"]));
     assert!(called["seq"].as_u64() > made["seq"].as_u64(), "{called}");
     let set = d.json(&["set", "x", "--at", "/title", r#""Shop""#]);
     assert_eq!((set["kind"].as_str(), &set["changed"]), (Some("set"), &json!(["/title"])), "{set}");
-    let reshaped = d.json(&["reshape", "x", "--about", "Groceries"]);
-    assert_eq!(reshaped["kind"], "reshape", "{reshaped}");
+    let shaped = d.json(&["shape", "x", "--about", "Groceries"]);
+    assert_eq!(shaped["kind"], "shape", "{shaped}");
     let undone = d.json(&["undo", "x"]);
     assert_eq!(undone["kind"], "undo", "{undone}");
 
     let asked = d.json(&["ask", "x", "Which first?", "--option", "a=Milk", "--option", "b=Eggs"]);
-    assert_eq!((asked["kind"].as_str(), asked["args"]["id"].as_str()), (Some("attention"), Some("a1")), "{asked}");
+    assert_eq!((asked["kind"].as_str(), asked["args"]["id"].as_str()), (Some("ask"), Some("a1")), "{asked}");
     let seen = d.json(&["ask", "x", "The list", "--seen"]);
     assert_eq!((seen["args"]["id"].as_str(), seen["args"]["seen"].as_bool()), (Some("a2"), Some(true)), "{seen}");
-    let withdrawn = d.json(&["withdraw", "x", "a1"]);
-    assert_eq!(withdrawn["kind"], "withdraw", "{withdrawn}");
+    let unasked = d.json(&["unask", "x", "a1"]);
+    assert_eq!(unasked["kind"], "unask", "{unasked}");
 
     // A command with nothing to print as JSON says so instead of printing text.
     let share = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["--url", &d.1, "share", "t:x", "--json"]).output().unwrap();
@@ -101,8 +101,8 @@ fn look_at_one_width_prints_its_parts() {
 fn try_prints_steps_calls_and_errors() {
     let home = tempfile::tempdir().unwrap();
     let d = daemon(home.path());
-    let view = r#"<button id="add" onclick="jelly.call('add', {title: 'Milk'}).catch(() => {})">Add</button>
-        <button id="bad" onclick="jelly.call('add', {}).catch(() => {})">Bad</button>"#;
+    let view = r#"<button id="add" onclick="jelly.do('add', {title: 'Milk'}).catch(() => {})">Add</button>
+        <button id="bad" onclick="jelly.do('add', {}).catch(() => {})">Bad</button>"#;
     ureq::post(&format!("{}/api/jellies", d.1))
         .send_json(json!({"name": "t:x", "view": view, "verbs": "const verbs = { add(s, { title }) { if (!title) throw new Error('no title'); s.items.push(title); } };", "state": {"items": []}, "by": "test"}))
         .unwrap();

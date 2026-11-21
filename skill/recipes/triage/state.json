@@ -13,7 +13,7 @@
     { "id": "5", "ref": "#5", "title": "jelly ask says so when its --at matches nothing", "lane": "now", "agent_lane": "now",
       "reason": "Small, and every agent that asks about a part of the page hits it.", "confidence": 0.9, "impact": 3, "effort": 2,
       "moved": null, "checked": null, "done": { "result": "Fixed in ef60c62.", "by": "agent", "at_ms": 1794268800000 } },
-    { "id": "2", "ref": "#2", "title": "jelly wait never misses a change made before it started listening", "lane": "now", "agent_lane": "now",
+    { "id": "2", "ref": "#2", "title": "jelly hear --wait never misses a change made before it started listening", "lane": "now", "agent_lane": "now",
       "reason": "#1 is built on it: an ask that waits must not miss a fast answer.", "confidence": 0.9, "impact": 4, "effort": 2,
       "moved": null, "checked": null, "done": null },
     { "id": "1", "ref": "#1", "title": "An agent can ask a question and get the answer in one command", "lane": "now", "agent_lane": "now",

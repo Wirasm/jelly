@@ -74,7 +74,7 @@
     {
       "id": "i2",
       "short": "#2",
-      "label": "jelly wait never misses a change",
+      "label": "jelly hear --wait never misses a change",
       "cost": 3,
       "value": 5,
       "group": "hear",
@@ -230,7 +230,7 @@
       "cost": 0.5,
       "value": 1,
       "group": "bugs",
-      "why": "`jelly new … | head -1` panics with Broken pipe. Ugly, harmless.",
+      "why": "`jelly make … | head -1` panics with Broken pipe. Ugly, harmless.",
       "in": false
     }
   ],

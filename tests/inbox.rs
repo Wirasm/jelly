@@ -27,7 +27,7 @@ impl Daemon {
 
     fn person_event(&self) -> Value {
         self.post("/api/jellies", json!({"name": "sample", "project": "p", "view": "<p>sample</p>", "verbs": "const verbs = {click(s,a){s.clicked=true;}};", "state": {}, "by": "agent"}));
-        self.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}))
+        self.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}))
     }
 
     fn command(&self, client: &Path) -> Command {
@@ -70,27 +70,27 @@ fn inbox_readers_are_independent_and_daemon_owned() {
     let legacy = || -> Vec<Value> { ureq::get(&format!("{}/api/inbox?project=p&since=0", daemon.url)).call().unwrap().into_json().unwrap() };
     assert_eq!(legacy()[0]["seq"], event["seq"]);
     assert!(!home.join("inbox-readers.json").exists());
-    let read = |name: &str| stdout(daemon.command(&client).env("JELLY_AS", name).arg("inbox").output().unwrap());
+    let read = |name: &str| stdout(daemon.command(&client).env("JELLY_AS", name).arg("hear").output().unwrap());
     for name in ["reader-a", "reader-b"] { has_event(&read(name)); empty(&read(name)); }
     assert_eq!(legacy().len(), 1);
     let filtered: Vec<Value> = ureq::get(&format!("{}/api/inbox?project=p&since={}", daemon.url, event["at_ms"])).call().unwrap().into_json().unwrap();
     assert!(filtered.is_empty());
-    daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    daemon.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}));
     for name in ["reader-a", "reader-b"] { has_event(&read(name)); empty(&read(name)); }
     assert_eq!(std::fs::read_to_string(client.join("inbox/p")).unwrap(), "9999999999999");
     assert!(!client.join("inbox-readers.json").exists());
     assert!(home.join("inbox-readers.json").exists());
-    stdout(daemon.command(&client).args(["call", "p:sample", "click"]).output().unwrap());
+    stdout(daemon.command(&client).args(["do", "p:sample", "click"]).output().unwrap());
     let last_event = || -> Value {
         serde_json::from_str(std::fs::read_to_string(home.join("events.jsonl")).unwrap().lines().last().unwrap()).unwrap()
     };
     assert_eq!(last_event()["by"], "agent");
-    stdout(daemon.command(&client).args(["--as", "writer", "call", "p:sample", "click"]).output().unwrap());
+    stdout(daemon.command(&client).args(["--as", "writer", "do", "p:sample", "click"]).output().unwrap());
     assert_eq!(last_event()["by"], "writer");
     drop(daemon);
     let daemon = Daemon::start(&home);
     for name in ["reader-a", "reader-b"] {
-        empty(&stdout(daemon.command(&client).env("JELLY_AS", name).arg("inbox").output().unwrap()));
+        empty(&stdout(daemon.command(&client).env("JELLY_AS", name).arg("hear").output().unwrap()));
     }
 }
 
@@ -103,9 +103,9 @@ fn inbox_mine_splits_agents_and_keeps_the_full_inbox() {
     let daemon = Daemon::start(&temp.path().join("daemon"));
     for (name, agent) in [("a", "ana"), ("b", "bo")] {
         daemon.post("/api/jellies", json!({"name": name, "project": "p", "view": "<p>x</p>", "verbs": "const verbs = {click(s){s.n=(s.n||0)+1;}};", "state": {}, "by": agent}));
-        daemon.post(&format!("/api/jellies/p:{name}/call"), json!({"verb": "click", "args": {}, "by": "person"}));
+        daemon.post(&format!("/api/jellies/p:{name}/do"), json!({"verb": "click", "args": {}, "by": "person"}));
     }
-    let read = |agent: &str, args: &[&str]| stdout(daemon.command(&client).env("JELLY_AS", agent).arg("inbox").args(args).output().unwrap());
+    let read = |agent: &str, args: &[&str]| stdout(daemon.command(&client).env("JELLY_AS", agent).arg("hear").args(args).output().unwrap());
     let ana = read("ana", &["--mine"]);
     assert!(ana.contains("p:a: click") && !ana.contains("p:b:"), "{ana}");
     let bo = read("bo", &["--mine"]);
@@ -121,22 +121,22 @@ fn inbox_conversations_resume_across_commands_and_hooks() {
     let daemon = Daemon::start(&temp.path().join("daemon"));
     daemon.person_event();
     let client = temp.path().join("client");
-    has_event(&stdout(daemon.command(&client).env("CLAUDE_CODE_SESSION_ID", "conversation-a").arg("inbox").output().unwrap()));
+    has_event(&stdout(daemon.command(&client).env("CLAUDE_CODE_SESSION_ID", "conversation-a").arg("hear").output().unwrap()));
     let hook = |id: &str| {
-        let mut child = daemon.command(&client).args(["inbox", "--hook"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = daemon.command(&client).args(["hear", "--hook"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         write!(child.stdin.take().unwrap(), "{}", json!({"session_id": id, "prompt": "ignored"})).unwrap();
         stdout(child.wait_with_output().unwrap())
     };
     assert_eq!(hook("conversation-a"), "");
     has_event(&hook("conversation-b"));
-    empty(&stdout(daemon.command(&client).env("JELLY_SESSION_ID", "conversation-a").arg("inbox").output().unwrap()));
-    has_event(&stdout(daemon.command(&client).env("JELLY_AS", "agent").env("JELLY_SESSION_ID", "conversation-a").arg("inbox").output().unwrap()));
-    has_event(&stdout(daemon.command(&client).env("JELLY_AS", "agent").args(["--as", "override", "inbox"]).output().unwrap()));
-    has_event(&stdout(daemon.command(&client).env("JELLY_SESSION_ID", "conversation-a").args(["inbox", "--session-id", "conversation-c"]).output().unwrap()));
-    assert_eq!(stdout(daemon.command(&client).env("CLAUDE_CODE_SESSION_ID", "conversation-a").args(["inbox", "--hook"]).output().unwrap()), "");
-    assert_eq!(stdout(daemon.command(&client).env("JELLY_PROJECT", "").args(["inbox", "--hook"]).output().unwrap()), "");
+    empty(&stdout(daemon.command(&client).env("JELLY_SESSION_ID", "conversation-a").arg("hear").output().unwrap()));
+    has_event(&stdout(daemon.command(&client).env("JELLY_AS", "agent").env("JELLY_SESSION_ID", "conversation-a").arg("hear").output().unwrap()));
+    has_event(&stdout(daemon.command(&client).env("JELLY_AS", "agent").args(["--as", "override", "hear"]).output().unwrap()));
+    has_event(&stdout(daemon.command(&client).env("JELLY_SESSION_ID", "conversation-a").args(["hear", "--session-id", "conversation-c"]).output().unwrap()));
+    assert_eq!(stdout(daemon.command(&client).env("CLAUDE_CODE_SESSION_ID", "conversation-a").args(["hear", "--hook"]).output().unwrap()), "");
+    assert_eq!(stdout(daemon.command(&client).env("JELLY_PROJECT", "").args(["hear", "--hook"]).output().unwrap()), "");
 
-    let mut ordinary = daemon.command(&client).arg("inbox").stdin(Stdio::piped())
+    let mut ordinary = daemon.command(&client).arg("hear").stdin(Stdio::piped())
         .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while ordinary.try_wait().unwrap().is_none() {
@@ -171,7 +171,7 @@ fn inbox_parent_lifetime_and_fresh_shell_conversations() {
     let shell = |session: Option<&str>| {
         let mut cmd = Command::new("sh");
         configure(&mut cmd, &daemon.url, &client);
-        cmd.env("JELLY_TEST_BIN", BIN).args(["-c", "\"$JELLY_TEST_BIN\" inbox; \"$JELLY_TEST_BIN\" inbox; :"]);
+        cmd.env("JELLY_TEST_BIN", BIN).args(["-c", "\"$JELLY_TEST_BIN\" hear; \"$JELLY_TEST_BIN\" hear; :"]);
         if let Some(session) = session { cmd.env("JELLY_SESSION_ID", session); }
         stdout(cmd.output().unwrap())
     };
@@ -197,10 +197,10 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
     daemon.person_event();
     std::fs::write(home.join("inbox-readers.json"), "broken").unwrap();
     let client = temp.path().join("client");
-    let result = daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap();
+    let result = daemon.command(&client).args(["--as", "a", "hear"]).output().unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
-    assert!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()).contains("jelly inbox failed: could not read inbox"));
+    assert!(stdout(daemon.command(&client).args(["--as", "a", "hear", "--hook"]).output().unwrap()).contains("jelly hear failed: could not read inbox"));
     std::fs::remove_file(home.join("inbox-readers.json")).unwrap();
     let log = std::fs::read_to_string(home.join("events.jsonl")).unwrap();
     let event: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
@@ -218,26 +218,26 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
         String::new(), old.to_string(), excluded.to_string(), other_project.to_string()]
     {
         std::fs::write(home.join("events.jsonl"), format!("{malformed}\n{log}")).unwrap();
-        let result = daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap();
+        let result = daemon.command(&client).args(["--as", "a", "hear"]).output().unwrap();
         assert!(!result.status.success());
         assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
         for _ in 0..2 {
-            let warning = stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap());
-            assert!(warning.contains("jelly inbox failed: could not read inbox"), "{warning}");
+            let warning = stdout(daemon.command(&client).args(["--as", "a", "hear", "--hook"]).output().unwrap());
+            assert!(warning.contains("jelly hear failed: could not read inbox"), "{warning}");
         }
         assert!(!home.join("inbox-readers.json").exists());
     }
     std::fs::write(home.join("events.jsonl"), log).unwrap();
-    has_event(&stdout(daemon.command(&client).args(["--as", "a", "inbox"]).output().unwrap()));
-    assert_eq!(stdout(daemon.command(&client).args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
+    has_event(&stdout(daemon.command(&client).args(["--as", "a", "hear"]).output().unwrap()));
+    assert_eq!(stdout(daemon.command(&client).args(["--as", "a", "hear", "--hook"]).output().unwrap()), "");
     let url = daemon.url.clone();
     drop(daemon);
     let mut cmd = Command::new(BIN);
     configure(&mut cmd, &url, &client);
-    assert!(!cmd.args(["--as", "a", "inbox"]).output().unwrap().status.success());
+    assert!(!cmd.args(["--as", "a", "hear"]).output().unwrap().status.success());
     let mut cmd = Command::new(BIN);
     configure(&mut cmd, &url, &client);
-    assert_eq!(stdout(cmd.args(["--as", "a", "inbox", "--hook"]).output().unwrap()), "");
+    assert_eq!(stdout(cmd.args(["--as", "a", "hear", "--hook"]).output().unwrap()), "");
 }
 
 #[test]
@@ -254,11 +254,11 @@ fn inbox_missing_indexed_log_reports_failure_and_replays_after_restoration() {
     let saved_log = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     for reader in ["fresh", "retry"] {
-        let failed = daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap();
+        let failed = daemon.command(temp.path()).args(["--as", reader, "hear"]).output().unwrap();
         assert!(!failed.status.success());
         assert!(String::from_utf8_lossy(&failed.stderr).contains("could not read inbox"));
-        let warning = stdout(daemon.command(temp.path()).args(["--as", reader, "inbox", "--hook"]).output().unwrap());
-        assert!(warning.contains("jelly inbox failed: could not read inbox"), "{warning}");
+        let warning = stdout(daemon.command(temp.path()).args(["--as", reader, "hear", "--hook"]).output().unwrap());
+        assert!(warning.contains("jelly hear failed: could not read inbox"), "{warning}");
         assert_eq!(std::fs::read(&cursors).unwrap(), saved_cursors);
     }
     for since in [0, u64::MAX] {
@@ -267,8 +267,8 @@ fn inbox_missing_indexed_log_reports_failure_and_replays_after_restoration() {
     }
     std::fs::write(&path, saved_log).unwrap();
     for reader in ["fresh", "retry"] {
-        has_event(&stdout(daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap()));
-        empty(&stdout(daemon.command(temp.path()).args(["--as", reader, "inbox"]).output().unwrap()));
+        has_event(&stdout(daemon.command(temp.path()).args(["--as", reader, "hear"]).output().unwrap()));
+        empty(&stdout(daemon.command(temp.path()).args(["--as", reader, "hear"]).output().unwrap()));
     }
 }
 
@@ -283,7 +283,7 @@ fn inbox_uncommitted_reads_replay_and_commits_preserve_new_events() {
     assert_eq!(daemon.post("/api/inbox", request.clone()), first);
     let cursors: Value = serde_json::from_slice(&std::fs::read(temp.path().join("inbox-readers.json")).unwrap()).unwrap();
     assert!(cursors[0].get("seq").is_none());
-    let later = daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    let later = daemon.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}));
     let mut commit = request.clone();
     commit["through"] = first["through"].clone();
     daemon.post("/api/inbox/commit", commit.clone());
@@ -304,12 +304,12 @@ fn inbox_failed_progress_commit_reports_failure_and_replays() {
     daemon.person_event();
     let read = |hook: bool| {
         let mut cmd = daemon.command(temp.path());
-        cmd.args(["--as", "retry", "inbox"]);
+        cmd.args(["--as", "retry", "hear"]);
         if hook { cmd.arg("--hook"); }
         cmd.output().unwrap()
     };
     has_event(&stdout(read(false)));
-    daemon.post("/api/jellies/p:sample/call", json!({"verb": "click", "args": {}, "by": "person"}));
+    daemon.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}));
     let saved = std::fs::read(temp.path().join("inbox-readers.json")).unwrap();
     let tmp = temp.path().join("inbox-readers.json.tmp");
     std::fs::create_dir(&tmp).unwrap();
@@ -319,7 +319,7 @@ fn inbox_failed_progress_commit_reports_failure_and_replays() {
     assert!(String::from_utf8_lossy(&failed.stderr).contains("could not commit inbox progress"));
     let hook = stdout(read(true));
     has_event(&hook);
-    assert!(hook.contains("jelly inbox failed: could not commit inbox progress"));
+    assert!(hook.contains("jelly hear failed: could not commit inbox progress"));
     assert_eq!(std::fs::read(temp.path().join("inbox-readers.json")).unwrap(), saved);
     std::fs::remove_dir(tmp).unwrap();
     has_event(&stdout(read(false)));
@@ -335,11 +335,11 @@ fn closed_stdout_leaves_inbox_events_available_for_retry() {
         let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
         let mut cmd = daemon.command(temp.path());
-        cmd.args(["--as", "retry", "inbox"]).stdout(Stdio::from(writer));
+        cmd.args(["--as", "retry", "hear"]).stdout(Stdio::from(writer));
         if hook { cmd.arg("--hook"); }
         let out = cmd.output().unwrap();
         assert!(out.status.success() && out.stderr.is_empty(), "{out:?}");
     }
-    has_event(&stdout(daemon.command(temp.path()).args(["--as", "retry", "inbox"]).output().unwrap()));
-    empty(&stdout(daemon.command(temp.path()).args(["--as", "retry", "inbox"]).output().unwrap()));
+    has_event(&stdout(daemon.command(temp.path()).args(["--as", "retry", "hear"]).output().unwrap()));
+    empty(&stdout(daemon.command(temp.path()).args(["--as", "retry", "hear"]).output().unwrap()));
 }

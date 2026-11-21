@@ -5,7 +5,7 @@ use std::process::Command;
 
 fn hook(port: u16, home: &std::path::Path) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
-        .args(["--as", "hook", "--url", &format!("http://127.0.0.1:{port}"), "--project", "p", "inbox", "--hook"])
+        .args(["--as", "hook", "--url", &format!("http://127.0.0.1:{port}"), "--project", "p", "hear", "--hook"])
         .env("JELLY_HOME", home)
         .output()
         .unwrap();
@@ -19,7 +19,7 @@ fn the_inbox_hook_says_so_when_the_daemon_does_not_answer() {
     let silent = TcpListener::bind("127.0.0.1:0").unwrap();
     let (ok, out) = hook(silent.local_addr().unwrap().port(), home.path());
     assert!(ok);
-    assert!(out.starts_with("jelly inbox failed: "), "{out:?}");
+    assert!(out.starts_with("jelly hear failed: "), "{out:?}");
 
     let (_refused, port) = common::refused_port();
     let (ok, out) = hook(port, home.path());

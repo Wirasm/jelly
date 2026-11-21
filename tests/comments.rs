@@ -40,16 +40,16 @@ fn new_jelly(d: &Daemon, name: &str) {
     post(d, "", json!({"name": name, "view": "<p>x</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}));
 }
 
-/// Runs `jelly comments --json` in project `t` and returns `(jelly, id)` pairs.
+/// Runs `jelly waiting --json` in project `t` and returns `(jelly, id)` pairs.
 fn comments(d: &Daemon, extra: &[&str]) -> Vec<(String, String)> {
     let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
-        .args(["--url", &d.url, "--project", "t", "comments", "--json"])
+        .args(["--url", &d.url, "--project", "t", "waiting", "--json"])
         .args(extra)
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
-    let list: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
-    list.iter().map(|c| (c["jelly"].as_str().unwrap().into(), c["id"].as_str().unwrap().into())).collect()
+    let waiting: Value = serde_json::from_slice(&out.stdout).unwrap();
+    waiting["comments"].as_array().unwrap().iter().map(|c| (c["jelly"].as_str().unwrap().into(), c["id"].as_str().unwrap().into())).collect()
 }
 
 fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -71,16 +71,15 @@ fn comments_lists_saved_comments_by_jelly_and_project() {
     post(&d, "/t:b/resolve", json!({"id": "c1", "by": "person"}));
     post(&d, "/u:c/comment", json!({"text": "elsewhere", "by": "person"}));
 
+    // Only open comments wait on the agent; a resolved one is dealt with.
     assert_eq!(comments(&d, &["a"]), pairs(&[("t:a", "c1")]));
-    assert_eq!(comments(&d, &["a", "--all"]), pairs(&[("t:a", "c1"), ("t:a", "c2")]));
-
+    assert_eq!(comments(&d, &[]), pairs(&[("t:a", "c1")]));
     let mut all = comments(&d, &["--all"]);
     all.sort();
-    assert_eq!(all, pairs(&[("t:a", "c1"), ("t:a", "c2"), ("t:b", "c1")]));
-    assert_eq!(comments(&d, &[]), pairs(&[("t:a", "c1")]));
+    assert_eq!(all, pairs(&[("t:a", "c1"), ("u:c", "c1")]), "--all is every project");
 }
 
-/// `--mine` keeps the jellies made, or last reshaped, under this agent's `--as` name.
+/// `--mine` keeps the jellies made, or last shaped, under this agent's `--as` name.
 #[test]
 fn comments_mine_lists_only_this_agents_jellies() {
     let d = daemon();
@@ -93,7 +92,7 @@ fn comments_mine_lists_only_this_agents_jellies() {
     assert_eq!(comments(&d, &["--as", "ana"]).len(), 2);
 
     let out = Command::new(env!("CARGO_BIN_EXE_jelly"))
-        .args(["--url", &d.url, "--project", "t", "comments", "--mine"])
+        .args(["--url", &d.url, "--project", "t", "waiting", "--mine"])
         .env_remove("JELLY_AS")
         .output()
         .unwrap();
@@ -102,7 +101,7 @@ fn comments_mine_lists_only_this_agents_jellies() {
 }
 
 /// A comment with no anchor is about the whole jelly: the agent hears it as
-/// such in the inbox (the hook too) and `jelly comments`, and the jelly page
+/// such in the inbox (the hook too) and `jelly waiting`, and the jelly page
 /// gets its thread from the list rather than pinning it in the view.
 #[test]
 fn a_whole_jelly_comment_reaches_the_agent_and_its_reply_reaches_the_page() {
@@ -122,15 +121,15 @@ fn a_whole_jelly_comment_reaches_the_agent_and_its_reply_reaches_the_page() {
     new_jelly(&d, "t:a");
     post(&d, "/t:a/comment", json!({"anchor": {"selector": "#hero", "quote": "Hero"}, "text": "bigger", "by": "person"}));
     post(&d, "/t:a/comment", json!({"anchor": null, "text": "Why three steps?", "by": "person"}));
-    let hook = jelly(&["inbox", "--hook"]);
+    let hook = jelly(&["hear", "--hook"]);
     assert!(hook.contains(r#"t:a: commented on "Hero": bigger"#), "{hook}");
     assert!(hook.contains("t:a: commented on the whole jelly, not one part: Why three steps?"), "{hook}");
 
     post(&d, "/t:a/comment", json!({"text": "Can it be two?", "by": "person"}));
-    let inbox = jelly(&["inbox"]);
+    let inbox = jelly(&["hear"]);
     assert!(inbox.contains("t:a: commented on the whole jelly, not one part: Can it be two?"), "{inbox}");
 
-    let listed = jelly(&["comments", "a"]);
+    let listed = jelly(&["waiting", "a"]);
     assert!(listed.contains(r#"t:a  c1 on #hero: "bigger""#), "{listed}");
     assert!(listed.contains(r#"t:a  c2 on the whole jelly: "Why three steps?""#), "{listed}");
 

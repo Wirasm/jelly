@@ -87,7 +87,7 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
 
     if matches!(failure, Failure::Append) {
         let error = agent
-            .post(&format!("{url}/api/jellies/test:counter/call"))
+            .post(&format!("{url}/api/jellies/test:counter/do"))
             .send_json(json!({"verb": "increment", "args": {}, "by": "test"}))
             .unwrap_err();
         let ureq::Error::Status(status, response) = error else {
@@ -118,7 +118,7 @@ fn event_log_failure(failure: Failure, closed_stderr: bool) {
         std::fs::write(home.path().join("events.jsonl"), history).unwrap();
     }
     let event = post(
-        "/api/jellies/test:counter/call",
+        "/api/jellies/test:counter/do",
         json!({"verb": "increment", "args": {}, "by": "test"}),
     );
     assert_eq!(event["state"], json!({"count": 1}));

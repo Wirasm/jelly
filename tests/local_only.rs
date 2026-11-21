@@ -43,7 +43,7 @@ fn only_this_machine_can_use_the_daemon() {
     let call = |origin: Option<&str>, host: &str| {
         let body = r#"{"verb":"inc","args":{},"by":"person"}"#;
         let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
-        raw(&addr, &format!("POST /api/jellies/t:c/call HTTP/1.1\r\nHost: {host}\r\n{origin}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())).0
+        raw(&addr, &format!("POST /api/jellies/t:c/do HTTP/1.1\r\nHost: {host}\r\n{origin}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())).0
     };
     let ws = |origin: &str| raw(&addr, &format!("GET /api/ws HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")).0;
 

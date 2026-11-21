@@ -39,7 +39,7 @@ impl Daemon {
 
 const VERBS: &str = "const verbs = { add(s) { s.n += 1; } };";
 
-/// v1 renders the count from state; a verb call (v2) and a reshape (v3) change
+/// v1 renders the count from state; a verb call (v2) and a shape (v3) change
 /// it. Comparing with v1 rebuilds that version from history.
 #[test]
 fn compare_names_what_a_change_did() {
@@ -50,8 +50,8 @@ fn compare_names_what_a_change_did() {
     d.post("/api/jellies", json!({"name": "t:c", "view": view(""), "verbs": VERBS, "state": {"n": 3}, "by": "test"}));
     let (ok, out) = d.jelly(&["look", "t:c", "--save", "first"]);
     assert!(ok, "{out}");
-    d.post("/api/jellies/t:c/call", json!({"verb": "add", "args": {}, "by": "test"}));
-    d.post("/api/jellies/t:c/reshape", json!({"view": view(r#"<p id="faint" style="color: #ddd">Faint</p>"#), "by": "test"}));
+    d.post("/api/jellies/t:c/do", json!({"verb": "add", "args": {}, "by": "test"}));
+    d.post("/api/jellies/t:c/shape", json!({"view": view(r#"<p id="faint" style="color: #ddd">Faint</p>"#), "by": "test"}));
 
     let (ok, out) = d.jelly(&["look", "t:c", "--compare", "v1"]);
     assert!(ok, "{out}");
@@ -65,7 +65,7 @@ fn compare_names_what_a_change_did() {
     // The other way round, from a saved version: the faint text is fixed.
     let (ok, out) = d.jelly(&["look", "t:c", "--save", "faint"]);
     assert!(ok, "{out}");
-    d.post("/api/jellies/t:c/reshape", json!({"view": view(""), "by": "test"}));
+    d.post("/api/jellies/t:c/shape", json!({"view": view(""), "by": "test"}));
     let (ok, out) = d.jelly(&["look", "t:c", "--compare", "faint", "--json"]);
     assert!(ok, "{out}");
     let v: Value = serde_json::from_str(&out).unwrap();
@@ -84,7 +84,7 @@ fn compare_refuses_versions_it_cannot_rebuild() {
     let home = tempfile::tempdir().unwrap();
     let d = Daemon::start(home.path());
     d.post("/api/jellies", json!({"name": "t:u", "view": "<p>x</p>", "verbs": VERBS, "state": {"n": 0}, "by": "test"}));
-    d.post("/api/jellies/t:u/call", json!({"verb": "add", "args": {}, "by": "test"}));
+    d.post("/api/jellies/t:u/do", json!({"verb": "add", "args": {}, "by": "test"}));
     let (ok, out) = d.jelly(&["look", "t:u", "--compare", "v9"]);
     assert!(!ok && out.contains("t:u is at v2; there is no v9"), "{out}");
     let (ok, _) = d.jelly(&["undo", "t:u"]);

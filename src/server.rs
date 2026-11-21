@@ -103,7 +103,7 @@ impl App {
                     screens.remove(from);
                 }
             }
-            if matches!(ev.kind, EventKind::New | EventKind::Remove | EventKind::Move)
+            if matches!(ev.kind, EventKind::Make | EventKind::Remove | EventKind::Move)
                 || screens.get(&ev.jelly).is_some_and(|s| store.get(&ev.jelly).map_or(true, |j| j.view_rev != s.view_rev)) {
                 screens.remove(&ev.jelly);
             }
@@ -150,22 +150,16 @@ impl App {
 pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option<String>) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
-        // Homes from before the jelly page was named `page` keep it as `surface`.
-        // Its state (what the person has seen) moves to a fresh page; its view
-        // used runtime names that no longer exist, so it is not kept.
-        let state = store.get("surface").map_or(json!({}), |j| j.state.clone());
-        let old = store.get("surface").is_ok();
         store
-            .create(PAGE, PAGE_VIEW.into(), PAGE_VERBS.into(), state, "jelly", false, "The jelly page", "")
-            .and_then(|_| store.pin(PAGE, true, "jelly"))
-            .and_then(|_| if old { store.remove("surface", "jelly").map(drop) } else { Ok(()) })
+            .make(PAGE, PAGE_VIEW.into(), PAGE_VERBS.into(), json!({}), "jelly", false, "The jelly page", "")
+            .and_then(|_| store.keep(PAGE, true, "jelly"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
     let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
     share::resume(&app);
 
-    // Unpinned jellies nobody touched for a week are archived: hidden from the
+    // Jellies nobody keeps or touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
     let sweeper = app.clone();
     tokio::spawn(async move {
@@ -203,11 +197,11 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies", get(list).post(create))
         .route("/api/jellies/{name}", get(show).delete(remove))
         .route("/api/jellies/{name}/state", get(state))
-        .route("/api/jellies/{name}/call", post(call))
-        .route("/api/jellies/{name}/reshape", post(reshape))
+        .route("/api/jellies/{name}/do", post(call))
+        .route("/api/jellies/{name}/shape", post(shape))
         .route("/api/jellies/{name}/set", post(set_state))
         .route("/api/jellies/{name}/undo", post(undo))
-        .route("/api/jellies/{name}/pin", post(pin))
+        .route("/api/jellies/{name}/keep", post(keep))
         .route("/api/jellies/{name}/move", post(move_project))
         .route("/api/jellies/{name}/restore", post(restore))
         .route("/api/jellies/{name}/archive", post(archive))
@@ -225,16 +219,16 @@ fn router(app: Shared) -> Router {
         .route("/api/probes/{token}", post(put_probe_screen))
         .route("/api/jellies/{name}/try", post(try_steps))
         .route("/api/tries/{token}", post(put_trial_result))
-        .route("/api/tries/{token}/call", post(trial_call))
+        .route("/api/tries/{token}/do", post(trial_call))
         .route("/api/projects/{project}/design", get(get_design).put(put_design))
         .route("/p/{project}/DESIGN.md", get(get_design))
         .route("/p/{project}/design.css", get(design_css))
-        .route("/api/attention", get(attention_list))
-        .route("/api/focus", post(focus))
-        .route("/api/jellies/{name}/attention", post(attend))
-        .route("/api/jellies/{name}/ask", post(ask))
-        .route("/api/jellies/{name}/attention/{id}/answer", post(answer))
-        .route("/api/jellies/{name}/attention/{id}/withdraw", post(withdraw))
+        .route("/api/asks", get(asks_list))
+        .route("/api/show", post(show_full))
+        .route("/api/jellies/{name}/asks", post(ask))
+        .route("/api/jellies/{name}/asks/round", post(ask_round))
+        .route("/api/jellies/{name}/asks/{id}/answer", post(answer))
+        .route("/api/jellies/{name}/asks/{id}/unask", post(unask))
         .route("/api/jellies/{name}/working", post(working))
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
@@ -326,12 +320,12 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
         .filter(|j| j.name != PAGE)
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
-            "pinned": j.pinned, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
+            "kept": j.kept, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
             "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
-            "attention": j.attention.iter().filter(|a| a.is_open()).count(),
-            "answered": j.attention.iter().filter(|a| a.answer.is_some() && a.withdrawn.is_none()).count(),
+            "open_asks": j.asks.iter().filter(|a| a.is_open()).count(),
+            "answered": j.asks.iter().filter(|a| a.answer.is_some() && a.unasked.is_none()).count(),
             // Threads about the whole jelly (no selector); the jelly page shows them in the header.
             "whole_jelly_comments": j.comments.iter().filter(|c| c.is_whole_jelly()).collect::<Vec<_>>(),
             "working": j.working,
@@ -376,7 +370,7 @@ struct CreateReq {
 
 async fn create(State(app): State<Shared>, Json(r): Json<CreateReq>) -> Result<Json<Event>, ApiError> {
     let state = if r.state.is_null() { json!({}) } else { r.state };
-    app.change(|s| s.create(&r.name, r.view, r.verbs, state, &by(r.by)?, r.replace, &r.about, &r.project))
+    app.change(|s| s.make(&r.name, r.view, r.verbs, state, &by(r.by)?, r.replace, &r.about, &r.project))
 }
 
 #[derive(Deserialize)]
@@ -392,9 +386,9 @@ struct CallReq {
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
     if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "call", "verb": r.verb, "args": r.args, "source": r.source, "by": by(r.by)?})).await;
+        return share::forward(&app, &live, json!({"op": "do", "verb": r.verb, "args": r.args, "source": r.source, "by": by(r.by)?})).await;
     }
-    app.change(|s| s.call_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
+    app.change(|s| s.do_verb_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
 }
 
 #[derive(Deserialize)]
@@ -422,29 +416,29 @@ async fn set_state(State(app): State<Shared>, Path(name): Path<String>, Json(r):
 }
 
 #[derive(Deserialize)]
-struct ReshapeReq {
+struct ShapeReq {
     view: Option<String>,
     verbs: Option<String>,
     about: Option<String>,
     by: Option<String>,
 }
 
-async fn reshape(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReshapeReq>) -> Result<Json<Event>, ApiError> {
+async fn shape(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ShapeReq>) -> Result<Json<Event>, ApiError> {
     if let Some(live) = app.live(&name) {
-        // The relay trusts the daemon to have checked them, as `Store::reshape` does.
+        // The relay trusts the daemon to have checked them, as `Store::shape` does.
         if let Some(src) = &r.verbs {
             crate::verbs::check(src).map_err(|e| Error::Invalid(format!("new verbs rejected, jelly unchanged: {e}")))?;
         }
-        return share::forward(&app, &live, json!({"op": "reshape", "view": r.view, "verbs": r.verbs, "about": r.about, "by": by(r.by)?})).await;
+        return share::forward(&app, &live, json!({"op": "shape", "view": r.view, "verbs": r.verbs, "about": r.about, "by": by(r.by)?})).await;
     }
-    app.change(|s| s.reshape(&name, r.view, r.verbs, r.about, &by(r.by)?))
+    app.change(|s| s.shape(&name, r.view, r.verbs, r.about, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
 struct ByReq {
     by: Option<String>,
     #[serde(default)]
-    pinned: Option<bool>,
+    kept: Option<bool>,
 }
 
 async fn undo(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
@@ -452,8 +446,8 @@ async fn undo(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json
     app.change(|s| s.undo(&name, &by(r.by)?))
 }
 
-async fn pin(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    app.change(|s| s.pin(&name, r.pinned.unwrap_or(true), &by(r.by)?))
+async fn keep(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+    app.change(|s| s.keep(&name, r.kept.unwrap_or(true), &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -513,7 +507,7 @@ async fn move_project(State(app): State<Shared>, Path(name): Path<String>, Json(
 
 async fn remove(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ByQ>) -> Result<Json<Event>, ApiError> {
     if name == PAGE {
-        return Err(Error::Invalid("the jelly page cannot be removed; reshape or undo it instead".into()).into());
+        return Err(Error::Invalid("the jelly page cannot be removed; shape or undo it instead".into()).into());
     }
     app.not_shared(&name, "be removed")?;
     app.change(|s| s.remove(&name, &by(q.by)?))
@@ -726,7 +720,7 @@ async fn view(State(app): State<Shared>, Path(name): Path<String>, Query(q): Que
     let store = app.store.lock().expect("store lock");
     let j = store.get(&name)?;
     let owner = app.snapshot_owner(&name, j.view_rev)?;
-    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "attention": j.attention, "working": j.working});
+    let mut boot = json!({"snapshotOwner": owner, "name": j.name, "about": j.about, "version": j.version, "viewRev": j.view_rev, "state": j.state, "comments": j.comments, "asks": j.asks, "working": j.working});
     if let Some(token) = q.trial {
         if let Some(t) = app.trials.lock().expect("trials lock").get(&token).filter(|t| t.name == j.name) {
             boot["state"] = t.state.clone();
@@ -760,6 +754,8 @@ fn inject_head(html: &str, inject: &str) -> String {
     }
 }
 
+/// The jelly page's Restore, and its inverse. The CLI has neither: a jelly nobody
+/// keeps is put away by the weekly sweep, and any change brings it back.
 async fn archive(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
     app.change(|s| s.set_archived(&name, true, &by(r.by)?))
 }
@@ -854,7 +850,7 @@ async fn share(State(app): State<Shared>, Path(name): Path<String>) -> Result<Ht
     let mut marker_bytes = [0; 16];
     getrandom::fill(&mut marker_bytes).map_err(|e| ApiError::Internal(format!("could not prepare shared roots: {e}")))?;
     let marker = format!("jelly-snapshot-{}", marker_bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
-    let boot = json!({"name": j.name, "about": j.about, "state": j.state, "attention": j.attention, "assets": assets, "rootMarker": marker})
+    let boot = json!({"name": j.name, "about": j.about, "state": j.state, "asks": j.asks, "assets": assets, "rootMarker": marker})
         .to_string().replace("</", "<\\/");
     let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
     let mut base_href = None;
@@ -1015,37 +1011,32 @@ async fn commit_inbox(State(app): State<Shared>, Json(req): Json<InboxCommit>) -
 
 
 #[derive(Deserialize)]
-struct AttendReq {
+struct AskReq {
     #[serde(flatten)]
     spec: Value,
 }
 
-async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AttendReq>) -> Result<Json<Value>, ApiError> {
+async fn ask(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let by = r.spec["by"].as_str().map(String::from);
     let asked = now_ms();
     let Json(ev) = match app.live(&name) {
         Some(live) => {
             let by = self::by(by)?;
             let item = crate::store::ask_item(&r.spec, &by)?;
-            share::forward(&app, &live, json!({"op": "attend", "item": item, "by": by})).await?
+            share::forward(&app, &live, json!({"op": "ask", "item": item, "by": by})).await?
         }
-        None => app.change(|s| s.attend(&name, r.spec, &self::by(by)?))?,
+        None => app.change(|s| s.ask(&name, r.spec, &self::by(by)?))?,
     };
     let mut out = json!(ev);
-    // Tell the asker where the card really shows. The item is made either way,
-    // and the event that listeners and the log get is unchanged.
+    // Tell the asker how the ask shows. The ask is made either way, and the
+    // event that listeners and the log get is unchanged.
     let args = ev.args.unwrap_or_default();
     if args["anchor"]["selector"].is_string() {
-        match anchor_place(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
-            Ok(AnchorMeasurement { place, exposed, inline }) => {
-                out["anchor"] = json!(place.status());
-                if inline { out["anchor_inline"] = json!(true); }
-                if exposed { out["anchor_exposed"] = json!(true); }
-                if let AnchorPlace::Fallback(f) = place {
-                    out["anchor_destination"] = json!(f.destination);
-                    out["anchor_reason"] = json!(f.reason);
-                }
-            },
+        match ask_shown(&app, port_of(&headers), &name, args["id"].as_str().unwrap_or(""), ev.version, asked).await {
+            Ok(shown) => {
+                out["anchor"] = json!(shown.anchor);
+                out["drawn"] = json!(shown.drawn);
+            }
             Err(why) => out["anchor_unchecked"] = json!(why),
         }
     }
@@ -1055,8 +1046,8 @@ async fn attend(State(app): State<Shared>, Path(name): Path<String>, headers: ax
 /// How long an ask waits for a browser before it answers "not checked".
 const ANCHOR_CHECK: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Placement from a fresh browser snapshot; failure to render does not undo the ask.
-async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<AnchorMeasurement, String> {
+/// How the page shows an ask, from a fresh browser snapshot; failure to render does not undo the ask.
+async fn ask_shown(app: &App, port: u16, name: &str, item: &str, version: u64, asked: u64) -> Result<AskShown, String> {
     let owner = {
         let store = app.store.lock().expect("store lock");
         let j = store.get(name).map_err(|e| e.to_string())?;
@@ -1070,13 +1061,13 @@ async fn anchor_place(app: &App, port: u16, name: &str, item: &str, version: u64
     loop {
         let snap = app.screen(name, &owner).map_err(|_| "the jelly changed during the anchor check".to_string())?
             .filter(|s| s.version >= version && s.at_ms >= asked);
-        if let Some(measured) = snap.and_then(|s| s.placement(item).map(|place| AnchorMeasurement { place, exposed: s.exposed.iter().any(|id| id == item), inline: s.inline })) {
-            return Ok(measured);
+        if let Some(shown) = snap.and_then(|s| s.asks.into_iter().find(|a| a.id == item)) {
+            return Ok(shown);
         }
         match &rendered {
             // The browser is gone: give its snapshot a moment to land, then give up.
             Some((r, at)) if at.elapsed() > std::time::Duration::from_secs(2) => {
-                return Err(r.clone().err().unwrap_or_else(|| "the page sent no placement measurement for this question".into()));
+                return Err(r.clone().err().unwrap_or_else(|| "the page did not report this question".into()));
             }
             Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
             None => tokio::select! {
@@ -1107,11 +1098,11 @@ async fn answer(State(app): State<Shared>, Path((name, id)): Path<(String, Strin
     app.change(|s| s.answer(&name, &id, r.option.as_deref(), &r.text, &by(r.by)?))
 }
 
-async fn withdraw(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
+async fn unask(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
     if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "withdraw", "id": id, "by": by(r.by)?})).await;
+        return share::forward(&app, &live, json!({"op": "unask", "id": id, "by": by(r.by)?})).await;
     }
-    app.change(|s| s.withdraw(&name, &id, &by(r.by)?))
+    app.change(|s| s.unask(&name, &id, &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -1125,17 +1116,17 @@ async fn working(State(app): State<Shared>, Path(name): Path<String>, Json(r): J
 }
 
 #[derive(Deserialize)]
-struct FocusReq {
+struct ShowReq {
     name: Option<String>,
     by: Option<String>,
 }
 
 /// Opens a jelly full size on the person's screen (or closes it with no name).
-async fn focus(State(app): State<Shared>, Json(r): Json<FocusReq>) -> Result<Json<Event>, ApiError> {
+async fn show_full(State(app): State<Shared>, Json(r): Json<ShowReq>) -> Result<Json<Event>, ApiError> {
     if let Some(n) = &r.name {
         app.store.lock().expect("store lock").get(n)?;
     }
-    app.change(|s| s.call(PAGE, "focus", json!({"name": r.name}), &by(r.by)?))
+    app.change(|s| s.do_verb(PAGE, "show", json!({"name": r.name}), &by(r.by)?))
 }
 
 #[derive(Deserialize)]
@@ -1150,14 +1141,14 @@ struct ProjectQ {
 
 /// Everything open for the person, newest first; with `answered=true`, every
 /// answered item instead: what was asked, what was picked, by whom, and when.
-async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) -> Json<Value> {
+async fn asks_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) -> Json<Value> {
     let store = app.store.lock().expect("store lock");
     let project = q.project.filter(|p| !p.is_empty());
     let mut items: Vec<Value> = Vec::new();
     let wanted = |j: &&crate::store::Jelly| j.name != PAGE && project.as_deref().is_none_or(|p| j.project() == p)
         && q.mine.as_deref().is_none_or(|m| j.owner() == m);
     for j in store.list().filter(wanted) {
-        for a in j.attention.iter().filter(|a| if q.answered { a.answer.is_some() } else { a.is_open() }) {
+        for a in j.asks.iter().filter(|a| if q.answered { a.answer.is_some() } else { a.is_open() }) {
             let mut v = serde_json::to_value(a).expect("serializes");
             v["jelly"] = json!(j.name);
             v["about"] = json!(j.about);
@@ -1171,68 +1162,29 @@ async fn attention_list(State(app): State<Shared>, Query(q): Query<ProjectQ>) ->
 
 // ---- the agent view -------------------------------------------------------
 
-#[derive(serde::Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub(crate) enum AnchorDestination {
-    Top,
-    After { selector: String },
-}
-
-impl AnchorDestination {
-    pub(crate) fn describe(&self) -> String {
-        match self {
-            Self::Top => "at the top".into(),
-            Self::After { selector } => format!("after {selector}"),
-        }
-    }
-}
-
+/// How a page shows one open ask.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-struct AnchorFallback {
+pub(crate) struct AskShown {
     id: String,
-    destination: AnchorDestination,
-    reason: String,
+    /// The view draws it (an element with `data-ask`); otherwise it is a card in
+    /// jelly's stack of questions.
+    drawn: bool,
+    anchor: AskAnchor,
+    /// The anchor's selector, "" without one.
+    #[serde(default)]
+    at: String,
 }
 
-#[derive(Debug)]
-struct AnchorMeasurement {
-    place: AnchorPlace,
-    exposed: bool,
-    inline: bool,
-}
-
-#[derive(Deserialize, Serialize, Debug, PartialEq)]
+/// Whether the element an ask is about is on the page.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum AnchorStatus {
-    Below,
-    Invalid,
+pub(crate) enum AskAnchor {
+    /// The ask names no element.
+    None,
+    Matched,
     Missing,
-    Floating,
-    Hidden,
-    Fallback,
-}
-
-#[derive(Debug, PartialEq)]
-enum AnchorPlace {
-    Below,
+    /// Its selector is not valid CSS.
     Invalid,
-    Missing,
-    Floating,
-    Hidden,
-    Fallback(AnchorFallback),
-}
-
-impl AnchorPlace {
-    fn status(&self) -> AnchorStatus {
-        match self {
-            Self::Below => AnchorStatus::Below,
-            Self::Invalid => AnchorStatus::Invalid,
-            Self::Missing => AnchorStatus::Missing,
-            Self::Floating => AnchorStatus::Floating,
-            Self::Hidden => AnchorStatus::Hidden,
-            Self::Fallback(_) => AnchorStatus::Fallback,
-        }
-    }
 }
 
 /// What a browser shows of a jelly, as text, posted by the runtime for `jelly look`.
@@ -1245,32 +1197,18 @@ struct Screen {
     version: u64,
     #[serde(default)]
     at_ms: u64,
-    #[serde(default)]
-    inline: bool,
     /// Errors the page threw or logged.
     #[serde(default)]
     errors: Vec<String>,
+    /// Dialogs the page opened (`alert`, `confirm`, `prompt`) in an agent render,
+    /// where nobody could close them: `alert "Saved"`.
     #[serde(default)]
-    invalid: Vec<String>,
-    /// Open questions whose anchor matches nothing: "a2 #f2".
-    #[serde(default)]
-    missing: Vec<String>,
-    /// Open questions whose anchor is in a fixed or sticky part of the page,
-    /// so their card shows at the top too.
-    #[serde(default)]
-    floating: Vec<String>,
-    /// Open questions whose anchor is on the page but not shown right now.
-    #[serde(default)]
-    hidden: Vec<String>,
-    /// Cards measured at the top because adjacent placement was unavailable.
-    #[serde(default)]
-    exposed: Vec<String>,
+    dialogs: Vec<String>,
     #[serde(default)]
     page_height: u32,
+    /// Every open ask and how the page shows it.
     #[serde(default)]
-    fallback: Vec<AnchorFallback>,
-    #[serde(default)]
-    below: Vec<String>,
+    asks: Vec<AskShown>,
     /// Rendered with `prefers-color-scheme: dark` for `jelly look`'s contrast check.
     #[serde(default)]
     dark: bool,
@@ -1298,19 +1236,6 @@ struct Contrast {
 struct Problem {
     kind: String,
     items: Vec<String>,
-}
-
-impl Screen {
-    fn placement(&self, item: &str) -> Option<AnchorPlace> {
-        let lists = |l: &[String]| l.iter().any(|m| m.split_once(' ').is_some_and(|(id, _)| id == item));
-        Some(if lists(&self.invalid) { AnchorPlace::Invalid }
-        else if lists(&self.missing) { AnchorPlace::Missing }
-        else if lists(&self.floating) { AnchorPlace::Floating }
-        else if lists(&self.hidden) { AnchorPlace::Hidden }
-        else if let Some(f) = self.fallback.iter().find(|f| f.id == item) { AnchorPlace::Fallback(f.clone()) }
-        else if lists(&self.below) { AnchorPlace::Below }
-        else { return None })
-    }
 }
 
 struct ViewScreen {
@@ -1610,20 +1535,20 @@ fn summary(app: &App, j: &crate::store::Jelly) -> String {
     // only the event that made this version says who made the last change.
     let by = last.filter(|e| e.version == j.version).map(|e| format!(" by {}", e.by)).unwrap_or_default();
     let last = format!(" · last change {}{by}", ago(j.updated_ms));
-    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · reshaped by {s}")).unwrap_or_default();
+    let shaped = j.shaped_by.as_ref().filter(|s| **s != j.made_by).map(|s| format!(" · shaped by {s}")).unwrap_or_default();
     line(&mut out, format!("{} · {} · v{} · made by {}{shaped}{last}{}{}", j.name, if j.about.is_empty() { "(no about line)" } else { &j.about }, j.version, j.made_by,
-        if j.pinned { " · pinned" } else { "" }, if j.archived { " · archived" } else { "" }));
+        if j.kept { " · kept" } else { "" }, if j.archived { " · archived" } else { "" }));
     if let Some(w) = &j.working { line(&mut out, format!("working  {} is working on it: {}", w["by"].as_str().unwrap_or("?"), w["what"].as_str().unwrap_or(""))); }
     for n in &j.notes { line(&mut out, format!("note     {}: {}", n["by"].as_str().unwrap_or("?"), n["text"].as_str().unwrap_or(""))); }
     let verbs = crate::verbs::check(&j.verbs).unwrap_or_default();
     line(&mut out, format!("verbs    {}", if verbs.is_empty() { "none (read-only)".to_string() } else { verbs.iter().map(|v| verb_sig(&j.verbs, v)).collect::<Vec<_>>().join(" · ") }));
-    line(&mut out, format!("state    {}", shape(&j.state)));
+    line(&mut out, format!("state    {}", state_shape(&j.state)));
     let assets = app.store.lock().expect("store lock").assets(&j.name);
     if !assets.is_empty() { line(&mut out, format!("assets   {}", assets.join(", "))); }
-    for a in j.attention.iter().filter(|a| a.is_open()) {
+    for a in j.asks.iter().filter(|a| a.is_open()) {
         line(&mut out, format!("waits    {}", a.summary()));
     }
-    for a in j.attention.iter().filter(|a| a.answer.is_some()).rev().take(5) {
+    for a in j.asks.iter().filter(|a| a.answer.is_some()).rev().take(5) {
         let ans = a.answer.as_ref().expect("filtered");
         let pick = ans.option.as_deref().unwrap_or(if a.seen { "seen" } else { "" });
         line(&mut out, format!("answered {} {:?} → {pick}{}{}", a.id, a.title, if ans.text.is_empty() { String::new() } else { format!(" {:?}", ans.text) }, named(&ans.by)));
@@ -1641,20 +1566,19 @@ fn summary(app: &App, j: &crate::store::Jelly) -> String {
     out
 }
 
-/// Errors the page threw and questions whose anchor did not place, as
-/// `error` and `!` lines.
+/// Errors the page threw, dialogs it opened and asks about an element that is
+/// not there, as `error`, `dialog` and `!` lines.
 fn screen_problems(sc: &Screen) -> Vec<String> {
     let mut out = Vec::new();
     for e in &sc.errors { out.push(format!("error    {e}")); }
-    let fallback = if sc.inline { "placement not checked: the view places its own attention" } else { "it shows at the top instead" };
-    for (list, why) in [(&sc.invalid, "has invalid CSS selector syntax"), (&sc.missing, "matches nothing on the page"), (&sc.floating, "is in a fixed or sticky part of the page")] {
-        for m in list {
-            let (id, sel) = m.split_once(' ').unwrap_or((m, ""));
-            out.push(format!("!        {id} asks about {sel}, which {why}; {fallback}"));
-        }
-    }
-    for f in &sc.fallback {
-        out.push(format!("!        {} shows {} instead; {}", f.id, f.destination.describe(), f.reason));
+    for d in &sc.dialogs { out.push(format!("dialog   {d}")); }
+    for a in &sc.asks {
+        let why = match a.anchor {
+            AskAnchor::Missing => "matches nothing on the page",
+            AskAnchor::Invalid => "has invalid CSS selector syntax",
+            AskAnchor::None | AskAnchor::Matched => continue,
+        };
+        out.push(format!("!        {} asks about {}, which {why}{}", a.id, a.at, if a.drawn { "" } else { "; it has no pin" }));
     }
     out
 }
@@ -2143,6 +2067,9 @@ struct TrialResult {
     height: u32,
     #[serde(default)]
     errors: Vec<String>,
+    /// Dialogs the page opened during the steps: `alert "a tea needs a name"`.
+    #[serde(default)]
+    dialogs: Vec<String>,
     /// The step that could not be done and why; the steps after it did not run.
     #[serde(default)]
     failed: Option<TrialFailure>,
@@ -2228,6 +2155,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     for c in &trial.calls { line(&mut out, c.line.clone()); }
     if let Some(res) = &trial.result {
         for e in &res.errors { line(&mut out, format!("error    {e}")); }
+        for d in &res.dialogs { line(&mut out, format!("dialog   {d}")); }
         if let Some(f) = &res.failed {
             let step = trial.steps.get(f.step).map(|s| s.to_string()).unwrap_or_default();
             line(&mut out, format!("!        step {} ({step}) failed: {}; the steps after it did not run", f.step + 1, f.error));
@@ -2240,6 +2168,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
         return Ok(Json(json!({
             "jelly": trial.name, "version": version, "steps": trial.steps, "calls": trial.calls,
             "errors": res.map(|r| &r.errors[..]).unwrap_or_default(),
+            "dialogs": res.map(|r| &r.dialogs[..]).unwrap_or_default(),
             // `step` counts from 0 here: it indexes `steps`.
             "failed": res.and_then(|r| r.failed.as_ref()),
             "problems": notes, "png": png, "state": trial.state,
@@ -2248,7 +2177,7 @@ async fn try_steps(State(app): State<Shared>, Path(name): Path<String>, req_head
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
-    line(&mut out, format!("state    {}", shape(&trial.state)));
+    line(&mut out, format!("state    {}", state_shape(&trial.state)));
     if let Some(res) = trial.result {
         line(&mut out, format!("\non screen at {}×{} after the steps:", res.width, res.height));
         out.push_str(&res.text);
@@ -2297,7 +2226,7 @@ async fn trial_call(State(app): State<Shared>, Path(token): Path<String>, Json(r
     trial.calls.push(TrialCall { line: format!("call     {} {args} → {what}", r.verb), verb: r.verb.clone(), args: r.args.clone(), changed: changed.clone(), refused: None });
     trial.state = next;
     trial.version += 1;
-    Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "call", "by": by, "verb": r.verb, "args": r.args,
+    Ok(Json(json!({"seq": 0, "at_ms": now_ms(), "jelly": trial.name, "kind": "do", "by": by, "verb": r.verb, "args": r.args,
         "changed": changed, "version": trial.version, "state": trial.state})))
 }
 
@@ -2340,7 +2269,7 @@ fn verb_sig(src: &str, name: &str) -> String {
 }
 
 /// A one-line sketch of state: top-level keys with their kind and size.
-fn shape(v: &Value) -> String {
+fn state_shape(v: &Value) -> String {
     match v {
         Value::Object(m) if m.is_empty() => "{}".into(),
         Value::Object(m) => m.iter().take(12).map(|(k, v)| format!("{k}: {}", match v {
@@ -2400,7 +2329,7 @@ async fn look_frame(Path(name): Path<String>, Query(q): Query<FrameQ>) -> Result
 }
 
 #[derive(Deserialize)]
-struct AskReq {
+struct RoundReq {
     spec: Value,
     #[serde(default)]
     project: String,
@@ -2408,7 +2337,7 @@ struct AskReq {
 }
 
 /// A round of questions on an ask page, made or updated in one step.
-async fn ask(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
+async fn ask_round(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<RoundReq>) -> Result<Json<Value>, ApiError> {
     let who = by(r.by)?;
     let id = if r.project.is_empty() || name.contains(':') { name.clone() } else { format!("{}:{name}", r.project) };
     app.not_shared(&id, "start a new round of questions")?;
@@ -2424,14 +2353,14 @@ mod share_tests {
     fn fixture(view: &str) -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
-        store.create("test:share", view.into(), "const verbs = {};".into(),
+        store.make("test:share", view.into(), "const verbs = {};".into(),
             json!({"picture": "assets/dot.png", "file": "dot.png", "textFile": "hello.txt", "label": "Label: assets/dot.png", "closing": "</script>"}),
             "agent", false, "Shared </script> jelly", "").unwrap();
-        for (anchor, title) in [("#pictures", "open"), ("#pictures", "answered"), ("#other", "withdrawn"), ("#other", "other")] {
-            store.attend("test:share", json!({"seen": true, "title": title, "anchor": {"selector": anchor}}), "agent").unwrap();
+        for (anchor, title) in [("#pictures", "open"), ("#pictures", "answered"), ("#other", "unasked"), ("#other", "other")] {
+            store.ask("test:share", json!({"seen": true, "title": title, "anchor": {"selector": anchor}}), "agent").unwrap();
         }
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
-        store.withdraw("test:share", "a3", "agent").unwrap();
+        store.unask("test:share", "a3", "agent").unwrap();
         let (events, _) = broadcast::channel(16);
         (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() }))
     }
@@ -2458,7 +2387,7 @@ mod share_tests {
         let html = exported(app).await;
         let boot = boot(&html);
         assert_eq!(boot["state"], expected["state"]);
-        assert_eq!(boot["attention"], expected["attention"]);
+        assert_eq!(boot["asks"], expected["asks"]);
         assert_eq!(boot["about"], expected["about"]);
         assert!(!html.contains("Shared </script>"));
         let assets: Vec<(String, String)> = serde_json::from_value(boot["assets"].clone()).unwrap();
@@ -2674,7 +2603,7 @@ mod wait_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
         for name in ["j", "other", PAGE] {
-            store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
+            store.make(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "").unwrap();
         }
         let (events, _) = broadcast::channel(capacity);
         (dir, App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() })
@@ -2705,7 +2634,7 @@ mod wait_tests {
             }).await;
             assert!(!path.exists(), "waiting must not create an event log");
             if first_event {
-                let expected = app.change(|s| s.create("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap().0;
+                let expected = app.change(|s| s.make("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap().0;
                 let actual = waiting.await.unwrap().unwrap();
                 assert_eq!(actual.seq, expected.seq);
                 assert_eq!(actual.jelly, "first");
@@ -2737,7 +2666,7 @@ mod wait_tests {
     async fn history_survives_replacement_removal_and_restart() {
         let (dir, mut app) = fixture(16);
         let start = app.change(|s| s.set_state("j", "/n", Some(json!(1)), "agent")).unwrap().0;
-        let replacement = app.change(|s| s.create("j", "".into(), "const verbs = {};".into(), json!({}), "person", true, "", "")).unwrap().0;
+        let replacement = app.change(|s| s.make("j", "".into(), "const verbs = {};".into(), json!({}), "person", true, "", "")).unwrap().0;
         assert!(replacement.version < start.version);
         let removed = app.change(|s| s.remove("j", "person")).unwrap().0;
         app.store = Mutex::new(Store::open(dir.path()).unwrap());
@@ -2749,7 +2678,7 @@ mod wait_tests {
     async fn eof_handoff_and_lag_recover_the_first_committed_answer() {
         for lag in [false, true] {
             let (dir, mut app) = fixture(1);
-            let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+            let ask = app.change(|s| s.ask("j", json!({"title": "Which?"}), "agent")).unwrap().0;
             let q = WaitQ { timeout: Some(1), ..query(Some("j"), ask.seq) };
             let answer = std::cell::RefCell::new(None);
             let result = wait_since_at_handoff(&app, &q, |store| {
@@ -2861,7 +2790,7 @@ mod wait_tests {
         let q = WaitQ { by: "person".into(), ..query(Some("sharing"), seq - 1) };
         let last = recorded_change(&mut reader, &q).unwrap().unwrap();
         assert_eq!(last.seq, seq);
-        assert_eq!(last.kind, crate::store::EventKind::Attention);
+        assert_eq!(last.kind, crate::store::EventKind::Ask);
         assert_eq!(summary["state"]["round"], 1);
     }
 
@@ -2869,7 +2798,7 @@ mod wait_tests {
     fn log_failures_leave_answers_and_removals_uncommitted() {
         for failure in ["directory", "readonly", "partial"] {
             let (dir, app) = fixture(8);
-            let _ = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap();
+            let _ = app.change(|s| s.ask("j", json!({"title": "Which?"}), "agent")).unwrap();
             let mut rx = app.events.subscribe();
             let path = dir.path().join("events.jsonl");
             let original = std::fs::read(&path).unwrap();
@@ -2902,11 +2831,11 @@ mod wait_tests {
                 assert!(rx.try_recv().is_err(), "failed changes must not be broadcast as accepted");
                 if failure == "readonly" {
                     let reopened = Store::open(dir.path()).unwrap();
-                    assert!(reopened.get("j").unwrap().attention[0].answer.is_none());
+                    assert!(reopened.get("j").unwrap().asks[0].answer.is_none());
                 } else {
                     assert!(Store::open(dir.path()).is_err(), "damaged logs must prevent startup");
                 }
-                assert!(app.store.lock().unwrap().get("j").unwrap().attention[0].answer.is_none());
+                assert!(app.store.lock().unwrap().get("j").unwrap().asks[0].answer.is_none());
             }
             if failure == "directory" {
                 std::fs::remove_dir(&path).unwrap();
@@ -2929,7 +2858,7 @@ mod wait_tests {
                 let (_dir, app) = fixture(16);
                 if existing {
                     let _ = app.change_many(|s| s.ask_round("sharing", &spec, ASK_VIEW, ASK_VERBS, "", "agent")).unwrap();
-                    let _ = app.change(|s| s.reshape("sharing", Some("different view".into()), None, None, "agent")).unwrap();
+                    let _ = app.change(|s| s.shape("sharing", Some("different view".into()), None, None, "agent")).unwrap();
                 }
                 let path = app.store.lock().unwrap().events_path();
                 let head = std::fs::read_to_string(&path).unwrap().lines().last()
@@ -2952,7 +2881,7 @@ mod wait_tests {
                     if successful == 0 {
                         assert!(app.screen("sharing", &owner).is_ok());
                     } else {
-                        assert!(!app.screens.lock().unwrap().contains_key("sharing"), "a committed reshape invalidates the old screen even when the batch fails");
+                        assert!(!app.screens.lock().unwrap().contains_key("sharing"), "a committed shape invalidates the old screen even when the batch fails");
                         assert!(app.screen("sharing", &owner).is_err());
                     }
                 }
@@ -2986,14 +2915,14 @@ mod wait_tests {
     #[tokio::test]
     async fn a_partial_append_restores_history_and_the_unanswered_item() {
         let (dir, app) = fixture(8);
-        let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+        let ask = app.change(|s| s.ask("j", json!({"title": "Which?"}), "agent")).unwrap().0;
         let path = app.store.lock().unwrap().events_path();
         let original = std::fs::read(&path).unwrap();
         app.store.lock().unwrap().log_failure = Some((ask.seq + 1, 10));
         assert!(app.change(|s| s.answer("j", "a1", None, "yes", "person")).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
-        assert!(app.store.lock().unwrap().get("j").unwrap().attention[0].answer.is_none());
-        assert!(Store::open(dir.path()).unwrap().get("j").unwrap().attention[0].answer.is_none());
+        assert!(app.store.lock().unwrap().get("j").unwrap().asks[0].answer.is_none());
+        assert!(Store::open(dir.path()).unwrap().get("j").unwrap().asks[0].answer.is_none());
         app.store.lock().unwrap().log_failure = None;
         let answer = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap().0;
         assert_eq!(wait_since(&app, &query(Some("j"), ask.seq)).await.unwrap().unwrap().seq, answer.seq);
@@ -3003,7 +2932,7 @@ mod wait_tests {
     async fn missing_committed_history_is_an_error() {
         for restart in [false, true] {
             let (dir, mut app) = fixture(4);
-            let ask = app.change(|s| s.attend("j", json!({"title": "Which?"}), "agent")).unwrap().0;
+            let ask = app.change(|s| s.ask("j", json!({"title": "Which?"}), "agent")).unwrap().0;
             let _ = app.change(|s| s.answer("j", "a1", None, "yes", "person")).unwrap();
             if restart {
                 app.store = Mutex::new(Store::open(dir.path()).unwrap());
@@ -3032,7 +2961,7 @@ mod wait_tests {
             assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
             std::task::Poll::Ready(())
         }).await;
-        let _ = app.change(|s| s.create("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap();
+        let _ = app.change(|s| s.make("first", "".into(), "const verbs = {};".into(), json!({}), "person", false, "", "")).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert!(waiting.await.unwrap_err().to_string().contains("event history"));
         assert!(!path.exists());
@@ -3051,98 +2980,46 @@ mod wait_tests {
 }
 
 #[cfg(test)]
-mod screen_tests {
-    use super::Screen;
-
-    #[test]
-    fn older_screens_have_no_exposed_cards() {
-        let screen: Screen = serde_json::from_value(serde_json::json!({
-            "owner": "test", "text": "page", "width": 1280, "height": 900, "version": 1
-        })).unwrap();
-        assert!(screen.exposed.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod placement_tests {
+mod ask_shown_tests {
     use super::*;
 
-    #[test]
-    fn snapshot_selects_the_actual_destination_for_this_item() {
-        let mut screen: Screen = serde_json::from_value(json!({
-            "owner": "test", "text": "", "width": 1280, "height": 900, "version": 3,
-            "fallback": [
-                {"id": "a1", "destination": {"kind": "after", "selector": "#tiles"}, "reason": "layout"},
-                {"id": "a2", "destination": {"kind": "top"}, "reason": "no boundary"}
-            ]
-        })).unwrap();
-        assert_eq!(screen.placement("other"), None);
-        let AnchorPlace::Fallback(first) = screen.placement("a1").unwrap() else { panic!("expected fallback") };
-        assert_eq!(first.destination.describe(), "after #tiles");
-        assert_eq!(first.reason, "layout");
-        let AnchorPlace::Fallback(second) = screen.placement("a2").unwrap() else { panic!("expected fallback") };
-        assert_eq!(second.destination, AnchorDestination::Top);
-        screen.hidden.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Hidden));
-        screen.floating.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Floating));
-        screen.missing.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Missing));
-        screen.invalid.push("a3 [".into());
-        assert_eq!(screen.placement("a3"), Some(AnchorPlace::Invalid));
-        assert_eq!(screen.placement("a3").unwrap().status(), AnchorStatus::Invalid);
-    }
-
     #[tokio::test]
-    async fn attention_response_preserves_snapshot_destination_and_reason() {
+    async fn an_ask_answers_with_how_the_page_shows_it() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path()).unwrap();
-        store.create("placement", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
+        store.make("shown", "<p>Test</p>".into(), "const verbs = {};".into(), json!({}), "test", false, "", "").unwrap();
         let (events, _) = broadcast::channel(16);
         let app = Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() });
-        for seen in [false, true] {
-            for destination in [json!({"kind":"after", "selector":"#tiles"}), json!({"kind":"top"})] {
-                let mut received = app.events.subscribe();
-                let post_snapshot = async {
-                    let ev = received.recv().await.unwrap();
-                    let owner = {
-                        let store = app.store.lock().unwrap();
-                        app.snapshot_owner("placement", store.get("placement").unwrap().view_rev).unwrap()
-                    };
-                    let snapshot: Screen = serde_json::from_value(json!({
-                        "owner":owner, "text":"", "width":1280, "height":900, "version":ev.version,
-                        "fallback":[{"id":ev.args.as_ref().unwrap()["id"], "destination":destination, "reason":"layout cannot take a question row"}]
-                    })).unwrap();
-                    let mut unmeasured = snapshot.clone();
-                    unmeasured.fallback.clear();
-                    put_screen(State(app.clone()), Path("placement".into()), Json(unmeasured)).await.unwrap();
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    assert_eq!(put_screen(State(app.clone()), Path("placement".into()), Json(snapshot)).await.unwrap(), StatusCode::NO_CONTENT);
+        for (drawn, anchor, line) in [
+            (false, "matched", "it shows in jelly's stack of questions, with a pin on #tile"),
+            (false, "missing", "#tile matches nothing on the page, so it has no pin; it shows in jelly's stack of questions"),
+            (true, "missing", "the view draws it; #tile matches nothing on the page"),
+        ] {
+            let mut received = app.events.subscribe();
+            let post_snapshot = async {
+                let ev = received.recv().await.unwrap();
+                let owner = {
+                    let store = app.store.lock().unwrap();
+                    app.snapshot_owner("shown", store.get("shown").unwrap().view_rev).unwrap()
                 };
-                let request = attend(State(app.clone()), Path("placement".into()), axum::http::HeaderMap::new(), Json(AttendReq {
-                    spec: json!({"seen":seen, "title":"Choose", "by":"test", "anchor":{"selector":"#tile"}})
-                }));
-                let (response, ()) = tokio::join!(request, post_snapshot);
-                let Json(response) = response.unwrap_or_else(|_| panic!("attention request failed"));
-                assert_eq!(response["anchor"], "fallback");
-                assert_eq!(response["anchor_destination"], destination);
-                assert_eq!(response["anchor_reason"], "layout cannot take a question row");
-                let location = if destination["kind"] == "after" { "after #tiles" } else { "at the top" };
-                assert_eq!(crate::placement(&response), format!("it shows {location} instead; layout cannot take a question row"));
-            }
+                let before: Screen = serde_json::from_value(json!({"owner": owner, "text": "", "width": 1280, "height": 900, "version": ev.version})).unwrap();
+                // A snapshot that does not know the ask yet must not answer for it.
+                put_screen(State(app.clone()), Path("shown".into()), Json(before.clone())).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let mut after = before;
+                after.asks = serde_json::from_value(json!([{"id": ev.args.as_ref().unwrap()["id"], "drawn": drawn, "anchor": anchor, "at": "#tile"}])).unwrap();
+                put_screen(State(app.clone()), Path("shown".into()), Json(after)).await.unwrap();
+            };
+            let request = ask(State(app.clone()), Path("shown".into()), axum::http::HeaderMap::new(), Json(AskReq {
+                spec: json!({"title": "Choose", "by": "test", "anchor": {"selector": "#tile"}})
+            }));
+            let (response, ()) = tokio::join!(request, post_snapshot);
+            let Json(response) = response.unwrap_or_else(|_| panic!("ask failed"));
+            assert_eq!((&response["anchor"], &response["drawn"]), (&json!(anchor), &json!(drawn)));
+            assert_eq!(crate::shown(&response), line);
         }
         let log = std::fs::read_to_string(app.store.lock().unwrap().events_path()).unwrap();
-        assert!(!log.contains("anchor_destination") && !log.contains("anchor_reason"));
-    }
-
-    #[test]
-    fn unmeasured_snapshots_do_not_confirm_placement() {
-        let mut screen: Screen = serde_json::from_value(json!({"owner":"test", "text":"", "width":1, "height":1, "version":1})).unwrap();
-        assert!(screen.invalid.is_empty());
-        assert!(screen.fallback.is_empty());
-        assert_eq!(screen.placement("a1"), None);
-        screen.below.push("a1 #tile".into());
-        assert_eq!(screen.placement("a1"), Some(AnchorPlace::Below));
+        assert!(!log.contains("drawn"), "how an ask shows is not part of its event");
     }
 }
 
@@ -3206,13 +3083,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attention_and_owner_follow_the_maker_or_last_reshaper() {
+    async fn asks_and_owner_follow_the_maker_or_last_shaper() {
         let (_dir, app) = app();
         {
             let mut store = app.store.lock().unwrap();
             for (name, agent) in [("a", "ana"), ("b", "bo")] {
-                store.create(name, "".into(), "const verbs = {};".into(), json!({}), agent, false, "", "p").unwrap();
-                store.attend(&format!("p:{name}"), json!({"title": format!("Which {name}?")}), agent).unwrap();
+                store.make(name, "".into(), "const verbs = {};".into(), json!({}), agent, false, "", "p").unwrap();
+                store.ask(&format!("p:{name}"), json!({"title": format!("Which {name}?")}), agent).unwrap();
             }
         }
         let asked = |mine: Option<&str>| {
@@ -3220,7 +3097,7 @@ mod tests {
             let mine = mine.map(String::from);
             async move {
                 let q = ProjectQ { project: Some("p".into()), answered: false, mine };
-                attention_list(State(app), Query(q)).await.0.as_array().unwrap().iter()
+                asks_list(State(app), Query(q)).await.0.as_array().unwrap().iter()
                     .map(|i| i["jelly"].as_str().unwrap().to_string()).collect::<Vec<_>>()
             }
         };
@@ -3228,7 +3105,7 @@ mod tests {
         assert_eq!(asked(Some("bo")).await, ["p:b"]);
         assert_eq!(asked(None).await.len(), 2);
 
-        app.store.lock().unwrap().reshape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
+        app.store.lock().unwrap().shape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
         assert!(asked(Some("ana")).await.is_empty());
         let owners: Vec<_> = list(State(app.clone())).await.0.as_array().unwrap().iter()
             .map(|j| (j["name"].as_str().unwrap().to_string(), j["owner"].as_str().unwrap().to_string())).collect();
@@ -3558,18 +3435,18 @@ mod tests {
         create_page(&app, "OLD PAGE", false).await;
         let first = owner(&app, "test:x").await;
         post_both(&app, snapshot(&first, "OLD PAGE", 1)).await.unwrap();
-        assert!(app.change(|s| s.create("test:x", "bad".into(), "invalid JS!".into(), json!({}), "test", true, "", "")).is_err());
-        assert!(app.change(|s| s.reshape("test:x", Some("bad".into()), Some("invalid JS!".into()), None, "test")).is_err());
+        assert!(app.change(|s| s.make("test:x", "bad".into(), "invalid JS!".into(), json!({}), "test", true, "", "")).is_err());
+        assert!(app.change(|s| s.shape("test:x", Some("bad".into()), Some("invalid JS!".into()), None, "test")).is_err());
         assert!(seen(&app).await.contains("OLD PAGE"));
         let _ = app.change(|s| s.set_state("test:x", "", Some(json!({"n":1})), "test")).unwrap();
         assert_eq!(owner(&app, "test:x").await, first);
         assert_eq!(app.screen("test:x", &first).unwrap().unwrap().version, 1);
         assert!(app.validate_render("test:x", &first, 1).is_err());
-        let _ = app.change(|s| s.reshape("test:x", Some("<h1>NEW PAGE</h1>".into()), None, None, "test")).unwrap();
+        let _ = app.change(|s| s.shape("test:x", Some("<h1>NEW PAGE</h1>".into()), None, None, "test")).unwrap();
         assert!(post(&app, snapshot(&first, "OLD PAGE", 1)).await.is_err());
-        let reshaped = owner(&app, "test:x").await;
+        let shaped = owner(&app, "test:x").await;
         let _ = app.change(|s| s.undo("test:x", "test")).unwrap();
-        assert!(post(&app, snapshot(&reshaped, "NEW PAGE", 3)).await.is_err());
+        assert!(post(&app, snapshot(&shaped, "NEW PAGE", 3)).await.is_err());
         let undone = owner(&app, "test:x").await;
         let _ = app.change(|s| s.set_project("test:x", "moved", "test")).unwrap();
         assert!(!app.screens.lock().unwrap().contains_key("test:x"));
@@ -3586,7 +3463,7 @@ mod tests {
         let spec = json!({"question":"Which?", "options":[{"id":"a", "label":"A"}, {"id":"b", "label":"B"}]});
         let _ = app.change_many(|s| s.ask_round("test:x", &spec, ASK_VIEW, ASK_VERBS, "", "test")).unwrap();
         let original = owner(&app, "test:x").await;
-        let _ = app.change(|s| s.reshape("test:x", Some("different".into()), None, None, "test")).unwrap();
+        let _ = app.change(|s| s.shape("test:x", Some("different".into()), None, None, "test")).unwrap();
         let different = owner(&app, "test:x").await;
         let _ = app.change_many(|s| s.ask_round("test:x", &spec, ASK_VIEW, ASK_VERBS, "", "test")).unwrap();
         assert!(post(&app, snapshot(&different, "different", 1)).await.is_err());
@@ -3595,30 +3472,31 @@ mod tests {
         let version = app.store.lock().unwrap().get("test:x").unwrap().version;
         let asked = now_ms();
         let mut sc = snapshot(&current, "ASK PAGE", version);
-        sc.missing.push("a2 #q-q1".into());
+        let shown = |anchor: &str| -> Vec<AskShown> { serde_json::from_value(json!([{"id": "a2", "drawn": true, "anchor": anchor, "at": "#q-q1"}])).unwrap() };
+        sc.asks = shown("missing");
         post(&app, sc).await.unwrap();
-        assert_eq!(anchor_place(&app, 1, "test:x", "a2", version, asked).await.unwrap().place, AnchorPlace::Missing);
+        assert_eq!(ask_shown(&app, 1, "test:x", "a2", version, asked).await.unwrap().anchor, AskAnchor::Missing);
         // The wait must ignore a screen from before the ask and an older state.
         app.screens.lock().unwrap().get_mut("test:x").unwrap().screen.as_mut().unwrap().at_ms = asked - 1;
-        let checking = anchor_place(&app, 1, "test:x", "a2", version, asked);
+        let checking = ask_shown(&app, 1, "test:x", "a2", version, asked);
         let update = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let mut sc = snapshot(&current, "AFTER ASK", version);
-            sc.below.push("a2 #q-q1".into());
+            sc.asks = shown("matched");
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap().place, AnchorPlace::Below);
-        let checking = anchor_place(&app, 1, "test:x", "a2", version + 1, asked);
+        assert_eq!(result.unwrap().anchor, AskAnchor::Matched);
+        let checking = ask_shown(&app, 1, "test:x", "a2", version + 1, asked);
         let update = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let mut sc = snapshot(&current, "NEW STATE", version + 1);
-            sc.hidden.push("a2 #q-q1".into());
+            sc.asks = shown("invalid");
             post(&app, sc).await.unwrap();
         };
         let (result, _) = tokio::join!(checking, update);
-        assert_eq!(result.unwrap().place, AnchorPlace::Hidden);
-        let checking = anchor_place(&app, 1, "test:x", "a2", version + 2, now_ms());
+        assert_eq!(result.unwrap().anchor, AskAnchor::Invalid);
+        let checking = ask_shown(&app, 1, "test:x", "a2", version + 2, now_ms());
         let replace = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             create_page(&app, "REPLACED", true).await;
@@ -3635,15 +3513,15 @@ mod tests {
         let ids = |r: Result<Json<Value>, ApiError>| r.unwrap().0.as_array().unwrap().iter().map(|e| e["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         let since = {
             let mut s = app.store.lock().unwrap();
-            s.create("j", "".into(), verbs.into(), json!({}), "agent", false, "", "p").unwrap();
-            s.call("p:j", "label", json!({"id": "first"}), PERSON).unwrap().at_ms
+            s.make("j", "".into(), verbs.into(), json!({}), "agent", false, "", "p").unwrap();
+            s.do_verb("p:j", "label", json!({"id": "first"}), PERSON).unwrap().at_ms
         };
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         {
             let mut s = app.store.lock().unwrap();
-            s.call("p:j", "label", json!({"id": "second"}), PERSON).unwrap();
+            s.do_verb("p:j", "label", json!({"id": "second"}), PERSON).unwrap();
             for i in 0..200 {
-                s.call("p:j", "label", json!({"id": format!("agent{i}")}), "agent").unwrap();
+                s.do_verb("p:j", "label", json!({"id": format!("agent{i}")}), "agent").unwrap();
             }
         }
         assert_eq!(ids(ask(since).await), ["second"]);
@@ -3657,8 +3535,8 @@ mod tests {
         let (dir, app) = app();
         let (recent, later) = {
             let mut store = app.store.lock().unwrap();
-            store.create("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
-            let mut recent = store.call("test:clock", "tick", json!({}), PERSON).unwrap();
+            store.make("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
+            let mut recent = store.do_verb("test:clock", "tick", json!({}), PERSON).unwrap();
             recent.state = None;
             let mut later = recent.clone();
             later.seq += 1;
@@ -3695,7 +3573,7 @@ mod tests {
         let (dir, app) = app();
         let mut store = app.store.lock().unwrap();
         for name in ["quiet", "busy"] {
-            store.create(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "test").unwrap();
+            store.make(name, "".into(), "const verbs = {};".into(), json!({}), "agent", false, "", "test").unwrap();
         }
         for i in 0..10 {
             store.set_state("test:quiet", "/n", Some(json!(i)), PERSON).unwrap();
@@ -3735,14 +3613,14 @@ mod tests {
         {
             let mut s = app.store.lock().unwrap();
             for name in ["x", "y"] {
-                s.create(name, "".into(), verbs.into(), json!({}), "agent", false, "", "test").unwrap();
+                s.make(name, "".into(), verbs.into(), json!({}), "agent", false, "", "test").unwrap();
             }
-            s.call("test:x", "label", json!({"id": "mine"}), PERSON).unwrap();
-            s.call("test:x", "label", json!({"id": "hers"}), "person:ana").unwrap();
+            s.do_verb("test:x", "label", json!({"id": "mine"}), PERSON).unwrap();
+            s.do_verb("test:x", "label", json!({"id": "hers"}), "person:ana").unwrap();
             s.comment("test:x", json!({"selector": "#hers"}), "bigger", "person:ana").unwrap();
-            s.call("test:x", "label", json!({"id": "theirs"}), "agent").unwrap();
+            s.do_verb("test:x", "label", json!({"id": "theirs"}), "agent").unwrap();
             for i in 0..100 {
-                s.call("test:y", "label", json!({"id": format!("n{i}")}), "agent").unwrap();
+                s.do_verb("test:y", "label", json!({"id": format!("n{i}")}), "agent").unwrap();
             }
         }
         let version = app.store.lock().unwrap().get("test:x").unwrap().version;

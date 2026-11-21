@@ -40,15 +40,15 @@ impl Daemon {
         stdout(self.command(client, project, args).output().unwrap())
     }
 
-    /// Runs `jelly wait ARGS` while the person clicks on `p:w`, and returns its stdout.
+    /// Runs `jelly hear --wait ARGS` while the person clicks on `p:w`, and returns its stdout.
     /// It clicks until `wait` exits, because `wait` subscribes some time after it starts.
     fn wait(&self, client: &Path, args: &[&str]) -> String {
-        let mut wait = self.command(client, "p", &[&["wait"], args].concat())
+        let mut wait = self.command(client, "p", &[&["hear", "--wait"], args].concat())
             .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while wait.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline, "jelly wait did not return");
-            self.post("/api/jellies/p:w/call", json!({"verb": "click", "args": {}, "by": "person"}));
+            assert!(Instant::now() < deadline, "jelly hear --wait did not return");
+            self.post("/api/jellies/p:w/do", json!({"verb": "click", "args": {}, "by": "person"}));
             std::thread::sleep(Duration::from_millis(50));
         }
         stdout(wait.wait_with_output().unwrap())
@@ -77,20 +77,17 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     let parse = |text: String| -> Value { serde_json::from_str(&text).unwrap() };
 
     daemon.post("/api/jellies", json!({"name": "x", "project": "p", "view": "<ul id=list></ul>", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-    daemon.post("/api/jellies/p:x/attention", json!({"title": "Which order?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "recommend": "a", "why": "Oldest first", "by": "agent"}));
+    daemon.post("/api/jellies/p:x/asks", json!({"title": "Which order?", "options": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "recommend": "a", "why": "Oldest first", "by": "agent"}));
     daemon.post("/api/jellies/p:x/comment", json!({"anchor": {"selector": "#list"}, "text": "bigger", "by": "person"}));
 
-    assert_eq!(jelly(&["attention"]), "p:x  a1 ask \"Which order?\" [a★/b]\n");
-    let full = parse(jelly(&["attention", "--json"]));
-    assert_eq!(full.as_array().unwrap().len(), 1);
-    assert_eq!(full[0]["jelly"], "p:x");
-    assert_eq!(daemon.jelly(&client, "q", &["attention"]), "Nothing waits on the person in project q (--all for every project).\n");
-
-    assert_eq!(jelly(&["comments"]), "p:x  c1 on #list: \"bigger\"\n");
-    assert_eq!(jelly(&["comments", "x"]), "p:x  c1 on #list: \"bigger\"\n");
-    let full = parse(jelly(&["comments", "--json"]));
-    assert_eq!(full.as_array().unwrap().len(), 1);
-    assert_eq!(full[0]["text"], "bigger");
+    // Asks wait on the person, their comments on the agent: one list says both.
+    let both = "on them  p:x  a1 ask \"Which order?\" [a★/b]\non you   p:x  c1 on #list: \"bigger\"\n";
+    assert_eq!(jelly(&["waiting"]), both);
+    assert_eq!(jelly(&["waiting", "x"]), both);
+    let full = parse(jelly(&["waiting", "--json"]));
+    assert_eq!((full["asks"].as_array().unwrap().len(), &full["asks"][0]["jelly"]), (1, &json!("p:x")));
+    assert_eq!((full["comments"].as_array().unwrap().len(), &full["comments"][0]["text"]), (1, &json!("bigger")));
+    assert_eq!(daemon.jelly(&client, "q", &["waiting"]), "Nothing is waiting in project q (--all for every project).\n");
 
     let spec = temp.path().join("spec.json");
     std::fs::write(&spec, json!({"title": "Sharing", "questions": [
@@ -102,9 +99,9 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     let since = asked.split("--since ").nth(1).unwrap().trim_end_matches("`\n");
     let history = std::fs::read_to_string(temp.path().join("daemon/events.jsonl")).unwrap();
     let event: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
-    assert_eq!(event["kind"], "attention");
+    assert_eq!(event["kind"], "ask");
     assert_eq!(since, format!("seq:{}", event["seq"]));
-    assert_eq!(asked, format!("p:s round 1: asked 2 questions. Answers arrive in `jelly inbox`, or block on `jelly wait p:s --since {since}`\n"));
+    assert_eq!(asked, format!("p:s round 1: asked 2 questions. Answers arrive in `jelly hear`, or block on `jelly hear --wait p:s --since {since}`\n"));
     let full = parse(jelly(&["ask", "s", "--spec", spec, "--json"]));
     assert_eq!((full["jelly"].as_str(), full["round"].as_u64(), full["questions"].as_u64()), (Some("p:s"), Some(2), Some(2)));
 
@@ -125,10 +122,10 @@ fn item_commands_finish_quietly_with_closed_stdout() {
     std::fs::write(&spec, json!({"question":"Which?", "options":[{"id":"a", "label":"A"}]}).to_string()).unwrap();
     for populated in [false, true] {
         if populated {
-            daemon.post("/api/jellies/p:x/attention", json!({"kind":"ask", "title":"Which?", "options":[{"id":"a", "label":"A"}], "by":"agent"}));
+            daemon.post("/api/jellies/p:x/asks", json!({"kind":"ask", "title":"Which?", "options":[{"id":"a", "label":"A"}], "by":"agent"}));
             daemon.post("/api/jellies/p:x/comment", json!({"text":"bigger", "by":"person"}));
         }
-        for args in [vec!["attention"], vec!["comments", "p:x"], vec!["ask", "p:s", "--spec", spec.to_str().unwrap()]] {
+        for args in [vec!["waiting"], vec!["waiting", "p:x"], vec!["ask", "p:s", "--spec", spec.to_str().unwrap()]] {
             let (reader, writer) = std::io::pipe().unwrap();
             drop(reader);
             let out = daemon.command(temp.path(), "p", &args).stdout(Stdio::from(writer)).output().unwrap();

@@ -33,7 +33,7 @@ function render() {
     app.innerHTML = `<h1>${esc(s.title)}</h1><p class="mute">Join with your name, then wait for the first question.</p>
       <div class="join"><input id="who" placeholder="Your name" value="${esc(jelly.person.name || "")}"><button id="go">Join</button></div>
       <div class="chips" id="players">${Object.keys(s.players).map(w => `<span class="chip">${esc(name(w))}</span>`).join("")}</div><div class="note">${esc(note)}</div>`;
-    go.onclick = async () => { const n = who.value.trim(); if (!n) return; jelly.person.name = n; try { await jelly.call("join"); note = ""; } catch (e) { note = e.message; render(); } };
+    go.onclick = async () => { const n = who.value.trim(); if (!n) return; jelly.person.name = n; try { await jelly.do("join"); note = ""; } catch (e) { note = e.message; render(); } };
     return;
   }
   const r = s.rounds[s.round];
@@ -45,7 +45,7 @@ function render() {
     app.innerHTML = `${s.round >= 3 ? '<div class="bonus" id="bonus">Bonus round · written from your answers</div>' : ""}<p class="mute">Question ${s.round + 1} of ${s.rounds.length} · ${n} of ${Object.keys(s.players).length} answered</p>
       <div class="timer"><i id="t"></i></div><div class="q" id="question">${esc(r.q)}</div>
       <div class="opts" id="options">${r.options.map((o, i) => `<button class="opt ${mine && mine.option === i ? "mine" : ""}" data-i="${i}" style="background:${C[i]}" ${mine ? "disabled" : ""}>${S[i]} ${esc(o)}</button>`).join("")}</div><div class="note">${esc(note)}</div>`;
-    options.onclick = async e => { const b = e.target.closest("button[data-i]"); if (!b) return; try { await jelly.call("vote", { option: +b.dataset.i }); note = ""; } catch (err) { note = err.message; render(); } };
+    options.onclick = async e => { const b = e.target.closest("button[data-i]"); if (!b) return; try { await jelly.do("vote", { option: +b.dataset.i }); note = ""; } catch (err) { note = err.message; render(); } };
   } else if (s.phase === "reveal") {
     const votes = Object.values(s.votes[s.round] || {}), mine = s.votes[s.round]?.[me];
     const count = r.options.map((_, i) => votes.filter(v => v.option === i).length), max = Math.max(1, ...count);

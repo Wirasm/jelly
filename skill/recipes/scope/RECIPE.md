@@ -7,10 +7,10 @@ watches what it costs them. For a pick between a few options, use `jelly ask`.
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes scope --out DIR
-jelly new scope --recipe scope --state state.json --about "Scope: <what is being decided>"
-jelly call scope recount                      # writes `result` from your items and levers
+jelly make scope --recipe scope --state state.json --about "Scope: <what is being decided>"
+jelly do scope recount                      # writes `result` from your items and levers
 jelly look scope                              # fix every `!` and `error` line first
-jelly focus scope
+jelly show scope
 ```
 
 The example `state.json` is real: what goes into jelly's next release, from the
@@ -55,12 +55,12 @@ use it, so they cannot disagree.
   `--at "#lever-<lever id>"` for a judgment you could not make.
 - **Read the outcome, do not recompute it.** `jelly state scope /result/summary`
   is the sentence; `/result` has every number. After `jelly set`, run
-  `jelly call scope recount`.
+  `jelly do scope recount`.
 
 ## Hearing them and answering
 
 The person toggles items, moves levers, goes back to your cut and locks. It
-arrives in `jelly inbox` as `put`, `lever`, `reset`, `lock` and `unlock` calls. A
+arrives in `jelly hear` as `put`, `lever`, `reset`, `lock` and `unlock` calls. A
 slider calls `lever` once, when they let go. `lock` is refused while the plan
 does not fit, and says by how much.
 
@@ -70,10 +70,10 @@ jelly state scope /result/vs             # what they changed against your cut
 jelly state scope /locked                # null until they lock; then what they chose
 
 # You learned something: re-estimate. The old number stays on the tile, struck out.
-jelly call scope item '{"id":"i8","cost":2,"why":"Confirmed: only the WebSocket is open."}'
-jelly call scope item '{"id":"docs","short":"docs","label":"A page on recipes","cost":1,"value":2,"group":"recipes"}'
-jelly call scope done '{"item":"i6"}'    # finished: its cost stops counting, its value is banked
-jelly call scope recommend '{"items":["i1","i2","i4"],"why":"…"}'   # a new cut; with no items, what is set now
+jelly do scope item '{"id":"i8","cost":2,"why":"Confirmed: only the WebSocket is open."}'
+jelly do scope item '{"id":"docs","short":"docs","label":"A page on recipes","cost":1,"value":2,"group":"recipes"}'
+jelly do scope done '{"item":"i6"}'    # finished: its cost stops counting, its value is banked
+jelly do scope recommend '{"items":["i1","i2","i4"],"why":"…"}'   # a new cut; with no items, what is set now
 ```
 
 If a re-estimate makes a locked plan stop fitting, the lock is taken off and the

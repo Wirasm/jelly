@@ -285,15 +285,15 @@
     about: boot.about,
     get state() { return boot.state; },
     onState(fn) { fn(boot.state, null); },
-    call: readOnly,
+    do: readOnly,
     asset: (file) => resource(`assets/${encodeURIComponent(file)}`),
     events() { return () => {}; },
-    other: (name) => ({ name, get state() { return readOnly(); }, watch() { return () => {}; }, open() { note(); } }),
+    other: (name) => ({ name, get state() { return readOnly(); }, onState() { return () => {}; }, open() { note(); } }),
     // A shared file reads as the unnamed person, as the live runtime does before naming.
     person: {
       name: "",
       by: "person",
-      get asks() { return boot.attention; },
+      get asks() { return boot.asks; },
       onAsk(fn) { fn(); },
       onOpen() { return () => {}; },
       comments: [],
