@@ -584,6 +584,8 @@
     button.textContent = on ? "Click a part · Esc" : "Comment";
   }
   const frameOf = (name) => (full ? $("full").querySelector("iframe") : entries.get(name)?.querySelector("iframe"));
+  // A jelly's stream frame keeps focus while its full view is open, so a key may come from either.
+  const sentBy = (e, name) => [entries.get(name)?.querySelector("iframe"), full === name ? $("full").querySelector("iframe") : null].some((f) => f?.contentWindow === e.source);
   const buttonOf = (name) => (full ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
   function toggleComment(name) {
     const f = frameOf(name), b = buttonOf(name);
@@ -598,8 +600,9 @@
     const d = e.data;
     if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
-    if (d?.type === "jelly:escape") shortcut("Escape");
-    if (d?.type === "jelly:key" && frameOf(d.name)?.contentWindow === e.source) { if (!full) select(d.name); shortcut(String(d.key)); }
+    if (d?.type === "jelly:focus" && sentBy(e, d.name) && !full) select(d.name);
+    if (d?.type === "jelly:escape" && sentBy(e, d.name)) shortcut("Escape");
+    if (d?.type === "jelly:key" && sentBy(e, d.name)) shortcut(String(d.key));
   });
 
   // ---- actions --------------------------------------------------------------

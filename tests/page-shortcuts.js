@@ -17,7 +17,8 @@ async page => {
     dock: !document.getElementById('dock-panel').hidden,
     nopinned: document.getElementById('app').classList.contains('nopinned'),
     commenting: document.querySelector('.entry.sel [data-act="comment"]')?.classList.contains('on') ?? false,
-    active: document.activeElement.tagName + (document.activeElement.title ? `[${document.activeElement.title}]` : ''),
+    // The page's activeElement can lag behind a click from one frame into another; the frames know.
+    active: [...document.querySelectorAll('iframe')].filter(f => f.contentWindow?.document.hasFocus()).map(f => `IFRAME[${f.title}]`)[0] ?? document.activeElement.tagName,
   }));
   const until = async (label, want) => {
     const deadline = Date.now() + 3000;
@@ -35,10 +36,23 @@ async page => {
     for (const k of ['sel', 'dock', 'nopinned', 'commenting']) assert(after[k] === before[k], `${label}: ${k} changed from ${before[k]} to ${after[k]}`);
     results.push(`${label}: unchanged`);
   };
-  const focusPage = async () => { await entry(top).locator('h2').click(); assert((await state()).active === 'BODY', 'page has focus'); };
+  const fcomment = on => page.waitForFunction(on => document.querySelector('#fcomment').classList.contains('on') === on, on);
+  // Selecting and focusing scroll the stream smoothly; a click placed while it still moves lands on the wrong jelly.
+  const scrollSettled = async () => {
+    for (let last = null;;) {
+      const now = await page.evaluate(() => [...document.querySelectorAll('.entry')].map(e => Math.round(e.getBoundingClientRect().top)).join());
+      if (now === last) return;
+      last = now;
+      await page.waitForTimeout(100);
+    }
+  };
+  const focusPage = async () => { await scrollSettled(); await entry(top).locator('h2').click(); assert((await state()).active === 'BODY', 'page has focus'); };
   const focusInside = async name => {
+    await scrollSettled();
     await inside(name).locator('#text').click();
-    assert((await state()).active === `IFRAME[${name}]`, `focus inside ${name}`);
+    const s = await state();
+    assert(s.active === `IFRAME[${name}]`, `focus inside ${name}, got ${s.active}`);
+    await until(`a click into ${name.split(':')[1]} selects it`, {sel: name});
   };
   try {
     const view = '<!doctype html><p id="text" style="height:120px">Some words to click</p><input id="field">'
@@ -73,9 +87,33 @@ async page => {
     await page.locator('#full').waitFor({state:'visible'});
     assert(await page.evaluate(() => document.querySelector('#full iframe').title) === keepsJ, 'Enter opens the jelly that has focus');
     results.push('Enter inside a jelly opens that jelly');
+    // Focus stays in the stream frame; its keys must still reach the page while the full view is open.
+    assert((await state()).active === `IFRAME[${keepsJ}]`, 'focus stays in the stream frame after Enter');
+    await page.keyboard.press('a'); await until('a after a forwarded Enter opens the dock', {dock: true});
+    await page.keyboard.press('a'); await until('a after a forwarded Enter closes it', {dock: false});
+    await page.keyboard.press('c'); await fcomment(true);
+    await page.keyboard.press('c'); await fcomment(false);
+    results.push('c after a forwarded Enter toggles comment mode');
     await page.keyboard.press('Escape');
     await page.locator('#full').waitFor({state:'hidden'});
     await until('closing the full view selects it', {sel: keepsJ});
+
+    // Repeated j inside one jelly walks the stream from the selection, and Enter opens the jelly the ring marks.
+    await focusPage();
+    await until('clicking the top entry selects it', {sel: top});
+    await focusInside(top);
+    await page.keyboard.press('j'); await until('first j inside a jelly moves down', {sel: keepsJ});
+    await page.keyboard.press('j'); await until('second j inside the same jelly moves on', {sel: plain});
+    await page.keyboard.press('Enter');
+    await page.locator('#full').waitFor({state:'visible'});
+    assert(await page.evaluate(() => document.querySelector('#full iframe').title) === plain, 'Enter after j opens the jelly the ring marks');
+    results.push('Enter after j opens the jelly the ring marks');
+    await page.keyboard.press('Escape');
+    await page.locator('#full').waitFor({state:'hidden'});
+    await until('closing the full view selects the opened jelly', {sel: plain});
+    await focusInside(keepsJ);
+    await page.keyboard.press('c'); await until('c inside an unselected jelly comments on that jelly', {sel: keepsJ, commenting: true});
+    await page.keyboard.press('c'); await until('c again turns it off', {commenting: false});
 
     // Escape inside a jelly closes the dock, and only the dock.
     await focusInside(top);
@@ -132,6 +170,18 @@ async page => {
     await unchanged('j prevented by the jelly', kept);
     await page.keyboard.press('k'); await until('k is still forwarded', {sel: top});
 
+    // Escape typed into a jelly's input, or prevented by the jelly, stays there like any other key.
+    await page.keyboard.press('a'); await until('a opens the dock before the Escape checks', {dock: true});
+    await inside(top).locator('#field').click();
+    const dockOpen = await state();
+    await page.keyboard.press('Escape'); await unchanged('Escape typed into an input', dockOpen);
+    await inside(keepsJ).locator('body').evaluate(() => addEventListener('keydown', e => { if (e.key === 'Escape') e.preventDefault(); }));
+    await focusInside(keepsJ);
+    const keepsEscape = await state();
+    await page.keyboard.press('Escape'); await unchanged('Escape prevented by the jelly', keepsEscape);
+    await focusInside(plain);
+    await page.keyboard.press('Escape'); await until('Escape inside another jelly closes the dock', {dock: false});
+
     // Full view: shortcuts after a click into the frame, and Escape ordering.
     await focusPage();
     await page.keyboard.press('Enter');
@@ -144,7 +194,6 @@ async page => {
     await page.keyboard.press('a'); await until('a in the full view opens the dock again', {dock: true});
     await page.keyboard.press('Escape'); await until('Escape in the full view closes the dock first', {dock: false});
     assert(await page.locator('#full').isVisible(), 'the full view stays open');
-    const fcomment = on => page.waitForFunction(on => document.querySelector('#fcomment').classList.contains('on') === on, on);
     await page.keyboard.press('c'); await fcomment(true);
     await page.keyboard.press('c'); await fcomment(false);
     results.push('c inside the full view toggles comment mode');
@@ -156,6 +205,10 @@ async page => {
     await page.locator('#full').waitFor({state:'hidden'});
     results.push('second Escape closes the full view');
     return results;
+  } catch (e) {
+    e.message += `
+after ${results.length} steps; last: ${results.at(-1)}`;
+    throw e;
   } finally {
     await page.goto('about:blank');
     for (const name of names) await page.request.delete(`${base}/api/jellies/${name}?by=agent`);

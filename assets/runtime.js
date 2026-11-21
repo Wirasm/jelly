@@ -895,21 +895,21 @@
   });
   subs.push(() => setTimeout(drawMarkers, 0));
   btn.onclick = (e) => { e.stopPropagation(); setMode(!commenting); };
+  // A click or Tab into a jelly never reaches the jelly page's click handler, so the jelly reports
+  // the focus itself and the page selects it.
+  addEventListener("focus", () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); });
+  // Keys typed while a jelly has focus reach the jelly page, which decides which are its shortcuts.
+  // Escape ends comment mode first and reaches the page only when there was none to end; the page
+  // still listens for it as `jelly:escape`. A view keeps a key by calling preventDefault(); the
+  // check waits a tick because this listener runs before the view's.
   addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    // Esc inside a jelly closes the comment mode first, then reaches the jelly page.
-    const inPop = e.target.closest?.(".jf-pop");
-    if (embedded && !commenting && !inPop && !pop?.isConnected) parent.postMessage({ type: "jelly:escape", name: boot.name }, location.origin);
-    setMode(false);
-  });
-  // Keys typed while a jelly has focus reach the jelly page as `jelly:key`; the page decides
-  // which are its shortcuts. A view keeps a key by calling preventDefault(); the check waits a
-  // tick because this listener runs before the view's. Escape takes the path above.
-  addEventListener("keydown", (e) => {
-    if (!embedded || e.key === "Escape" || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.target.closest?.("input, textarea, select, [contenteditable], .jf-pop") || e.target.isContentEditable || pop?.isConnected) return;
+    const endsCommenting = e.key === "Escape" && commenting;
+    if (e.key === "Escape") setMode(false);
+    if (!embedded || endsCommenting || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest?.("input, textarea, select") || e.target.isContentEditable || pop?.isConnected) return;
     if (e.key === "Enter" && e.target.closest?.("button, a[href], summary")) return;
-    setTimeout(() => { if (!e.defaultPrevented) parent.postMessage({ type: "jelly:key", name: boot.name, key: e.key }, location.origin); }, 0);
+    const msg = e.key === "Escape" ? { type: "jelly:escape", name: boot.name } : { type: "jelly:key", name: boot.name, key: e.key };
+    setTimeout(() => { if (!e.defaultPrevented) parent.postMessage(msg, location.origin); }, 0);
   });
   addEventListener("mouseover", (e) => {
     if (!(commenting || e.altKey) || isOurs(e.target)) return;
