@@ -48,7 +48,7 @@ const SHELL = String.raw`<!doctype html>
     viewRev = doc.view_rev;
     document.title = doc.about || doc.name.split(":").pop();
     const b = { name: doc.name, about: doc.about, version: doc.version, viewRev: doc.view_rev, state: doc.state,
-      comments: doc.comments, asks: doc.asks, share: me };
+      comments: doc.comments, asks: doc.asks, unsent: doc.unsent || 0, share: me };
     // The base keeps assets/<file> working, and keeps this page's URL out of the view.
     const head = '<base href="' + assets + '">' + tag("window.__JELLY__=" + JSON.stringify(b).replace(/</g, "\\u003c")) + tag(runtime);
     const i = doc.view.search(/<head>/i);
@@ -92,7 +92,7 @@ const SHELL = String.raw`<!doctype html>
     const m = e.data;
     if (e.source !== frame.contentWindow || !m || m.jelly !== "rpc") return;
     if (m.op === "reload") return boot();
-    if (m.op === "show") return post({ jelly: "reply", id: m.id, ok: true, value: { comments: doc.comments, asks: doc.asks } });
+    if (m.op === "show") return post({ jelly: "reply", id: m.id, ok: true, value: { comments: doc.comments, asks: doc.asks, unsent: doc.unsent || 0 } });
     if (!ws || ws.readyState !== 1) return post({ jelly: "reply", id: m.id, ok: false, error: "Not connected. Try again in a moment." });
     pending.set(++n, m.id);
     ws.send(JSON.stringify({ ref: n, op: m.op, body: m.body }));

@@ -35,7 +35,16 @@ thing: no aliases for commands, flags or runtime fields.
 - Assets live in `~/.jelly/assets/<id>/`, outside state and undo. On Windows the folder
   is `project+name`, because `:` is not allowed in a file name (`disk::name`). Views are
   served at `/j/<id>/` so `assets/<file>` resolves; keep that trailing slash.
-- Never put network access in verbs. Live data is pushed in with `jelly do`.
+- Never put network access in verbs. Live data is pushed in with `jelly do`, or by a feed.
+- The daemon runs commands only from `feeds.json` in the home, which the CLI writes
+  to disk (`jelly feed`). Never add an HTTP route that sets or changes a feed: the
+  port has no authentication, so that route would let any page run a command.
+- A change by `feed` is not someone using the jelly: it leaves `updated_ms` and
+  `archived` alone, so a fed jelly nobody opens still goes quiet.
+- `send` is the person handing the turn back. `jelly hear --wait` returns on it and
+  on nothing else unless `--every` is given. Do not make other events wake a wait.
+- Recipes are frames and starting points, not a component library. A recipe that
+  holds the person's product (`compare`) gives the product's screens no CSS.
 
 ## Check
 

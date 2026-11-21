@@ -86,6 +86,10 @@ pub struct Jelly {
     /// verbs are meant to be used, what the person said. `jelly look` shows them.
     #[serde(default)]
     pub notes: Vec<Value>,
+    /// What people did here since they last pressed Send. The view's Send
+    /// button shows it; `send` sets it back to zero.
+    #[serde(default)]
+    pub unsent: u32,
 }
 
 /// One ask for the person's attention. It wants an option or words, or, when
@@ -413,6 +417,8 @@ pub enum EventKind {
     Ask,
     Answer,
     Unask,
+    /// The person hands the turn back: "I am done here for now, go on".
+    Send,
     Set,
     /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
     Lock,
@@ -421,13 +427,16 @@ pub enum EventKind {
 impl EventKind {
     /// Things the person did that an agent should hear about.
     pub fn is_for_agent(self) -> bool {
-        matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer)
+        matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer | EventKind::Send)
     }
 }
 
 /// The person, as recorded in `by`. A person who named themselves in the
 /// browser writes as `person:<name>`. Agents use their own names.
 pub const PERSON: &str = "person";
+
+/// The daemon running a jelly's feed (`jelly feed`), as recorded in `by`.
+pub const FEED: &str = "feed";
 
 /// Made by a person, named or not.
 pub fn is_person(by: &str) -> bool {
@@ -475,6 +484,7 @@ impl Event {
             EventKind::Undo => "undid the last state change".into(),
             EventKind::Ask => format!("asked {:?}", s(&a["title"])),
             EventKind::Unask => format!("unasked {}", s(&a)),
+            EventKind::Send => match a.as_u64() { Some(1) => "sent 1 change: your turn".into(), Some(n) => format!("sent {n} changes: your turn"), None => "sent: your turn".into() },
             EventKind::Set => match s(&a["pointer"]).as_str() { "" => "set the whole state".into(), p => format!("set {p}") },
             EventKind::Working => match a.as_str() { Some(w) => format!("started working: {w}"), None => "finished working".into() },
             EventKind::Note => format!("left a note: {}", clip(s(&a))),
@@ -647,6 +657,7 @@ impl Store {
             asks: Vec::new(),
             working: None,
             notes: Vec::new(),
+            unsent: 0,
         };
         let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new(), history_from: 1 });
         self.commit(name, EventKind::Make, by, None, None, vec![String::new()], previous_entry)
@@ -834,6 +845,13 @@ impl Store {
             Ok(ev) => Some(ev),
             Err(e) => { let _ = writeln!(std::io::stderr().lock(), "could not archive {n}: {e}"); None }
         }).collect()
+    }
+
+    /// Archived jellies nobody touched for `idle_ms` since: `sweep` archived
+    /// them, nobody restored them, and now they can go.
+    pub fn forgotten(&self, idle_ms: u64) -> Vec<String> {
+        let cutoff = now_ms().saturating_sub(idle_ms);
+        self.list().filter(|j| j.archived && !j.kept && j.updated_ms < cutoff).map(|j| j.name.clone()).collect()
     }
 
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
@@ -1030,6 +1048,14 @@ impl Store {
         self.commit(name, EventKind::Unask, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
     }
 
+    /// The person is done for now and hands the turn back. The event carries
+    /// how many things they did since the last send.
+    pub fn send(&mut self, name: &str, by: &str) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
+        let unsent = self.entry(name)?.jelly.unsent;
+        self.commit(name, EventKind::Send, by, None, Some(unsent.into()), Vec::new(), previous_entry)
+    }
+
     /// `Some("rebuilding the header")` while an agent works on the jelly, `None` when done.
     pub fn set_working(&mut self, name: &str, what: Option<&str>, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
@@ -1131,8 +1157,18 @@ impl Store {
         previous: Option<Entry>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
-        entry.jelly.updated_ms = now_ms();
-        if kind != EventKind::Archive {
+        // A feed keeps data fresh; it does not count as someone using the jelly,
+        // so a fed jelly nobody opens still goes quiet and is archived.
+        let fed = by == FEED;
+        if !fed {
+            entry.jelly.updated_ms = now_ms();
+        }
+        if kind == EventKind::Send {
+            entry.jelly.unsent = 0;
+        } else if is_person(by) && kind.is_for_agent() {
+            entry.jelly.unsent += 1;
+        }
+        if kind != EventKind::Archive && !fed {
             entry.jelly.archived = false;
         }
         let bytes = serde_json::to_vec(entry).expect("a jelly serializes");
@@ -2402,6 +2438,11 @@ mod tests {
         let swept: Vec<String> = s.sweep(0).into_iter().map(|e| e.jelly).collect();
         assert_eq!(swept, ["old"], "kept and open-comment jellies stay");
         assert!(s.get("old").unwrap().archived);
+        assert!(s.forgotten(60_000).is_empty(), "archived just now, so it stays for a while");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(s.forgotten(0), ["old"], "only archived jellies are ever forgotten");
+        s.do_verb("old", "label", json!({"id": "a", "value": "fed"}), FEED).unwrap();
+        assert!(s.get("old").unwrap().archived, "a feed is not someone using the jelly");
         s.do_verb("old", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
         assert!(!s.get("old").unwrap().archived, "a change brings it back");
     }

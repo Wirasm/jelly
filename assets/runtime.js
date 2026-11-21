@@ -95,6 +95,10 @@
   const askSubs = [];
   const openSubs = new Set();
   let working = boot.working || null;
+  // What people did here since someone last pressed Send.
+  let unsent = boot.unsent || 0;
+  const unsentSubs = [];
+  const FOR_AGENT = ["do", "comment", "reply", "resolve", "undo", "answer"];
   const subs = [];
   const enc = encodeURIComponent;
   const api = `/api/jellies/${enc(boot.name)}`;
@@ -221,7 +225,10 @@
   });
   else (function connect() {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
-    ws.onopen = () => { if (dropped) reload(); };
+    // The daemon tells an agent whether anyone has this jelly on screen.
+    const tell = () => { if (ws.readyState === 1 && !agentMode && !trial && !boot.past) ws.send(JSON.stringify({ open: boot.name, visible: document.visibilityState === "visible" })); };
+    addEventListener("visibilitychange", tell);
+    ws.onopen = () => { if (dropped) reload(); tell(); };
     ws.onmessage = (m) => {
       const ev = JSON.parse(m.data);
       if (ev.kind === "resync") return reload();
@@ -240,7 +247,11 @@
       document.body.innerHTML = '<p style="font:14px system-ui;padding:16px;opacity:.7">This jelly was removed.</p>';
       return;
     }
-    if (ev.kind === "new" || ev.view_rev !== boot.viewRev) { reload(); return; }
+    if (ev.kind === "make" || ev.view_rev !== boot.viewRev) { reload(); return; }
+    const was = unsent;
+    if (ev.kind === "send") unsent = 0;
+    else if (isPerson(ev.by) && FOR_AGENT.includes(ev.kind)) unsent++;
+    if (unsent !== was) { drawSend(); unsentSubs.forEach((fn) => fn(unsent)); }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "ask" || ev.kind === "answer" || ev.kind === "unask") refreshThreads().catch(console.error);
 
@@ -304,6 +315,11 @@
       comment: (anchor, text) => post("comment", { anchor, text }),
       reply: (id, text) => post("reply", { id, text }),
       resolve: (id) => post("resolve", { id }),
+      /** How many things people did here since the last send. */
+      get unsent() { return unsent; },
+      onUnsent(fn) { unsentSubs.push(fn); fn(unsent); },
+      /** "I am done here for now": wakes an agent that waits on this jelly. */
+      send: () => post("send", {}),
     },
     who,
     isPerson,
@@ -316,6 +332,7 @@
     .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px -apple-system, sans-serif;
       background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
     .jf-btn.on { background: #e0a24f; color: #1b2221; border-color: #e0a24f; opacity: 1; }
+    .jf-btn.jf-send { inset: var(--jelly-send-inset, auto auto 10px 10px); background: #e8336f; color: #fff; border-color: #e8336f; font-weight: 600; opacity: 1; }
     .jf-hover { outline: 2px dashed #e0a24f !important; outline-offset: 2px; cursor: crosshair !important; }
     .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
       font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
@@ -447,7 +464,8 @@
     const shown = visible();
     shown.forEach((f, i) => {
       const el = anchorOf(f).element;
-      if (!el) return;
+      // A part that is not on screen now (another tab, a closed section) shows no pin.
+      if (!el || !el.getClientRects().length) return;
       const r = el.getBoundingClientRect();
       const last = f.replies?.at(-1);
       const pin = document.createElement("div");
@@ -703,6 +721,22 @@
   });
 
   let workEl = null;
+  // The person works through a jelly, then hands the turn back with one press.
+  // A view that draws its own marks it with data-send and calls jelly.person.send().
+  let sendEl = null;
+  function drawSend() {
+    // The jelly page is not a jelly an agent waits on: it shows no Send.
+    const show = unsent > 0 && boot.name !== "page" && document.body && !agentMode && share?.can_act !== false && !document.querySelector("[data-send]");
+    if (!show) { sendEl?.remove(); sendEl = null; return; }
+    if (!sendEl) {
+      sendEl = document.createElement("button");
+      sendEl.className = "jf-btn jf-send";
+      sendEl.title = "Tell the agent you are done here for now";
+      sendEl.onclick = (e) => { e.stopPropagation(); jelly.person.send().catch(console.error); };
+    }
+    sendEl.textContent = `${unsent} change${unsent > 1 ? "s" : ""} · Send`;
+    if (!sendEl.isConnected) ui().appendChild(sendEl);
+  }
   function drawWorking() {
     workEl?.remove();
     workEl = null;
@@ -726,8 +760,10 @@
     const label = (el) => (el.getAttribute("aria-label") || el.innerText || el.value || el.alt || el.title || "").trim().replace(/\s+/g, " ").slice(0, 120);
     const shown = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0"; };
     const add = (depth, text, el) => lines.push(`${"  ".repeat(depth)}- ${text}${el.id ? ` #${el.id}` : ""}`);
+    // A view's own open shadow roots are part of what the person sees.
+    const kids = (el) => (el.shadowRoot ? [...el.shadowRoot.children, ...el.children] : el.children);
     (function walk(el, depth) {
-      for (const c of el.children) {
+      for (const c of kids(el)) {
         if (lines.length > 400 || ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META"].includes(c.tagName) || (getComputedStyle(c).display === "contents" ? (walk(c, depth), true) : !shown(c))) continue;
         const tag = c.tagName.toLowerCase(), role = c.getAttribute("role");
         if (/^h[1-6]$/.test(tag)) add(depth, `heading "${label(c)}" [${tag}]`, c);
@@ -747,9 +783,9 @@
           if (t) add(depth, `text "${t}"`, c);
           if (!one || inside) walk(c, depth + (t ? 1 : 0));
         }
-        else if (c.id && c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (c.id && c.children.length === 0 && !c.shadowRoot) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else if ((GROUP.has(tag) || role || c.id) && c.innerText?.trim()) { add(depth, `${role || tag}${c.getAttribute("aria-label") ? ` "${c.getAttribute("aria-label")}"` : ""}:`, c); const own = ownText(c); if (own) add(depth + 1, `text "${own}"`, {}); walk(c, depth + 1); continue; }
-        else if (c.children.length === 0) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
+        else if (c.children.length === 0 && !c.shadowRoot) { const t = label(c); if (t) add(depth, `text "${t}"`, c); }
         else walk(c, depth);
       }
     })(document.body, 0);
@@ -898,7 +934,7 @@
       if ((r.right > W + 1 || r.left < -1) && !scrolls(c)) { off.push(name); continue; }
       const p = r.top >= 0 && r.bottom <= innerHeight ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
       if (p && (!isOurs(p) || p.closest(".jf-btn")) && !c.contains(p) && !p.contains(c) && !(c.labels && [...c.labels].some((l) => l.contains(p))) && !scrollsClear(r, p) && !clipped(c, r)) {
-        covered.push(`${name} under ${p.closest(".jf-btn") ? "jelly's Comment button (move it with --jelly-comment-inset)" : shortSelector(p)}`);
+        covered.push(`${name} under ${p.closest(".jf-send") ? "jelly's Send button (move it with --jelly-send-inset)" : p.closest(".jf-btn") ? "jelly's Comment button (move it with --jelly-comment-inset)" : shortSelector(p)}`);
       }
       // A labelled checkbox or radio is tapped through its label; a link inside text is exempt.
       const viaLabel = c.matches("input[type=checkbox], input[type=radio]") && c.labels?.length;
@@ -959,7 +995,9 @@
   // Does one step the way a person would; returns why it could not be done.
   function doStep(s) {
     let el;
-    try { el = document.querySelector(s.at); } catch { return `${s.at} is not a valid CSS selector`; }
+    // The page first, then inside the view's own open shadow roots.
+    const find = (root) => root.querySelector(s.at) || [...root.querySelectorAll("*")].reduce((hit, e) => hit || (e.shadowRoot && find(e.shadowRoot)), null);
+    try { el = find(document.body); } catch { return `${s.at} is not a valid CSS selector`; }
     if (!el) return `${s.at} matches nothing`;
     if (el.checkVisibility && !el.checkVisibility()) return `${s.at} is not visible`;
     if (el.disabled) return `${s.at} is disabled`;
@@ -1021,10 +1059,10 @@
         throw e;
       }
       if (refresh !== latestRefresh) return latestRefresh;
-      comments = j.comments || []; asks = j.asks || []; working = j.working || null;
+      comments = j.comments || []; asks = j.asks || []; working = j.working || null; unsent = j.unsent || 0;
       // The view first: an ask it draws must not flash in the stack.
       for (const fn of askSubs) { try { fn(); } catch (e) { console.error(e); } }
-      drawMarkers(); drawWorking();
+      drawMarkers(); drawWorking(); drawSend();
     })();
     latestRefresh = refresh;
     return refresh;
@@ -1039,6 +1077,7 @@
     if (!embedded && !optOut && share?.can_act !== false) ui().appendChild(btn);
     drawMarkers();
     drawWorking();
+    drawSend();
     new ResizeObserver(queueDraw).observe(document.body);
     addEventListener("resize", queueDraw);
   });

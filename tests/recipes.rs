@@ -76,7 +76,7 @@ fn recipes_list_write_and_make_jellies_from_any_directory() {
 
     let unknown = jelly(&["make", "x", "--recipe", "nope"]);
     assert!(!unknown.status.success());
-    assert!(String::from_utf8_lossy(&unknown.stderr).contains("there are map, monitor"), "{unknown:?}");
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("there are compare, map, monitor"), "{unknown:?}");
 
     let _ = daemon.kill();
     let _ = daemon.wait();

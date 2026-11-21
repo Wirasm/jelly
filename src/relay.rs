@@ -182,6 +182,12 @@ impl Relay {
         self.json(self.at("DELETE", share, &format!("/people?who={}", encode(who))), None).map(drop)
     }
 
+    /// Who holds a link, when each last opened one (`opened_ms`), how many of
+    /// their pages are open now (`here`), and when the share expires.
+    pub fn people(&self, share: &str) -> Result<Value, Fail> {
+        self.json(self.at("GET", share, "/people"), None)
+    }
+
     /// One change; returns the batch with its event.
     pub fn change(&self, share: &str, op: &Value) -> Result<Value, Fail> {
         self.json(self.at("POST", share, "/op"), Some(op))

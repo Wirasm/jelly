@@ -117,7 +117,7 @@ mod share_tests {
         store.answer("test:share", "a2", None, "captured answer", PERSON).unwrap();
         store.unask("test:share", "a3", "agent").unwrap();
         let (events, _) = broadcast::channel(16);
-        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default() }))
+        (dir, Arc::new(App { store: Mutex::new(store), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() }))
     }
 
     async fn exported(app: Shared) -> String {

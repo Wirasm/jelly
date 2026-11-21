@@ -97,6 +97,15 @@
   .ap-m.agent b { color: var(--accent-ink); }
   .ap-done { color: var(--muted); font-size: 12px; }
   .ap-reply { display: flex; gap: 6px; }
+  /* What is shared: who holds a link, whether they opened it, and a way to stop it. */
+  #shares:not([hidden]) + .me { margin-left: 0; }
+  #shares .dot { display: inline-block; margin-right: 6px; vertical-align: 1px; }
+  #sharepop { top: 50px; right: 12px; width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 70px); }
+  .sh-j { font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-right: auto; }
+  .sh-j:hover { color: var(--brand); }
+  .sh-p { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .sh-p .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .sh-p .ap-done { margin-right: auto; white-space: nowrap; }
   .askpop textarea, .ap-reply input { font: inherit; color: var(--ink); background: var(--page); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; min-width: 0; }
   .ap-reply input { flex: 1; }
   .askpop textarea { resize: vertical; min-height: 64px; }
@@ -213,6 +222,7 @@
 <div class="app" id="app">
   <div class="top">
     <svg class="logo" id="logo" width="28" height="28" viewBox="0 0 40 40" aria-label="jelly"><defs><radialGradient id="lg" cx="35%" cy="30%"><stop offset="0" stop-color="#ffb3cf"/><stop offset=".55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#d81b60"/></radialGradient></defs><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="url(#lg)"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><g class="eyes"><circle cx="16" cy="24" r="1.7" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.7" fill="#3b0a1e"/></g><path class="mouth" d="M18 27.5 Q20 29.3 22 27.5" stroke="#3b0a1e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg><b class="word">jelly</b><span class="dot" id="live" title="Connected"></span><nav class="projects" id="projects" aria-label="Projects"></nav>
+    <button class="me" id="shares" hidden title="What you are sharing, who opened it, and stop sharing"></button>
     <button class="me" id="me" title="Your name on what you do here, so others can tell who did what"></button>
     <span class="keys"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span><span><kbd>p</kbd> kept</span><span><kbd>a</kbd> asks</span></span>
   </div>
@@ -932,6 +942,68 @@
     applyFocus(s);
   });
   setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
+  // ---- shares: what is shared, who opened it, stop it --------------------------
+  let shares = [], sharepop = null;
+  const until = (ms) => { const d = Math.ceil((ms - Date.now()) / 86400000); return d > 1 ? `ends in ${d} days` : "ends within a day"; };
+  function drawShares() {
+    const here = shares.reduce((n, s) => n + s.people.reduce((m, p) => m + (p.here || 0), 0), 0);
+    $("shares").hidden = !shares.length;
+    $("shares").innerHTML = `<span class="dot${here ? " live" : ""}"></span>${shares.length} shared${here ? ` · ${here} here` : ""}`;
+    if (!sharepop) return;
+    if (!shares.length) return closeShares();
+    sharepop.innerHTML = `<div class="ap-h"><b>Shared</b><button class="btn quiet" data-close title="Close (Esc)">✕</button></div>` + shares.map((s, i) => `
+      <div class="ap-t">
+        <div class="sh-p"><span class="sh-j" data-open="${i}" title="Open ${esc(s.jelly)}">${esc(short(s.jelly))}</span>
+          <span class="ap-done">${s.expires_at ? until(s.expires_at) : ""}</span>
+          <button class="btn" data-stop="${i}">Stop sharing</button></div>
+        ${s.people.map((p, k) => `<div class="sh-p"><span class="dot${p.here ? " live" : ""}"></span>
+          <span class="who">${p.who ? esc(p.who) : "Anyone with the view-only link"}</span>
+          <span class="ap-done">${p.here ? "here now" : p.opened_ms ? `opened ${ago(p.opened_ms)}` : s.people_from === "relay" ? "not opened yet" : ""}${p.who && !p.can_act ? " · view only" : ""}</span>
+          ${s.links[p.who] ? `<button class="cp" data-copy="${i}:${k}">Copy link</button>` : ""}
+          <button class="cp" data-revoke="${i}:${k}">Stop</button></div>`).join("") || `<div class="ap-done">No links yet: only a PIN.</div>`}
+        ${s.people_from === "relay" ? "" : `<div class="ap-done">The relay did not answer, so who opened it is unknown.</div>`}
+      </div>`).join("");
+  }
+  async function loadShares() {
+    try { shares = await (await fetch("/api/shares")).json(); } catch { return; }
+    if (!Array.isArray(shares)) shares = [];
+    if (PROJECT) shares = shares.filter((s) => s.jelly.startsWith(PROJECT + ":"));
+    drawShares();
+  }
+  function closeShares() { sharepop?.remove(); sharepop = null; }
+  $("shares").onclick = (e) => {
+    e.stopPropagation();
+    if (sharepop) return closeShares();
+    sharepop = document.createElement("div");
+    sharepop.className = "askpop"; sharepop.id = "sharepop";
+    sharepop.onclick = async (e) => {
+      e.stopPropagation();
+      const b = e.target.closest("[data-close], [data-open], [data-stop], [data-copy], [data-revoke]");
+      if (!b) return;
+      if (b.dataset.close !== undefined) return closeShares();
+      if (b.dataset.open) { const name = shares[b.dataset.open].jelly; closeShares(); return openFull(name); }
+      const [i, k] = (b.dataset.stop ?? b.dataset.copy ?? b.dataset.revoke).split(":"), s = shares[i], p = s.people[k];
+      if (b.dataset.copy) {
+        await navigator.clipboard.writeText(s.links[p.who]);
+        b.textContent = "Copied"; b.classList.add("ok");
+        return;
+      }
+      const what = p ? `Stop ${p.who || "the view-only link"} on ${short(s.jelly)}? Their link stops working and their open page closes.`
+        : `Stop sharing ${short(s.jelly)}? Every link stops working. The jelly stays here with its last state.`;
+      if (!confirm(what)) return;
+      const r = await fetch(`/api/jellies/${enc(s.jelly)}/share${p ? `?to=${enc(p.who)}` : ""}`, { method: "DELETE" });
+      if (!r.ok) alert((await r.json().catch(() => ({}))).error || "Could not stop it.");
+      loadShares();
+    };
+    document.body.appendChild(sharepop);
+    drawShares();
+    loadShares();
+  };
+  addEventListener("click", () => closeShares());
+  addEventListener("keydown", (e) => { if (e.key === "Escape" && sharepop) closeShares(); });
+  // Who is here changes without any event reaching this page, so ask again now and then.
+  setInterval(loadShares, 20000);
+  loadShares();
   // Unnamed, everything this browser does is "person", as it always was.
   const drawMe = () => { $("me").textContent = jelly.person.name ? `You: ${jelly.person.name}` : "Set your name"; };
   $("me").onclick = () => {

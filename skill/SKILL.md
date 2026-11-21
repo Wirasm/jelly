@@ -11,6 +11,13 @@ diff, options side by side. Every jelly appears on the person's jelly page at
 http://127.0.0.1:7878. They click it, answer your questions and comment on any
 part of it, and you hear all of it.
 
+**A prototype looks like their product, not like jelly.** When you show a
+feature, a screen or a flow for the person's project, build it from that
+project's own stylesheets, tokens, components and markup. Read its DESIGN.md or
+component code first. jelly has no component library on purpose; what it gives
+you is frames, such as the `compare` recipe, that hold your screens and make
+them easy to walk through and act on.
+
 **Show, then let them react.** Do the thinking first: lay out the options, what
 each gains and costs, what each looks like, and which you recommend and why.
 Give at least two options, three or more when you can; a recommendation without
@@ -80,6 +87,7 @@ jelly look plan --compare v12       # what your change did since v12; --save NAM
 jelly look plan --text              # one width, no screenshot; --width 390 for one width with a png
 jelly look plan --poster            # save a screenshot as the jelly page's thumbnail
 jelly show plan                    # open it full size on their screen; `jelly show` closes it
+jelly show sketch.html             # one HTML file straight to their screen: a jelly named `sketch`, no verbs or state
 ```
 
 Run `jelly look` before you focus a jelly or ask about it, read its png, and fix
@@ -124,7 +132,7 @@ preview of each.
 
 ```bash
 jelly ask sharing --spec spec.json --json    # prints the round and a `since` token
-jelly hear --wait sharing --since seq:57 --json     # the next answer; repeat from its seq for the rest
+jelly hear --wait sharing --since seq:57 --json     # returns when they press Send; then `jelly hear` lists the answers
 ```
 
 ```json
@@ -149,8 +157,24 @@ open questions. When you acted on the answers: `jelly do sharing applied
 jelly hear                  # what they did in this project since you last asked
 jelly waiting               # asks that wait on them, and their comments, which wait on you
 jelly reply plan c3 "Split it into two steps." --resolve   # done; without --resolve the thread stays open
-jelly hear --wait plan --since seq:42 --timeout 60 --json         # block until someone else changes it
+jelly hear --wait plan              # returns when they press Send in plan: they are done for now
+jelly hear --wait plan --every --since seq:42 --timeout 60 --json   # returns on the first change by anyone but you
 ```
+
+**Let them hand the turn back.** Once the person has done anything in a jelly,
+it shows a Send button with a count ("3 changes · Send"). They work through the
+jelly, press it once, and a waiting `jelly hear --wait` returns. Start that wait
+in the background before you end your turn and it wakes you; then run `jelly
+hear` for what they did. Do not wake on every click: use `--every` only for a
+jelly where each change matters at once. A view can draw its own button: mark it
+`data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
+`jelly.person.onUnsent(fn)`). A view sends by itself when an action is the
+decision, as the compare recipe does on a pick. Move jelly's button with
+`:root { --jelly-send-inset: auto auto 78px 10px; }`.
+
+**Know if anyone is looking.** `jelly look` has a `screen` line, and `ask` and
+`show` say when nobody has the jelly open. Then say so in the terminal and give
+the address instead of waiting on a page nobody sees.
 
 A question the person asks about a whole jelly arrives like a comment, marked
 "on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.
@@ -191,6 +215,9 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
   competing explanations, and they say which they believe.
 - `monitor`: something that runs for minutes or hours. Live charts fed by
   `jelly do`, with pause, stop and limits your loop obeys.
+- `compare`: a prototype, a spike or a few takes on one feature. A frame
+  to switch version, walk each flow step by step, comment and pick one. The
+  screens use the project's own stylesheets and markup, never a jelly look.
 - `quiz`: several people answer in rounds against a clock while you run it.
   Join by name, vote, reveal, scores; you write later rounds from the answers.
 
@@ -205,6 +232,8 @@ jelly dev plan ./plan            # shape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
 jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
+jelly feed prs refresh --every 120 -- gh pr list --json number,title   # the daemon runs it on a timer and passes the JSON to the verb
+jelly feed prs --stop            # `jelly feed` lists feeds; `jelly look prs` says how the last run went
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly share plan --to ana@example.com   # a live link for Ana: she uses it from her phone, you hear person:ana@example.com
 jelly share plan --link          # a live view-only link: anyone watches, nobody acts
@@ -212,7 +241,7 @@ jelly share quiz --pin           # a room on a call: a 6-digit PIN and a join pa
 jelly unshare quiz --pin         # nobody new joins; people already in stay
 jelly unshare plan --to ana@example.com # only Ana's links stop (PIN joiners too); `jelly unshare plan` stops them all
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
-jelly keep plan                  # keep it; jellies nobody keeps are put away after a quiet week
+jelly keep plan                  # keep it; jellies nobody keeps are archived after a quiet week and removed 30 days later
 jelly rm plan
 ```
 

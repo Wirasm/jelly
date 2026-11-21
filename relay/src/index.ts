@@ -30,7 +30,7 @@ interface Env {
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 interface Comment { id: string; anchor: Json; text: string; by: string; at_ms: number; resolved: boolean; replies: { text: string; by: string; at_ms: number }[] }
 interface Ask { id: string; seen?: boolean; title: string; options?: { id: string }[]; group?: string | null; answer?: Json; unasked?: Json; [k: string]: Json | undefined }
-interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[] }
+interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[]; unsent?: number }
 interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; version: number; view_rev: number }
 type Op = { op: string; by?: string; [k: string]: any };
 /** Who a socket belongs to: the owner's daemon, or a link. */
@@ -41,7 +41,7 @@ const LINK = new RegExp(`^/j/(${SHARE})([A-Za-z0-9]{22})(/ws)?/?$`);
 const ASSET = new RegExp(`^/a/(${SHARE})/assets/([^/]+)$`);
 const OWNER = new RegExp(`^/api/live/(${SHARE})(/.*)?$`);
 /** What a link that may act can do. Everything else is the owner's. */
-const PERSON_OPS = ["do", "comment", "reply", "resolve", "answer"];
+const PERSON_OPS = ["do", "comment", "reply", "resolve", "answer", "send"];
 /** SQLite rows hold at most 2 MB, so assets are kept in parts. */
 const PART = 1 << 20;
 const MAX_DAYS = 365;
@@ -140,10 +140,19 @@ export class Live extends DurableObject<Env> {
     // share id does not leave an object with storage behind.
     const sql = ctx.storage.sql;
     if (!sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kv'").toArray().length) return;
+    this.columns();
     const doc = this.get("doc");
     this.doc = doc ? JSON.parse(doc) : undefined;
     this.share = this.get("share") ?? "";
     this.seq = sql.exec<{ s: number | null }>("SELECT MAX(seq) AS s FROM events").one().s ?? 0;
+  }
+
+  /** Columns added after the first relay: shares made before them get them here. */
+  private columns() {
+    const sql = this.ctx.storage.sql;
+    if (!sql.exec("SELECT 1 FROM pragma_table_info('people') WHERE name = 'opened_ms'").toArray().length) {
+      sql.exec("ALTER TABLE people ADD COLUMN opened_ms INTEGER");
+    }
   }
 
   private get(k: string): string | undefined {
@@ -241,6 +250,9 @@ export class Live extends DurableObject<Env> {
         comment(op.id).resolved = true;
         args = op.id;
         break;
+      case "send":
+        args = d.unsent ?? 0;
+        break;
       case "lock":
         args = { tries: op.tries };
         break;
@@ -248,6 +260,9 @@ export class Live extends DurableObject<Env> {
         throw new Refusal(`no such change: ${op.op}`);
     }
     if (bump) d.version++;
+    // What people did since they last pressed Send, as the daemon counts it.
+    if (op.op === "send") d.unsent = 0;
+    else if (by.startsWith("person") && PERSON_OPS.includes(op.op)) d.unsent = (d.unsent ?? 0) + 1;
     const ev: Ev = { seq: ++this.seq, at_ms: now, kind: op.op, by, version: d.version, view_rev: d.view_rev };
     if (verb !== undefined) ev.verb = verb;
     if (args !== undefined) ev.args = args;
@@ -327,7 +342,8 @@ export class Live extends DurableObject<Env> {
     if (kind === "owner") return this.owner(req, share, rest, url);
     if (kind === "assets") return this.doc ? this.asset(decodeURIComponent(rest)) : notFound();
     const [secret, ws] = rest.split("/");
-    const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number }>("SELECT who, can_act FROM people WHERE hash = ?", await sha256(secret)).toArray()[0];
+    const hash = await sha256(secret);
+    const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number }>("SELECT who, can_act FROM people WHERE hash = ?", hash).toArray()[0];
     if (ws !== "ws") return row ? new Response(shell(this.doc?.about ?? ""), { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
     if (req.headers.get("Upgrade") !== "websocket") return text("expected a WebSocket\n", 426);
     const [client, server] = Object.values(new WebSocketPair());
@@ -337,6 +353,8 @@ export class Live extends DurableObject<Env> {
       server.close(this.doc ? 4403 : 4404, this.doc ? "revoked" : "unshared");
       return new Response(null, { status: 101, webSocket: client });
     }
+    // The owner sees who has opened their link, and when they last did.
+    this.ctx.storage.sql.exec("UPDATE people SET opened_ms = ? WHERE hash = ?", Date.now(), hash);
     const seat: Seat = { owner: false, who: row.who, can_act: row.can_act === 1 };
     this.ctx.acceptWebSocket(server, [`p:${row.who}`]);
     server.serializeAttachment(seat);
@@ -385,6 +403,7 @@ export class Live extends DurableObject<Env> {
           CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, ev TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS people (hash TEXT PRIMARY KEY, who TEXT NOT NULL, can_act INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS assets (file TEXT NOT NULL, part INTEGER NOT NULL, type TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY (file, part));`);
+        this.columns();
         this.doc = doc;
         this.share = share;
         this.put("doc", JSON.stringify(doc));
@@ -404,6 +423,14 @@ export class Live extends DurableObject<Env> {
         this.admit(await sha256(p.secret), p.who, p.can_act);
         // A share lasts as long as its longest link.
         return Response.json({ expires_at: await this.extend(p.days) });
+      }
+      if (path === "people" && req.method === "GET") {
+        // One row per person, whatever number of links they hold: when they last
+        // opened one, and how many of their pages are open now.
+        const rows = sql.exec<{ who: string; can_act: number; opened_ms: number | null }>(
+          "SELECT who, MAX(can_act) AS can_act, MAX(opened_ms) AS opened_ms FROM people GROUP BY who ORDER BY who").toArray();
+        const people = rows.map((r) => ({ who: r.who, can_act: r.can_act === 1, opened_ms: r.opened_ms, here: this.ctx.getWebSockets(`p:${r.who}`).length }));
+        return Response.json({ people, expires_at: await this.ctx.storage.getAlarm() });
       }
       if (path === "people" && req.method === "DELETE") {
         const who = url.searchParams.get("who") ?? "";
