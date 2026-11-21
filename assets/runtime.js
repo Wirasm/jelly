@@ -225,8 +225,9 @@
   });
   else (function connect() {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
-    // The daemon tells an agent whether anyone has this jelly on screen.
-    const tell = () => { if (ws.readyState === 1 && !agentMode && !trial && !boot.past) ws.send(JSON.stringify({ open: boot.name, visible: document.visibilityState === "visible" })); };
+    // The daemon tells an agent whether anyone has this jelly on screen, and
+    // whether this browser may show a notification when nobody does.
+    const tell = () => { if (ws.readyState === 1 && !agentMode && !trial && !boot.past) ws.send(JSON.stringify({ open: boot.name, visible: document.visibilityState === "visible", notifies: typeof Notification !== "undefined" && Notification.permission === "granted" })); };
     addEventListener("visibilitychange", tell);
     ws.onopen = () => { if (dropped) reload(); tell(); };
     ws.onmessage = (m) => {

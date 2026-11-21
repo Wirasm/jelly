@@ -191,7 +191,8 @@ decision, as the compare recipe does on a pick. Move jelly's button with
 
 **Know if anyone is looking.** `jelly look` has a `screen` line, and `ask` and
 `show` say when nobody has the jelly open. Then say so in the terminal and give
-the address instead of waiting on a page nobody sees.
+the address instead of waiting on a page nobody sees. If `ask` says their
+browser showed a notification, the person has been told: wait for the answer.
 
 A question the person asks about a whole jelly arrives like a comment, marked
 "on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.

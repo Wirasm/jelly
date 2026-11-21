@@ -67,17 +67,31 @@ struct App {
     sharing: tokio::sync::Mutex<()>,
     /// The jelly each open browser page shows and whether its tab is in front,
     /// by socket. Memory only.
-    open: Mutex<std::collections::HashMap<u64, (String, bool)>>,
+    open: Mutex<std::collections::HashMap<u64, Open>>,
     /// How each jelly's feed last ran, by jelly. Memory only.
     feeds: Mutex<std::collections::HashMap<String, feed::FeedRun>>,
 }
 type Shared = Arc<App>;
 
+/// One open browser page: the jelly it shows, whether its tab is in front, and
+/// whether that browser may show notifications.
+struct Open {
+    name: String,
+    visible: bool,
+    notifies: bool,
+}
+
 impl App {
     /// How many browser pages have this jelly in front of someone right now.
     /// The jelly page counts for every jelly: it shows them all.
     fn visible(&self, name: &str) -> usize {
-        self.open.lock().expect("open lock").values().filter(|(n, visible)| *visible && (n == name || n == PAGE)).count()
+        self.open.lock().expect("open lock").values().filter(|o| o.visible && (o.name == name || o.name == PAGE)).count()
+    }
+
+    /// Whether an open jelly page shows a notification for a new ask. Only the
+    /// jelly page notifies, and only when its tab is not in front.
+    fn notifies(&self) -> bool {
+        self.open.lock().expect("open lock").values().any(|o| o.name == PAGE && !o.visible && o.notifies)
     }
 
     /// The jelly's share, when it is shared: then its relay holds the live copy.
@@ -612,7 +626,8 @@ async fn pump(app: Shared, mut socket: WebSocket, mut rx: broadcast::Receiver<Ev
                 Some(Ok(Message::Text(text))) => {
                     if let Ok(Value::Object(m)) = serde_json::from_str(&text) {
                         if let (Some(name), Some(visible)) = (m.get("open").and_then(Value::as_str), m.get("visible").and_then(Value::as_bool)) {
-                            app.open.lock().expect("open lock").insert(id, (name.into(), visible));
+                            let notifies = m.get("notifies").and_then(Value::as_bool).unwrap_or(false);
+                            app.open.lock().expect("open lock").insert(id, Open { name: name.into(), visible, notifies });
                         }
                     }
                 }

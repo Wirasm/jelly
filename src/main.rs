@@ -994,7 +994,9 @@ fn report_line(ev: &Value) -> String {
     let what = match ev["kind"].as_str().unwrap_or("") {
         "do" => format!("{} ran", s(&ev["verb"])),
         "ask" => format!("asked {} {:?}; {}. Answers arrive in `jelly hear`{}", s(&ev["args"]["id"]), s(&ev["args"]["title"]), shown(ev),
-            if ev["visible"] == 0 { ". Nobody has it on screen: tell the person, or `jelly show` it" } else { "" }),
+            if ev["visible"] != 0 { "" }
+            else if ev["notified"] == true { ". Nobody has it on screen, but their browser showed a notification" }
+            else { ". Nobody has it on screen: tell the person, or `jelly show` it" }),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
         "make" => "made".into(),
         k => k.to_string(),

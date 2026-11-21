@@ -46,6 +46,7 @@ pub(super) async fn ask(State(app): State<Shared>, Path(name): Path<String>, hea
     };
     let mut out = json!(ev);
     out["visible"] = json!(app.visible(&name));
+    out["notified"] = json!(app.notifies());
     // Tell the asker how the ask shows. The ask is made either way, and the
     // event that listeners and the log get is unchanged.
     let args = ev.args.unwrap_or_default();
