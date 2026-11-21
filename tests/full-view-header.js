@@ -19,7 +19,7 @@ async page => {
     };
     const open = async name => {
       await page.waitForFunction(() => pendingFocusWrites === 0);
-      await post('/api/jellies/page/call', {verb:'focus', args:{name}});
+      await post('/api/jellies/page/do', {verb:'focus', args:{name}});
       await page.locator('#full').waitFor({state:'visible'});
       await page.waitForFunction(name => document.querySelector('#full iframe')?.contentWindow.jelly?.name === name, name);
     };
@@ -63,7 +63,7 @@ async page => {
         for (const name of names) {
           await open(name);
           await geometry(`${width} normal ${name === names[0] ? 'metadata' : 'long metadata'}`, false);
-          await post(`/api/jellies/${name}/reshape`, {about:'A long weekly project plan title '.repeat(12)});
+          await post(`/api/jellies/${name}/shape`, {about:'A long weekly project plan title '.repeat(12)});
           await page.waitForFunction(() => document.querySelector('#ftitle').textContent.startsWith('A long'));
           await page.locator('#fpin').click();
           await page.waitForFunction(() => document.querySelector('#fpin').textContent === 'Unpin');
@@ -87,7 +87,7 @@ async page => {
             await page.waitForFunction(() => document.querySelector('#full iframe').contentDocument.querySelector('#target').classList.contains('jf-hover'));
             await page.keyboard.press('Escape');
             await page.waitForFunction(() => !document.querySelector('#fcomment').classList.contains('on'));
-            await post(`/api/jellies/${name}/call`, {verb:'increment',args:{}});
+            await post(`/api/jellies/${name}/do`, {verb:'increment',args:{}});
             await waitSaved(name,'count',1);
             await page.locator('#fundo').click();
             await waitSaved(name,'count',0);
@@ -110,7 +110,7 @@ async page => {
           await page.locator('#back').focus();
           await page.keyboard.press('Escape');
           await page.locator('#full').waitFor({state:'hidden'});
-          await post(`/api/jellies/${name}/reshape`, {about:'Weekly project plan'});
+          await post(`/api/jellies/${name}/shape`, {about:'Weekly project plan'});
         }
       }
       page.removeAllListeners("dialog");

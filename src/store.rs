@@ -19,8 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Undo keeps the last `UNDO_DEPTH` changes, and drops the oldest sooner once
 /// new steps together hold more than twice the state plus `UNDO_SLACK`, so a
 /// few whole-state `set`s cannot grow a jelly's file to many copies of its
-/// state. Converted legacy steps are exempt from the byte budget until new
-/// history displaces them. The newest step always stays: the last change can
+/// state. The newest step always stays: the last change can
 /// always be undone.
 const UNDO_DEPTH: usize = 100;
 const UNDO_SLACK: usize = 64 * 1024;
@@ -52,14 +51,14 @@ pub struct Jelly {
     pub verbs: String,
     pub state: Value,
     /// Bumps when the view, verbs or state change: a verb call, a set, an undo
-    /// or a reshape of the view or verbs. Comments, asks and other attention
+    /// or a shape of the view or verbs. Comments, asks and other attention
     /// leave it alone; an event's `seq` counts those.
     pub version: u64,
     /// Bumps when the view or verbs change; an open view reloads when it does.
     pub view_rev: u64,
-    pub pinned: bool,
+    pub kept: bool,
     pub made_by: String,
-    /// Who last reshaped it, if anyone. With `made_by` this says whose jelly it is (`owner`).
+    /// Who last shaped it, if anyone. With `made_by` this says whose jelly it is (`owner`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaped_by: Option<String>,
     pub updated_ms: u64,
@@ -72,15 +71,14 @@ pub struct Jelly {
     /// Hidden from the jelly page after a quiet week; any change brings it back.
     #[serde(default)]
     pub archived: bool,
-    /// Comments pinned to elements of the view. Kept apart from state: they are
+    /// Comments kept to elements of the view. Kept apart from state: they are
     /// about the jelly, not part of it, and undo does not touch them.
     #[serde(default)]
-    #[serde(alias = "feedback")]
     pub comments: Vec<Comment>,
     /// The asks the agent put in front of the person. Beside state like
     /// comments; undo does not touch them.
     #[serde(default)]
-    pub attention: Vec<Attention>,
+    pub asks: Vec<Ask>,
     /// Set while an agent says it is changing this jelly, so the person waits.
     #[serde(default)]
     pub working: Option<Value>,
@@ -94,8 +92,7 @@ pub struct Jelly {
 /// `seen`, a glance: "seen", or a word back. Asks made together, as one
 /// `jelly ask --spec` round, share a group.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(from = "AttentionOnDisk")]
-pub struct Attention {
+pub struct Ask {
     pub id: String,
     /// The person can answer with nothing, meaning "seen" (`jelly ask --seen`).
     #[serde(default)]
@@ -120,7 +117,7 @@ pub struct Attention {
     #[serde(default)]
     pub answer: Option<Answer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub withdrawn: Option<Stamp>,
+    pub unasked: Option<Stamp>,
 }
 
 /// Where a comment points, in words: its element's selector, or "the whole
@@ -141,13 +138,13 @@ impl Comment {
     }
 }
 
-impl Attention {
+impl Ask {
     pub fn is_open(&self) -> bool {
-        self.answer.is_none() && self.withdrawn.is_none()
+        self.answer.is_none() && self.unasked.is_none()
     }
 
     /// One line for agents, `a1 ask "Which order?" [a★/b] at #list`: `jelly look`
-    /// and `jelly attention` both use it. A seen ask shows `[seen]`.
+    /// and `jelly waiting` both use it. A seen ask shows `[seen]`.
     pub fn summary(&self) -> String {
         let opts = if self.seen { "seen".into() } else {
             self.options.iter().map(|o| format!("{}{}", o.id, if self.recommend.as_deref() == Some(o.id.as_str()) { "★" } else { "" })).collect::<Vec<_>>().join("/")
@@ -161,10 +158,10 @@ impl Attention {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AskOption {
     pub id: String,
-    #[serde(default, alias = "title")]
+    #[serde(default)]
     pub label: String,
     /// What picking it does, in a sentence.
-    #[serde(default, alias = "summary", skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub does: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gains: Vec<String>,
@@ -193,49 +190,6 @@ pub struct Answer {
 pub struct Stamp {
     pub by: String,
     pub at_ms: u64,
-}
-
-/// Reads items saved before withdrawals had their own field
-/// (`answer: {"withdrawn": true, …}`) and before `detail` became `context`.
-#[derive(Deserialize)]
-struct AttentionOnDisk {
-    id: String,
-    #[serde(default)]
-    seen: bool,
-    title: String,
-    #[serde(default, alias = "detail")]
-    context: String,
-    #[serde(default)]
-    anchor: Value,
-    #[serde(default)]
-    options: Vec<AskOption>,
-    #[serde(default)]
-    recommend: Option<String>,
-    #[serde(default)]
-    why: String,
-    #[serde(default)]
-    group: Option<String>,
-    by: String,
-    at_ms: u64,
-    #[serde(default)]
-    answer: Option<Value>,
-    #[serde(default)]
-    withdrawn: Option<Stamp>,
-}
-
-impl From<AttentionOnDisk> for Attention {
-    fn from(d: AttentionOnDisk) -> Self {
-        let mut withdrawn = d.withdrawn;
-        let answer = match d.answer {
-            Some(v) if v.get("withdrawn").is_some() => {
-                withdrawn = Some(Stamp { by: v["by"].as_str().unwrap_or("agent").into(), at_ms: v["at_ms"].as_u64().unwrap_or(0) });
-                None
-            }
-            Some(v) => serde_json::from_value(v).ok(),
-            None => None,
-        };
-        Attention { id: d.id, seen: d.seen, title: d.title, context: d.context, anchor: d.anchor, options: d.options, recommend: d.recommend, why: d.why, group: d.group, by: d.by, at_ms: d.at_ms, answer, withdrawn }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -269,12 +223,9 @@ pub struct Past {
 
 /// What it takes to go back one change. `state` turns the pretty-printed
 /// state after the change back into the one before; `view` and `verbs` hold
-/// what a reshape replaced, and are absent when it kept them.
+/// what a shape replaced, and are absent when it kept them.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct Step {
-    /// Existing snapshot history must survive upgrade, even above the new byte budget.
-    #[serde(default)]
-    legacy: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     state: Vec<Hunk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,8 +234,6 @@ struct Step {
     verbs: Option<String>,
     view_rev: u64,
     /// The jelly's version before the change, which this step goes back to.
-    /// 0 in steps saved before versions were kept.
-    #[serde(default)]
     version: u64,
 }
 
@@ -303,70 +252,18 @@ impl Step {
     }
 
     fn budget_bytes(&self) -> usize {
-        if self.legacy {
-            return 0;
-        }
         let lines: usize = self.state.iter().flat_map(|h| &h.lines).map(String::len).sum();
         lines + self.view.as_ref().map_or(0, String::len) + self.verbs.as_ref().map_or(0, String::len)
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(from = "EntryOnDisk")]
 struct Entry {
     jelly: Jelly,
     steps: Vec<Step>,
     /// The oldest version whose view, verbs and state `steps` can rebuild. Undo
     /// and dropped steps move it up: an undone change cannot be rebuilt.
     history_from: u64,
-}
-
-/// Reads jellies saved when undo kept a full copy of view, verbs and state per change.
-#[derive(Deserialize)]
-struct EntryOnDisk {
-    jelly: Jelly,
-    #[serde(default)]
-    undo: Vec<Snapshot>,
-    #[serde(default)]
-    steps: Vec<Step>,
-    /// Missing in jellies saved before versions were kept: only the current
-    /// version can be rebuilt.
-    history_from: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct Snapshot {
-    view: String,
-    verbs: String,
-    state: Value,
-    view_rev: u64,
-}
-
-impl From<EntryOnDisk> for Entry {
-    fn from(d: EntryOnDisk) -> Self {
-        let history_from = d.history_from.unwrap_or(d.jelly.version);
-        if d.undo.is_empty() {
-            return Entry { jelly: d.jelly, steps: d.steps, history_from };
-        }
-        // Oldest first: each snapshot is what the change after it replaced.
-        let mut entry = Entry { jelly: d.jelly, steps: Vec::new(), history_from };
-        for (i, snap) in d.undo.iter().enumerate() {
-            let (view, verbs, state) = match d.undo.get(i + 1) {
-                Some(next) => (&next.view, &next.verbs, &next.state),
-                None => (&entry.jelly.view, &entry.jelly.verbs, &entry.jelly.state),
-            };
-            let step = Step {
-                legacy: true,
-                state: state_step(state, &snap.state),
-                view: (snap.view != *view).then(|| snap.view.clone()),
-                verbs: (snap.verbs != *verbs).then(|| snap.verbs.clone()),
-                view_rev: snap.view_rev,
-                version: 0,
-            };
-            entry.steps.push(step);
-        }
-        entry
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -491,19 +388,18 @@ pub struct MirroredDoc {
     pub verbs: Option<String>,
     pub about: Option<String>,
     pub comments: Option<Vec<Comment>>,
-    pub attention: Option<Vec<Attention>>,
+    pub asks: Option<Vec<Ask>>,
 }
 
 /// Every kind of change. Adding one means adding it here and to `describe`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EventKind {
-    New,
-    Call,
-    Reshape,
+    Make,
+    Do,
+    Shape,
     Undo,
-    Pin,
-    #[serde(alias = "project")]
+    Keep,
     Move,
     Remove,
     Archive,
@@ -514,9 +410,9 @@ pub enum EventKind {
     Comment,
     Reply,
     Resolve,
-    Attention,
+    Ask,
     Answer,
-    Withdraw,
+    Unask,
     Set,
     /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
     Lock,
@@ -525,7 +421,7 @@ pub enum EventKind {
 impl EventKind {
     /// Things the person did that an agent should hear about.
     pub fn is_for_agent(self) -> bool {
-        matches!(self, EventKind::Call | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer)
+        matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer)
     }
 }
 
@@ -562,7 +458,7 @@ impl Event {
         let s = |v: &Value| v.as_str().unwrap_or("").to_string();
         let clip = |t: String| if t.chars().count() > 200 { format!("{}…", t.chars().take(200).collect::<String>()) } else { t };
         match self.kind {
-            EventKind::Call => {
+            EventKind::Do => {
                 let via = self.source.as_ref().and_then(|x| x["text"].as_str()).filter(|t| !t.is_empty()).map(|t| format!(" (via {t:?})")).unwrap_or_default();
                 format!("{} {}{via}", self.verb.as_deref().unwrap_or("?"), clip(a.to_string()))
             }
@@ -577,16 +473,16 @@ impl Event {
             EventKind::Reply => format!("replied on comment {}{}: {}", s(&a["id"]), if a["anchor"]["selector"].is_string() { "" } else { " (about the whole jelly)" }, clip(s(&a["text"]))),
             EventKind::Resolve => format!("resolved comment {}", s(&a)),
             EventKind::Undo => "undid the last state change".into(),
-            EventKind::Attention => format!("asked {:?}", s(&a["title"])),
-            EventKind::Withdraw => format!("withdrew {}", s(&a)),
+            EventKind::Ask => format!("asked {:?}", s(&a["title"])),
+            EventKind::Unask => format!("unasked {}", s(&a)),
             EventKind::Set => match s(&a["pointer"]).as_str() { "" => "set the whole state".into(), p => format!("set {p}") },
             EventKind::Working => match a.as_str() { Some(w) => format!("started working: {w}"), None => "finished working".into() },
             EventKind::Note => format!("left a note: {}", clip(s(&a))),
             EventKind::Move => format!("moved here from {}", s(&a["from"])),
-            EventKind::Pin => if a == Value::Bool(true) { "pinned it".into() } else { "unpinned it".into() },
+            EventKind::Keep => if a == Value::Bool(true) { "kept it".into() } else { "stopped keeping it".into() },
             EventKind::Asset => format!("{} {}", if a["removed"] == Value::Bool(true) { "removed" } else { "added" }, s(&a["file"])),
-            EventKind::New => "made it".into(),
-            EventKind::Reshape => "reshaped it".into(),
+            EventKind::Make => "made it".into(),
+            EventKind::Shape => "shaped it".into(),
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
@@ -607,7 +503,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::NotFound(n) => write!(f, "no jelly named {n}"),
-            Error::Exists(n) => write!(f, "a jelly named {n} already exists; reshape it or pass --replace"),
+            Error::Exists(n) => write!(f, "a jelly named {n} already exists; shape it or pass --replace"),
             Error::Invalid(m) => f.write_str(m),
         }
     }
@@ -713,7 +609,7 @@ impl Store {
     }
 
     #[allow(clippy::too_many_arguments)] // one call site per caller; a struct would only rename the arguments
-    pub fn create(
+    pub fn make(
         &mut self,
         name: &str,
         view: String,
@@ -732,7 +628,7 @@ impl Store {
             return Err(Error::Exists(name.into()));
         }
         verbs::check(&verbs_src).map_err(Error::Invalid)?;
-        let pinned = self.jellies.get(name).is_some_and(|e| e.jelly.pinned);
+        let kept = self.jellies.get(name).is_some_and(|e| e.jelly.kept);
         let jelly = Jelly {
             name: name.into(),
             view,
@@ -740,7 +636,7 @@ impl Store {
             state,
             version: 1,
             view_rev: 1,
-            pinned,
+            kept,
             made_by: by.into(),
             shaped_by: None,
             updated_ms: now_ms(),
@@ -748,20 +644,20 @@ impl Store {
             about: about.trim().into(),
             archived: false,
             comments: Vec::new(),
-            attention: Vec::new(),
+            asks: Vec::new(),
             working: None,
             notes: Vec::new(),
         };
         let previous_entry = self.jellies.insert(name.into(), Entry { jelly, steps: Vec::new(), history_from: 1 });
-        self.commit(name, EventKind::New, by, None, None, vec![String::new()], previous_entry)
+        self.commit(name, EventKind::Make, by, None, None, vec![String::new()], previous_entry)
     }
 
-    pub fn call(&mut self, name: &str, verb: &str, args: Value, by: &str) -> Result<Event, Error> {
-        self.call_from(name, verb, args, by, None)
+    pub fn do_verb(&mut self, name: &str, verb: &str, args: Value, by: &str) -> Result<Event, Error> {
+        self.do_verb_from(name, verb, args, by, None)
     }
 
     /// A verb call that also records the element the person used.
-    pub fn call_from(&mut self, name: &str, verb: &str, args: Value, by: &str, source: Option<Value>) -> Result<Event, Error> {
+    pub fn do_verb_from(&mut self, name: &str, verb: &str, args: Value, by: &str, source: Option<Value>) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
@@ -771,14 +667,14 @@ impl Store {
         entry.jelly.state = next;
         push_step(entry, step);
         self.source = source;
-        self.commit(name, EventKind::Call, by, Some(verb.into()), Some(args), changed, previous_entry)
+        self.commit(name, EventKind::Do, by, Some(verb.into()), Some(args), changed, previous_entry)
     }
 
     /// Replaces the view and/or verbs while keeping state. `about` alone only
     /// relabels the jelly; open views do not reload for it.
-    pub fn reshape(&mut self, name: &str, view: Option<String>, verbs_src: Option<String>, about: Option<String>, by: &str) -> Result<Event, Error> {
+    pub fn shape(&mut self, name: &str, view: Option<String>, verbs_src: Option<String>, about: Option<String>, by: &str) -> Result<Event, Error> {
         if view.is_none() && verbs_src.is_none() && about.is_none() {
-            return Err(Error::Invalid("reshape needs a new view, new verbs or a new about".into()));
+            return Err(Error::Invalid("shape needs a new view, new verbs or a new about".into()));
         }
         if let Some(src) = &verbs_src {
             verbs::check(src).map_err(|e| Error::Invalid(format!("new verbs rejected, jelly unchanged: {e}")))?;
@@ -796,7 +692,7 @@ impl Store {
             j.view_rev += 1;
             push_step(entry, step);
         }
-        self.commit(name, EventKind::Reshape, by, None, None, Vec::new(), previous_entry)
+        self.commit(name, EventKind::Shape, by, None, None, Vec::new(), previous_entry)
     }
 
     /// Writes state directly, outside the verbs: an agent fixing its own
@@ -924,14 +820,14 @@ impl Store {
         Ok(ev)
     }
 
-    /// Archives unpinned jellies nobody touched for `idle_ms`, unless they still
-    /// wait on the person (an open attention item or an open comment).
+    /// Archives jellies nobody keeps or touched for `idle_ms`, unless they still
+    /// wait on the person (an open ask or an open comment).
     pub fn sweep(&mut self, idle_ms: u64) -> Vec<Event> {
         let cutoff = now_ms().saturating_sub(idle_ms);
         let stale: Vec<String> = self.list()
-            .filter(|j| !j.pinned && !j.archived && j.name != PAGE && j.updated_ms < cutoff)
+            .filter(|j| !j.kept && !j.archived && j.name != PAGE && j.updated_ms < cutoff)
             .filter(|j| j.comments.iter().all(|f| f.resolved))
-            .filter(|j| j.attention.iter().all(|a| !a.is_open()))
+            .filter(|j| j.asks.iter().all(|a| !a.is_open()))
             .map(|j| j.name.clone())
             .collect();
         stale.iter().filter_map(|n| match self.set_archived(n, true, "jelly") {
@@ -1039,18 +935,18 @@ impl Store {
 
     /// Puts an ask in front of the person: `{"title", "seen"?, "context"?,
     /// "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
-    pub fn attend(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
-        let n = self.get(name)?.attention.len();
-        let item = attention_from(&spec, format!("a{}", n + 1), by)?;
+    pub fn ask(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
+        let n = self.get(name)?.asks.len();
+        let item = ask_from(&spec, format!("a{}", n + 1), by)?;
         let args = serde_json::to_value(&item).expect("serializes");
         let previous_entry = self.jellies.get(name).cloned();
-        self.entry(name)?.jelly.attention.push(item);
-        self.commit(name, EventKind::Attention, by, None, Some(args), Vec::new(), previous_entry)
+        self.entry(name)?.jelly.asks.push(item);
+        self.commit(name, EventKind::Ask, by, None, Some(args), Vec::new(), previous_entry)
     }
 
     /// One round of an ask: a set of questions the person answers together, on
     /// a jelly made for it (created with `view` and `verbs` if it does not
-    /// exist). Asking again starts a new round and withdraws what the last
+    /// exist). Asking again starts a new round and unasks what the last
     /// round left open. All or nothing: a bad question changes nothing.
     #[allow(clippy::too_many_arguments)]
     pub fn ask_round(&mut self, name: &str, spec: &Value, view: &str, verbs_src: &str, project: &str, by: &str) -> Result<Vec<Event>, BatchError> {
@@ -1064,7 +960,7 @@ impl Store {
         let exists = self.jellies.contains_key(&id);
         let round = if exists { self.get(&id)?.state["round"].as_u64().unwrap_or(0) + 1 } else { 1 };
         let group = format!("round-{round}");
-        let start = if exists { self.get(&id)?.attention.len() } else { 0 };
+        let start = if exists { self.get(&id)?.asks.len() } else { 0 };
         // Validate every question before touching anything.
         let mut items = Vec::new();
         for (i, q) in questions.iter().enumerate() {
@@ -1073,26 +969,26 @@ impl Store {
             q["title"] = q.get("question").cloned().or_else(|| q.get("title").cloned()).unwrap_or(Value::Null);
             q["group"] = group.clone().into();
             q["anchor"] = serde_json::json!({"selector": format!("#q-{qid}")});
-            items.push(attention_from(&q, format!("a{}", start + i + 1), by)?);
+            items.push(ask_from(&q, format!("a{}", start + i + 1), by)?);
         }
         let mut events = Vec::new();
         let result = (|| -> Result<(), Error> {
             if !exists {
-                events.push(self.create(&id, view.into(), verbs_src.into(), serde_json::json!({}), by, false, &title, "")?);
+                events.push(self.make(&id, view.into(), verbs_src.into(), serde_json::json!({}), by, false, &title, "")?);
             } else if self.get(&id)?.view != view {
-                events.push(self.reshape(&id, Some(view.into()), Some(verbs_src.into()), Some(title.clone()), by)?);
+                events.push(self.shape(&id, Some(view.into()), Some(verbs_src.into()), Some(title.clone()), by)?);
             }
-            let open: Vec<String> = self.get(&id)?.attention.iter().filter(|a| a.is_open()).map(|a| a.id.clone()).collect();
+            let open: Vec<String> = self.get(&id)?.asks.iter().filter(|a| a.is_open()).map(|a| a.id.clone()).collect();
             for a in open {
-                events.push(self.withdraw(&id, &a, by)?);
+                events.push(self.unask(&id, &a, by)?);
             }
             let setup = serde_json::json!({"title": title, "context": spec["context"], "round": round});
-            events.push(self.call(&id, "setup", setup, by)?);
+            events.push(self.do_verb(&id, "setup", setup, by)?);
             for item in items {
                 let args = serde_json::to_value(&item).expect("serializes");
                 let previous_entry = self.jellies.get(&id).cloned();
-                self.entry(&id)?.jelly.attention.push(item);
-                events.push(self.commit(&id, EventKind::Attention, by, None, Some(args), Vec::new(), previous_entry)?);
+                self.entry(&id)?.jelly.asks.push(item);
+                events.push(self.commit(&id, EventKind::Ask, by, None, Some(args), Vec::new(), previous_entry)?);
             }
             Ok(())
         })();
@@ -1107,9 +1003,9 @@ impl Store {
     pub fn answer(&mut self, name: &str, id: &str, option: Option<&str>, text: &str, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
-        let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
-        if item.withdrawn.is_some() {
-            return Err(Error::Invalid(format!("{id} was withdrawn")));
+        let item = entry.jelly.asks.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no ask {id}")))?;
+        if item.unasked.is_some() {
+            return Err(Error::Invalid(format!("{id} was unasked")));
         }
         if let Some(o) = option {
             if !item.options.iter().any(|x| x.id == o) {
@@ -1126,12 +1022,12 @@ impl Store {
     }
 
     /// The agent takes an item back, for example because it no longer applies.
-    pub fn withdraw(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
+    pub fn unask(&mut self, name: &str, id: &str, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
-        let item = entry.jelly.attention.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no attention item {id}")))?;
-        item.withdrawn = Some(Stamp { by: by.into(), at_ms: now_ms() });
-        self.commit(name, EventKind::Withdraw, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
+        let item = entry.jelly.asks.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Invalid(format!("{name} has no ask {id}")))?;
+        item.unasked = Some(Stamp { by: by.into(), at_ms: now_ms() });
+        self.commit(name, EventKind::Unask, by, None, Some(Value::String(id.into())), Vec::new(), previous_entry)
     }
 
     /// `Some("rebuilding the header")` while an agent works on the jelly, `None` when done.
@@ -1141,10 +1037,10 @@ impl Store {
         self.commit(name, EventKind::Working, by, None, what.map(|w| Value::String(w.into())), Vec::new(), previous_entry)
     }
 
-    pub fn pin(&mut self, name: &str, pinned: bool, by: &str) -> Result<Event, Error> {
+    pub fn keep(&mut self, name: &str, kept: bool, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
-        self.entry(name)?.jelly.pinned = pinned;
-        self.commit(name, EventKind::Pin, by, None, Some(Value::Bool(pinned)), Vec::new(), previous_entry)
+        self.entry(name)?.jelly.kept = kept;
+        self.commit(name, EventKind::Keep, by, None, Some(Value::Bool(kept)), Vec::new(), previous_entry)
     }
 
     pub fn remove(&mut self, name: &str, by: &str) -> Result<Event, Error> {
@@ -1179,9 +1075,9 @@ impl Store {
             step.verbs = replaced(&mut j.verbs, &doc.verbs);
             if let Some(a) = &doc.about { j.about = a.clone(); }
             if let Some(c) = &doc.comments { j.comments = c.clone(); }
-            if let Some(a) = &doc.attention { j.attention = a.clone(); }
+            if let Some(a) = &doc.asks { j.asks = a.clone(); }
         }
-        if ev.kind == EventKind::Reshape {
+        if ev.kind == EventKind::Shape {
             j.shaped_by = Some(ev.by.clone());
         }
         let moved = ev.version != j.version;
@@ -1215,8 +1111,8 @@ impl Store {
         previous: Option<Entry>,
     ) -> Result<Event, Error> {
         let entry = self.jellies.get_mut(name).expect("caller checked");
-        let reshaped = previous.as_ref().is_some_and(|p| p.jelly.view_rev != entry.jelly.view_rev);
-        if matches!(kind, EventKind::Call | EventKind::Set | EventKind::Undo) || (kind == EventKind::Reshape && reshaped) {
+        let shaped = previous.as_ref().is_some_and(|p| p.jelly.view_rev != entry.jelly.view_rev);
+        if matches!(kind, EventKind::Do | EventKind::Set | EventKind::Undo) || (kind == EventKind::Shape && shaped) {
             entry.jelly.version += 1;
         }
         self.record(name, kind, by, verb, args, changed, previous)
@@ -1625,12 +1521,12 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
 
 /// Names become file names and URL segments.
 /// An ask checked as `attend` checks it, for a shared jelly: its relay numbers it.
-pub fn ask_item(spec: &Value, by: &str) -> Result<Attention, Error> {
-    attention_from(spec, String::new(), by)
+pub fn ask_item(spec: &Value, by: &str) -> Result<Ask, Error> {
+    ask_from(spec, String::new(), by)
 }
 
-/// Builds an attention item from an agent's spec, checking it.
-fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error> {
+/// Builds an ask from an agent's spec, checking it.
+fn ask_from(spec: &Value, id: String, by: &str) -> Result<Ask, Error> {
     let seen = spec["seen"].as_bool().unwrap_or(false);
     let title = spec["title"].as_str().unwrap_or("").trim().to_string();
     if title.is_empty() {
@@ -1664,7 +1560,7 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
         }
     }
     let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
-    Ok(Attention {
+    Ok(Ask {
         id,
         seen,
         title,
@@ -1677,7 +1573,7 @@ fn attention_from(spec: &Value, id: String, by: &str) -> Result<Attention, Error
         by: by.into(),
         at_ms: now_ms(),
         answer: None,
-        withdrawn: None,
+        unasked: None,
     })
 }
 
@@ -1719,7 +1615,7 @@ impl Jelly {
         self.name.split_once(':').map_or("", |(p, _)| p)
     }
 
-    /// The agent whose jelly this is: whoever last reshaped it, else its maker.
+    /// The agent whose jelly this is: whoever last shaped it, else its maker.
     /// `--mine` keeps what happened on jellies whose owner is the reader's `--as` name.
     pub fn owner(&self) -> &str {
         self.shaped_by.as_deref().unwrap_or(&self.made_by)
@@ -1796,9 +1692,9 @@ mod tests {
     fn state_keeps_key_order() {
         let (dir, mut s) = store();
         let verbs = "const verbs = { add(state, { day }) { state.week[day] = 'soup'; } };";
-        s.create("j", "".into(), verbs.into(), json!({"week": {"Mon": "pasta", "Tue": "fish", "Wed": "curry"}}), "agent", false, "", "").unwrap();
-        s.call("j", "add", json!({"day": "Thu"}), "agent").unwrap();
-        s.call("j", "add", json!({"day": "Fri"}), "agent").unwrap();
+        s.make("j", "".into(), verbs.into(), json!({"week": {"Mon": "pasta", "Tue": "fish", "Wed": "curry"}}), "agent", false, "", "").unwrap();
+        s.do_verb("j", "add", json!({"day": "Thu"}), "agent").unwrap();
+        s.do_verb("j", "add", json!({"day": "Fri"}), "agent").unwrap();
         s.undo("j", "agent").unwrap();
         let keys = |s: &Store| s.get("j").unwrap().state["week"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
         assert_eq!(keys(&s), ["Mon", "Tue", "Wed", "Thu"]);
@@ -1811,9 +1707,9 @@ mod tests {
     fn unreadable_saved_entries_can_commit_and_roll_back() {
         use std::os::unix::fs::PermissionsExt;
         let (_dir, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.attend("j", json!({"title": "Which?"}), "agent").unwrap();
-        s.call("j", "label", json!({"id": "one", "value": "kept"}), "agent").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.ask("j", json!({"title": "Which?"}), "agent").unwrap();
+        s.do_verb("j", "label", json!({"id": "one", "value": "kept"}), "agent").unwrap();
         let path = s.path("j");
         let before = fs::read(&path).unwrap();
         for operation in ["answer", "call", "undo"] {
@@ -1822,7 +1718,7 @@ mod tests {
             s.log_failure = Some((s.seq + 1, 10));
             let result = match operation {
                 "answer" => s.answer("j", "a1", None, "yes", "person"),
-                "call" => s.call("j", "label", json!({"id": "one", "value": "lost"}), "person"),
+                "call" => s.do_verb("j", "label", json!({"id": "one", "value": "lost"}), "person"),
                 "undo" => s.undo("j", "person"),
                 _ => unreachable!(),
             };
@@ -1834,7 +1730,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
         let answer = s.answer("j", "a1", None, "yes", "person").unwrap();
         s.note("j", "later change", "agent").unwrap();
-        assert!(s.get("j").unwrap().attention[0].answer.is_some());
+        assert!(s.get("j").unwrap().asks[0].answer.is_some());
         let history = fs::read_to_string(s.events_path()).unwrap();
         let answers: Vec<Event> = history.lines().map(|line| serde_json::from_str::<Event>(line).unwrap())
             .filter(|event| event.kind == EventKind::Answer).collect();
@@ -1845,16 +1741,16 @@ mod tests {
     #[test]
     fn failed_log_preserves_compact_undo_and_event_indexes() {
         let (_dir, mut s) = store();
-        s.create("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.call("j", "label", json!({"id": "one", "value": "kept"}), "person").unwrap();
+        s.make("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.do_verb("j", "label", json!({"id": "one", "value": "kept"}), "person").unwrap();
         let before = fs::read(s.path("j")).unwrap();
         let history = serde_json::to_value(s.events_since(0).unwrap()).unwrap();
         let recent = serde_json::to_value(s.recent_events("j")).unwrap();
-        for operation in ["call", "reshape", "set", "undo"] {
+        for operation in ["call", "shape", "set", "undo"] {
             s.log_failure = Some((s.seq + 1, 10));
             let result = match operation {
-                "call" => s.call("j", "label", json!({"id": "one", "value": "lost"}), "person"),
-                "reshape" => s.reshape("j", Some("replacement".into()), Some("const verbs = {};".into()), None, "person"),
+                "call" => s.do_verb("j", "label", json!({"id": "one", "value": "lost"}), "person"),
+                "shape" => s.shape("j", Some("replacement".into()), Some("const verbs = {};".into()), None, "person"),
                 "set" => s.set_state("j", "", Some(json!({})), "person"),
                 "undo" => s.undo("j", "person"),
                 _ => unreachable!(),
@@ -1881,7 +1777,7 @@ mod tests {
     #[test]
     fn failed_log_restores_creation_replacement_move_and_assets() {
         let (dir, mut s) = store();
-        let created = s.create("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let created = s.make("j", "original".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         fs::create_dir_all(s.asset_dir("j")).unwrap();
         fs::write(s.asset_dir("j").join("file.txt"), "kept").unwrap();
         let path = s.events_path();
@@ -1889,8 +1785,8 @@ mod tests {
         for operation in ["create", "replace", "move", "new_asset", "replace_asset"] {
             s.log_failure = Some((s.seq + 1, 10));
             let result = match operation {
-                "create" => s.create("new", "".into(), VERBS.into(), json!({}), "agent", false, "", ""),
-                "replace" => s.create("j", "replacement".into(), VERBS.into(), json!({}), "agent", true, "", ""),
+                "create" => s.make("new", "".into(), VERBS.into(), json!({}), "agent", false, "", ""),
+                "replace" => s.make("j", "replacement".into(), VERBS.into(), json!({}), "agent", true, "", ""),
                 "move" => s.set_project("j", "other", "agent"),
                 "new_asset" => s.put_asset("j", "new.txt", b"new", "agent"),
                 "replace_asset" => s.put_asset("j", "file.txt", b"replacement", "agent"),
@@ -1928,22 +1824,22 @@ mod tests {
     #[test]
     fn a_missing_log_is_not_recreated_past_unread_events() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
         let reader = InboxReader::Named { name: "r".into() };
         consume_inbox(&mut s, "p", reader.clone()).unwrap();
-        let unread = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        let unread = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         let cursors = dir.path().join("inbox-readers.json");
         let saved = fs::read(&cursors).unwrap();
         let aside = dir.path().join("aside.jsonl");
         fs::rename(s.events_path(), &aside).unwrap();
-        assert!(s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).is_err());
+        assert!(s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).is_err());
         assert!(!s.events_path().exists());
         assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
         assert_eq!(fs::read(&cursors).unwrap(), saved);
         fs::rename(&aside, s.events_path()).unwrap();
         let events = consume_inbox(&mut s, "p", reader.clone()).unwrap();
         assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), [unread.seq]);
-        let next = s.call("p:sample", "label", json!({"id": "c", "value": "z"}), PERSON).unwrap();
+        let next = s.do_verb("p:sample", "label", json!({"id": "c", "value": "z"}), PERSON).unwrap();
         assert!(next.seq > unread.seq + 1);
         assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [next.seq]);
         assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
@@ -1955,8 +1851,8 @@ mod tests {
         assert!(!dir.path().join("events.jsonl").exists());
         let reader = InboxReader::Named { name: "r".into() };
         assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
-        let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let event = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [event.seq]);
     }
 
@@ -1973,7 +1869,7 @@ mod tests {
     #[test]
     fn inbox_startup_refuses_unterminated_event_log() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
         let reader = InboxReader::Named { name: "existing".into() };
         consume_inbox(&mut s, "p", reader).unwrap();
         let saved = fs::read(dir.path().join("inbox-readers.json")).unwrap();
@@ -1995,7 +1891,7 @@ mod tests {
     fn inbox_accepted_log_remains_readable_after_append_and_restart() {
         for ending in [None, Some("\n"), Some("\r\n")] {
             let (dir, mut s) = store();
-            s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+            s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
             let log = fs::read_to_string(s.events_path()).unwrap();
             let log = ending.map_or_else(String::new, |ending| format!("{}{ending}", log.trim_end()));
             fs::write(s.events_path(), log).unwrap();
@@ -2004,7 +1900,7 @@ mod tests {
             for reader in &readers {
                 assert!(consume_inbox(&mut s, "p", reader.clone()).unwrap().is_empty());
             }
-            let event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+            let event = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
             let mut s = Store::open(dir.path()).unwrap();
             for reader in &readers {
                 let events = consume_inbox(&mut s, "p", reader.clone()).unwrap();
@@ -2021,8 +1917,8 @@ mod tests {
     #[test]
     fn inbox_startup_validates_every_event_before_recovering_sequence() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
-        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         event.state = None;
         let reader = InboxReader::Named { name: "existing".into() };
         consume_inbox(&mut s, "p", reader.clone()).unwrap();
@@ -2057,7 +1953,7 @@ mod tests {
         older.seq -= 1;
         fs::write(s.events_path(), format!("{valid}\n{}\n", serde_json::to_string(&older).unwrap())).unwrap();
         let mut s = Store::open(dir.path()).unwrap();
-        let next = s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let next = s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
         assert_eq!(next.seq, event.seq + 1);
         assert_eq!(consume_inbox(&mut s, "p", reader).unwrap()[0].seq, next.seq);
     }
@@ -2065,8 +1961,8 @@ mod tests {
     #[test]
     fn inbox_positions_preserve_filters_and_initial_window() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
-        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         let reader = InboxReader::Named { name: "a".into() };
         let mut events = Vec::new();
         let mut push = |e: &Event| events.push(serde_json::to_string(e).unwrap());
@@ -2091,7 +1987,7 @@ mod tests {
         push(&event);
         event.seq = 7;
         event.jelly = "other:sample".into();
-        event.kind = EventKind::Call;
+        event.kind = EventKind::Do;
         push(&event);
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
         let mut s = Store::open(dir.path()).unwrap();
@@ -2126,8 +2022,8 @@ mod tests {
     #[test]
     fn inbox_initial_window_stays_fixed_until_commit() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
-        let mut event = s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let mut event = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         event.state = None;
         let reader = InboxReader::Named { name: "retry".into() };
         let first_read_at = 7_200_000;
@@ -2169,7 +2065,7 @@ mod tests {
     fn inbox_mine_shows_each_agent_its_own_jellies_without_moving_the_full_inbox() {
         let (_dir, mut s) = store();
         for (name, agent) in [("a", "ana"), ("b", "bo")] {
-            s.create(name, "".into(), VERBS.into(), json!({"labels": {}}), agent, false, "", "p").unwrap();
+            s.make(name, "".into(), VERBS.into(), json!({"labels": {}}), agent, false, "", "p").unwrap();
         }
         let named = |name: &str| InboxReader::Named { name: name.into() };
         let mine = |agent: &str| InboxRequest { mine: Some(agent.into()), ..req("p", &named(agent)) };
@@ -2178,8 +2074,8 @@ mod tests {
             consume(&mut s, mine(agent)).unwrap();
             consume_inbox(&mut s, "p", named(agent)).unwrap();
         }
-        s.call("p:a", "label", json!({"id": "x", "value": "1"}), PERSON).unwrap();
-        s.call("p:b", "label", json!({"id": "y", "value": "2"}), PERSON).unwrap();
+        s.do_verb("p:a", "label", json!({"id": "x", "value": "1"}), PERSON).unwrap();
+        s.do_verb("p:b", "label", json!({"id": "y", "value": "2"}), PERSON).unwrap();
 
         assert_eq!(jellies(consume(&mut s, mine("ana")).unwrap()), ["p:a"]);
         assert_eq!(jellies(consume(&mut s, mine("bo")).unwrap()), ["p:b"]);
@@ -2188,8 +2084,8 @@ mod tests {
         assert_eq!(jellies(consume_inbox(&mut s, "p", named("ana")).unwrap()), ["p:a", "p:b"]);
 
         // Reshaping hands the jelly to the reshaper.
-        s.reshape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
-        s.call("p:a", "label", json!({"id": "z", "value": "3"}), PERSON).unwrap();
+        s.shape("p:a", Some("<p>v2</p>".into()), None, None, "bo").unwrap();
+        s.do_verb("p:a", "label", json!({"id": "z", "value": "3"}), PERSON).unwrap();
         assert!(consume(&mut s, mine("ana")).unwrap().is_empty());
         assert_eq!(jellies(consume(&mut s, mine("bo")).unwrap()), ["p:a"]);
         assert_eq!(jellies(consume_inbox(&mut s, "p", named("ana")).unwrap()), ["p:a"]);
@@ -2198,11 +2094,11 @@ mod tests {
     #[test]
     fn inbox_reads_back_only_to_the_readers_position() {
         let (_dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
-        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
         let reader = InboxReader::Named { name: "a".into() };
         consume_inbox(&mut s, "p", reader.clone()).unwrap();
-        let event = s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let event = s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
         // Lines older than the position are never parsed, so damage there goes unread.
         let log = fs::read_to_string(s.events_path()).unwrap();
         let rest = log.split_once('\n').unwrap().1;
@@ -2213,14 +2109,14 @@ mod tests {
     #[test]
     fn inbox_malformed_events_do_not_consume() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
         let existing = InboxReader::Named { name: "existing".into() };
         let new = InboxReader::Named { name: "new".into() };
         for project in ["p", ""] {
             consume_inbox(&mut s, project, existing.clone()).unwrap();
         }
-        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
-        s.call("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
         let path = dir.path().join("inbox-readers.json");
         let saved = fs::read(&path).unwrap();
         let log = fs::read_to_string(s.events_path()).unwrap();
@@ -2246,10 +2142,10 @@ mod tests {
     #[test]
     fn inbox_storage_failures_do_not_consume() {
         let (dir, mut s) = store();
-        s.create("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
         let reader = InboxReader::Named { name: "a".into() };
         consume_inbox(&mut s, "p", reader.clone()).unwrap();
-        s.call("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         let path = dir.path().join("inbox-readers.json");
         let saved = fs::read(&path).unwrap();
         fs::write(&path, "broken").unwrap();
@@ -2293,15 +2189,15 @@ mod tests {
     #[test]
     fn earlier_versions_rebuild_from_undo_steps() {
         let (dir, mut s) = store();
-        s.create("j", "<p>one</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.call("j", "label", json!({"id": "a", "value": "x"}), "agent").unwrap(); // v2
+        s.make("j", "<p>one</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.do_verb("j", "label", json!({"id": "a", "value": "x"}), "agent").unwrap(); // v2
         let ev = s.comment("j", json!({"selector": "p"}), "hm", "person").unwrap();
         assert_eq!(ev.version, 2, "a comment is not a version");
-        let ev = s.attend("j", json!({"title": "Seen it?", "seen": true}), "agent").unwrap();
+        let ev = s.ask("j", json!({"title": "Seen it?", "seen": true}), "agent").unwrap();
         assert_eq!(ev.version, 2, "an ask is not a version");
-        s.reshape("j", None, None, Some("relabelled".into()), "agent").unwrap();
+        s.shape("j", None, None, Some("relabelled".into()), "agent").unwrap();
         assert_eq!(s.get("j").unwrap().version, 2, "a new about line is not a version");
-        s.reshape("j", Some("<p>two</p>".into()), None, None, "agent").unwrap(); // v3
+        s.shape("j", Some("<p>two</p>".into()), None, None, "agent").unwrap(); // v3
         let at = |s: &Store, v| s.at_version("j", v).map(|p| (p.view, p.state));
         assert_eq!(at(&s, 1).unwrap(), ("<p>one</p>".into(), json!({"labels": {}})));
         assert_eq!(at(&s, 2).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
@@ -2314,23 +2210,14 @@ mod tests {
         assert_eq!(at(&s, 4).unwrap(), ("<p>one</p>".into(), json!({"labels": {"a": "x"}})));
         assert!(at(&s, 3).unwrap_err().to_string().contains("starts at v4"), "v3 was undone");
         assert!(at(&s, 1).is_err(), "before an undo, versions are ambiguous");
-
-        // Saved before steps had versions: only the current version.
-        let path = s.path("j");
-        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        saved.as_object_mut().unwrap().remove("history_from");
-        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
-        drop(s);
-        let s = Store::open(dir.path()).unwrap();
-        assert!(at(&s, 4).is_ok() && at(&s, 2).is_err());
     }
 
     #[test]
     fn dropped_undo_steps_end_the_rebuildable_history() {
         let (_d, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         for i in 0..=UNDO_DEPTH {
-            s.call("j", "label", json!({"id": "n", "value": i}), "agent").unwrap();
+            s.do_verb("j", "label", json!({"id": "n", "value": i}), "agent").unwrap();
         }
         assert!(s.at_version("j", 1).is_err());
         assert_eq!(s.at_version("j", 2).unwrap().state, json!({"labels": {"n": 0}}));
@@ -2339,7 +2226,7 @@ mod tests {
     #[test]
     fn agents_set_state_directly_and_can_undo_it() {
         let (_d, mut s) = store();
-        s.create("doc", "".into(), "const verbs = {};".into(), json!({"title": "Old", "items": [1, 2], "stale": true}), "agent", false, "", "").unwrap();
+        s.make("doc", "".into(), "const verbs = {};".into(), json!({"title": "Old", "items": [1, 2], "stale": true}), "agent", false, "", "").unwrap();
         let ev = s.set_state("doc", "/title", Some(json!("New")), "agent").unwrap();
         assert_eq!((ev.kind, ev.changed.clone()), (EventKind::Set, vec!["/title".to_string()]));
         s.set_state("doc", "/stale", None, "agent").unwrap();
@@ -2356,19 +2243,19 @@ mod tests {
     #[test]
     fn calls_reshape_and_undo_keep_state_and_history() {
         let (_d, mut s) = store();
-        s.create("labeler", "<p>v1</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("labeler", "<p>v1</p>".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
 
-        let ev = s.call("labeler", "label", json!({"id": "c14", "value": "fail"}), "person").unwrap();
+        let ev = s.do_verb("labeler", "label", json!({"id": "c14", "value": "fail"}), "person").unwrap();
         assert_eq!((ev.by.as_str(), ev.changed.clone(), ev.version), ("person", vec!["/labels/c14".to_string()], 2));
 
-        let ev = s.reshape("labeler", Some("<p>v2</p>".into()), None, None, "agent").unwrap();
+        let ev = s.shape("labeler", Some("<p>v2</p>".into()), None, None, "agent").unwrap();
         assert_eq!(ev.view_rev, 2);
-        assert_eq!(s.get("labeler").unwrap().state, json!({"labels": {"c14": "fail"}}), "reshape keeps state");
+        assert_eq!(s.get("labeler").unwrap().state, json!({"labels": {"c14": "fail"}}), "shape keeps state");
 
         let ev = s.undo("labeler", "person").unwrap();
         let j = s.get("labeler").unwrap();
         assert_eq!(j.view, "<p>v1</p>");
-        assert_eq!(ev.view_rev, 3, "undoing a reshape is a new view revision");
+        assert_eq!(ev.view_rev, 3, "undoing a shape is a new view revision");
         assert_eq!(j.state, json!({"labels": {"c14": "fail"}}));
 
         s.undo("labeler", "person").unwrap();
@@ -2379,19 +2266,19 @@ mod tests {
     #[test]
     fn bad_verbs_never_replace_good_ones() {
         let (_d, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let err = s.reshape("j", None, Some("const verbs = {".into()), None, "agent").unwrap_err();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let err = s.shape("j", None, Some("const verbs = {".into()), None, "agent").unwrap_err();
         assert!(matches!(err, Error::Invalid(m) if m.contains("unchanged")));
         assert_eq!(s.get("j").unwrap().verbs, VERBS);
-        assert!(s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").is_err());
-        assert!(s.create("../x", "".into(), VERBS.into(), json!({}), "agent", false, "", "").is_err());
+        assert!(s.make("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").is_err());
+        assert!(s.make("../x", "".into(), VERBS.into(), json!({}), "agent", false, "", "").is_err());
     }
 
     #[test]
     fn comments_sit_beside_state_and_survive_undo() {
         let (_d, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.call("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.do_verb("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
         let ev = s.comment("j", json!({"selector": "#a"}), "too small", "person").unwrap();
         assert_eq!((ev.kind, ev.args.clone().unwrap()["id"].clone()), (EventKind::Comment, json!("c1")));
         s.undo("j", "person").unwrap();
@@ -2406,8 +2293,8 @@ mod tests {
     #[test]
     fn names_are_unique_per_project() {
         let (_d, mut s) = store();
-        s.create("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "archon").unwrap();
-        s.create("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "jelly").unwrap();
+        s.make("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "archon").unwrap();
+        s.make("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "jelly").unwrap();
         assert_eq!(s.get("archon:plan").unwrap().project(), "archon");
         s.put_asset("archon:plan", "shot.png", b"png", "agent").unwrap();
         let ev = s.set_project("archon:plan", "rex", "person").unwrap();
@@ -2416,13 +2303,13 @@ mod tests {
         assert_eq!(s.assets("rex:plan"), ["shot.png"], "assets move with the jelly");
         assert!(s.set_project("rex:plan", "jelly", "person").is_err(), "jelly:plan exists");
         assert!(s.put_asset("rex:plan", "../x", b"", "agent").is_err());
-        assert!(s.create("k", "".into(), VERBS.into(), json!({}), "agent", false, "", "Bad Project").is_err());
+        assert!(s.make("k", "".into(), VERBS.into(), json!({}), "agent", false, "", "Bad Project").is_err());
     }
 
     #[test]
     fn asset_names_reject_what_windows_cannot_store() {
         let (_d, mut s) = store();
-        s.create("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.make("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         for name in ["NUL", "con.txt", "COM1", "lpt9.png", "a.", "notes.."] {
             let saved = s.put_asset("plan", name, b"x", "agent");
             assert_eq!(saved.is_err(), cfg!(windows), "{name}: {saved:?}");
@@ -2433,75 +2320,73 @@ mod tests {
     }
 
     #[test]
-    fn attention_items_are_answered_beside_state() {
+    fn asks_are_answered_beside_state() {
         let (_d, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         let spec = json!({"title": "Which header?", "options": [{"id": "a", "label": "Bold"}, {"id": "b", "label": "Quiet"}], "recommend": "b", "why": "Calmer"});
-        s.attend("j", spec, "claude").unwrap();
-        s.attend("j", json!({"seen": true, "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
-        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "z"}), "claude").is_err());
+        s.ask("j", spec, "claude").unwrap();
+        s.ask("j", json!({"seen": true, "title": "Check the footer", "anchor": {"selector": "#f"}}), "claude").unwrap();
+        assert!(s.ask("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "z"}), "claude").is_err());
         // A recommendation needs alternatives and a reason.
-        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "a", "why": "only one"}), "claude").is_err());
-        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a"}), "claude").is_err());
-        assert!(s.attend("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a", "why": " "}), "claude").is_err());
-        assert!(s.attend("j", json!({"seen": true, "title": "x", "options": [{"id": "a"}]}), "claude").is_err(), "a seen ask has no options");
+        assert!(s.ask("j", json!({"title": "x", "options": [{"id": "a"}], "recommend": "a", "why": "only one"}), "claude").is_err());
+        assert!(s.ask("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a"}), "claude").is_err());
+        assert!(s.ask("j", json!({"title": "x", "options": [{"id": "a"}, {"id": "b"}], "recommend": "a", "why": " "}), "claude").is_err());
+        assert!(s.ask("j", json!({"seen": true, "title": "x", "options": [{"id": "a"}]}), "claude").is_err(), "a seen ask has no options");
         assert!(s.answer("j", "a1", Some("c"), "", "person").is_err(), "not an option");
         assert!(s.answer("j", "a1", None, " ", "person").is_err(), "an ask needs something");
         let ev = s.answer("j", "a1", Some("b"), "but larger", "person").unwrap();
         assert_eq!(ev.args.unwrap()["option"], "b");
-        assert_eq!(s.get("j").unwrap().attention[0].answer.as_ref().unwrap().text, "but larger");
+        assert_eq!(s.get("j").unwrap().asks[0].answer.as_ref().unwrap().text, "but larger");
         s.answer("j", "a2", None, "", "person").unwrap();
-        assert!(s.get("j").unwrap().attention.iter().all(|a| !a.is_open()));
-        s.attend("j", json!({"title": "Still needed?"}), "claude").unwrap();
-        s.withdraw("j", "a3", "claude").unwrap();
-        assert!(!s.get("j").unwrap().attention[2].is_open());
-        assert!(s.answer("j", "a3", None, "yes", "person").is_err(), "withdrawn items can't be answered");
+        assert!(s.get("j").unwrap().asks.iter().all(|a| !a.is_open()));
+        s.ask("j", json!({"title": "Still needed?"}), "claude").unwrap();
+        s.unask("j", "a3", "claude").unwrap();
+        assert!(!s.get("j").unwrap().asks[2].is_open());
+        assert!(s.answer("j", "a3", None, "yes", "person").is_err(), "unasked items can't be answered");
         s.undo("j", "person").ok();
-        assert!(s.get("j").unwrap().attention[0].answer.is_some(), "undo leaves answers alone");
-        let old: Attention = serde_json::from_value(json!({"id": "a9", "kind": "ask", "title": "t", "detail": "d", "by": "x", "at_ms": 1, "answer": {"withdrawn": true, "by": "x", "at_ms": 2}})).unwrap();
-        assert!(old.withdrawn.is_some() && old.answer.is_none() && old.context == "d", "old files still load");
+        assert!(s.get("j").unwrap().asks[0].answer.is_some(), "undo leaves answers alone");
     }
 
     const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
 
     #[test]
-    fn an_ask_round_is_attention_items_and_a_new_round_replaces_open_ones() {
+    fn a_new_ask_round_replaces_the_open_asks_of_the_last() {
         let (_d, mut s) = store();
         let spec = json!({"title": "Sharing", "context": "why", "questions": [
-            {"id": "host", "question": "Where?", "recommend": "w", "why": "cheap", "options": [{"id": "w", "title": "Worker", "summary": "A relay", "gains": ["free"]}, {"id": "s", "title": "Static"}]},
-            {"id": "who", "question": "Who?", "options": [{"id": "l", "title": "Link"}]}]});
+            {"id": "host", "question": "Where?", "recommend": "w", "why": "cheap", "options": [{"id": "w", "label": "Worker", "does": "A relay", "gains": ["free"]}, {"id": "s", "label": "Static"}]},
+            {"id": "who", "question": "Who?", "options": [{"id": "l", "label": "Link"}]}]});
         let evs = s.ask_round("sharing", &spec, "<p>ask</p>", ASK_VERBS, "jelly", "claude").unwrap();
         assert_eq!(evs[0].jelly, "jelly:sharing");
         let j = s.get("jelly:sharing").unwrap();
         assert_eq!((j.state["round"].clone(), j.about.as_str()), (json!(1), "Sharing"));
-        assert_eq!(j.attention.len(), 2);
-        let host = &j.attention[0];
+        assert_eq!(j.asks.len(), 2);
+        let host = &j.asks[0];
         assert_eq!((host.options[0].label.as_str(), host.options[0].does.as_str(), host.group.as_deref()), ("Worker", "A relay", Some("round-1")));
         assert_eq!(host.anchor["selector"], "#q-host");
         s.answer("jelly:sharing", "a1", Some("w"), "only if it stays private", "person").unwrap();
 
         let bad = json!({"questions": [{"question": "Ok?", "options": [{"id": "a"}]}, {"question": "", "options": []}]});
         assert!(s.ask_round("sharing", &bad, "<p>ask</p>", ASK_VERBS, "jelly", "claude").is_err());
-        assert_eq!(s.get("jelly:sharing").unwrap().attention.len(), 2, "a bad round changes nothing");
+        assert_eq!(s.get("jelly:sharing").unwrap().asks.len(), 2, "a bad round changes nothing");
 
         s.ask_round("sharing", &json!({"question": "And now?", "options": [{"id": "y", "title": "Yes"}]}), "<p>ask</p>", ASK_VERBS, "jelly", "claude").unwrap();
         let j = s.get("jelly:sharing").unwrap();
         assert_eq!(j.state["round"], 2);
-        assert!(j.attention[0].answer.is_some(), "answers stay");
-        assert!(j.attention[1].withdrawn.is_some(), "what the last round left open is withdrawn");
-        assert_eq!(j.attention[2].group.as_deref(), Some("round-2"));
+        assert!(j.asks[0].answer.is_some(), "answers stay");
+        assert!(j.asks[1].unasked.is_some(), "what the last round left open is unasked");
+        assert_eq!(j.asks[2].group.as_deref(), Some("round-2"));
     }
 
     #[test]
     fn verb_calls_remember_their_source_and_seq_survives_restart() {
         let (dir, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let ev = s.call_from("j", "label", json!({"id": "a", "value": "x"}), "person", Some(json!({"selector": "#pick-b"}))).unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let ev = s.do_verb_from("j", "label", json!({"id": "a", "value": "x"}), "person", Some(json!({"selector": "#pick-b"}))).unwrap();
         assert_eq!(ev.source.unwrap()["selector"], "#pick-b");
-        let seq = s.call("j", "label", json!({"id": "a", "value": "y"}), "agent").unwrap().seq;
+        let seq = s.do_verb("j", "label", json!({"id": "a", "value": "y"}), "agent").unwrap().seq;
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
-        let next = s.call("j", "label", json!({"id": "a", "value": "z"}), "agent").unwrap();
+        let next = s.do_verb("j", "label", json!({"id": "a", "value": "z"}), "agent").unwrap();
         assert_eq!(next.seq, seq + 1);
         assert!(next.source.is_none());
     }
@@ -2509,24 +2394,24 @@ mod tests {
     #[test]
     fn quiet_jellies_archive_and_come_back_on_change() {
         let (_d, mut s) = store();
-        s.create("old", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.create("kept", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
-        s.pin("kept", true, "person").unwrap();
-        s.create("asked", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.make("old", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("kept", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.keep("kept", true, "person").unwrap();
+        s.make("asked", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         s.comment("asked", json!({}), "why?", "person").unwrap();
         let swept: Vec<String> = s.sweep(0).into_iter().map(|e| e.jelly).collect();
-        assert_eq!(swept, ["old"], "pinned and open-comment jellies stay");
+        assert_eq!(swept, ["old"], "kept and open-comment jellies stay");
         assert!(s.get("old").unwrap().archived);
-        s.call("old", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
+        s.do_verb("old", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
         assert!(!s.get("old").unwrap().archived, "a change brings it back");
     }
 
     #[test]
     fn replies_thread_under_a_comment() {
         let (_d, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         s.comment("j", json!({"selector": "#a"}), "split this", "person").unwrap();
-        s.reply("j", "c1", "Done, reshaped v2", "claude", true).unwrap();
+        s.reply("j", "c1", "Done, shaped v2", "claude", true).unwrap();
         assert!(s.get("j").unwrap().comments[0].resolved);
         s.reply("j", "c1", "not quite", "person", false).unwrap();
         let f = &s.get("j").unwrap().comments[0];
@@ -2538,10 +2423,10 @@ mod tests {
     #[test]
     fn a_named_person_is_heard_as_a_person_under_their_name() {
         let (_d, mut s) = store();
-        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let named = s.call("p:j", "label", json!({"id": "a", "value": "x"}), "person:ana").unwrap();
-        let unnamed = s.call("p:j", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
-        let agent = s.call("p:j", "label", json!({"id": "c", "value": "z"}), "personal-bot").unwrap();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let named = s.do_verb("p:j", "label", json!({"id": "a", "value": "x"}), "person:ana").unwrap();
+        let unnamed = s.do_verb("p:j", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        let agent = s.do_verb("p:j", "label", json!({"id": "c", "value": "z"}), "personal-bot").unwrap();
         assert!(named.is_inbox_item("p") && unnamed.is_inbox_item("p"));
         assert!(!agent.is_inbox_item("p"), "an agent whose name starts with person is still an agent");
         assert_eq!(InboxItem::from(named).text, r#"ana label {"id":"a","value":"x"}"#);
@@ -2558,15 +2443,15 @@ mod tests {
     #[test]
     fn changes_mirrored_from_a_share_read_as_if_made_here() {
         let (_d, mut s) = store();
-        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         let at = now_ms() - 60_000;
         let ev = |seq: u64, kind: &str, by: &str, args: Value, version: u64| -> Mirrored {
             serde_json::from_value(json!({"seq": seq, "at_ms": at, "kind": kind, "by": by, "verb": "label", "args": args, "version": version, "view_rev": 1})).unwrap()
         };
         // Caught up after a sleep: the first click moves the version, the last brings the jelly.
-        s.mirror("p:j", &ev(1, "call", "person:ana@example.com", json!({"id": "a"}), 2), None).unwrap();
-        let doc: MirroredDoc = serde_json::from_value(json!({"state": {"labels": {"a": 1, "b": 2}}, "comments": [], "attention": []})).unwrap();
-        let last = s.mirror("p:j", &ev(2, "call", "person:bo", json!({"id": "b"}), 3), Some(&doc)).unwrap();
+        s.mirror("p:j", &ev(1, "do", "person:ana@example.com", json!({"id": "a"}), 2), None).unwrap();
+        let doc: MirroredDoc = serde_json::from_value(json!({"state": {"labels": {"a": 1, "b": 2}}, "comments": [], "asks": []})).unwrap();
+        let last = s.mirror("p:j", &ev(2, "do", "person:bo", json!({"id": "b"}), 3), Some(&doc)).unwrap();
         assert_eq!((last.version, last.at_ms, last.changed.clone()), (3, at, vec!["/labels/a".to_string(), "/labels/b".to_string()]));
         assert_eq!(s.get("p:j").unwrap().state, json!({"labels": {"a": 1, "b": 2}}));
         let heard: Vec<String> = consume_inbox(&mut s, "p", InboxReader::Named { name: "r".into() }).unwrap().into_iter().map(|e| e.by).collect();
@@ -2579,7 +2464,7 @@ mod tests {
     #[test]
     fn a_locked_pin_reaches_the_inbox() {
         let (_d, mut s) = store();
-        s.create("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         let ev: Mirrored = serde_json::from_value(json!({"seq": 1, "at_ms": now_ms(), "kind": "lock", "by": "relay", "args": {"tries": 10}, "version": 1, "view_rev": 1})).unwrap();
         s.mirror("p:j", &ev, None).unwrap();
         let heard: Vec<String> = consume_inbox(&mut s, "p", InboxReader::Named { name: "r".into() }).unwrap().into_iter().map(|e| InboxItem::from(e).text).collect();
@@ -2603,17 +2488,17 @@ mod tests {
         let mut state: Value = serde_json::from_str(include_str!("../skill/recipes/monitor/start.json")).unwrap();
         state["notes"] = json!("n".repeat(95_000));
         let view = format!("<main>{}</main>", "<p>row</p>".repeat(5_000));
-        s.create("run", view.clone(), MONITOR_VERBS.into(), state, "agent", false, "", "").unwrap();
+        s.make("run", view.clone(), MONITOR_VERBS.into(), state, "agent", false, "", "").unwrap();
         let push = |i: u64| json!({
             "points": [{"m": "latency", "v": 100.0 + (i % 17) as f64 * 1.37}, {"m": "browsers", "v": (i % 3) as f64}, {"m": "memory", "v": 40.0 + i as f64 / 7.0}],
             "items": [{"r": if i.is_multiple_of(9) { "fail" } else { "pass" }, "label": format!("ask {i}")}],
             "done": i,
         });
         for i in 1..300 {
-            s.call("run", "push", push(i), "agent").unwrap();
+            s.do_verb("run", "push", push(i), "agent").unwrap();
         }
         let before = s.get("run").unwrap().state.clone();
-        s.call("run", "push", push(300), "agent").unwrap();
+        s.do_verb("run", "push", push(300), "agent").unwrap();
 
         let state = serde_json::to_vec(&s.get("run").unwrap().state).unwrap().len();
         let file = fs::metadata(dir.path().join("jellies").join("run.json")).unwrap().len() as usize;
@@ -2622,7 +2507,7 @@ mod tests {
 
         s.undo("run", "person").unwrap();
         assert_eq!(s.get("run").unwrap().state, before, "undo restores the state before the last push exactly");
-        s.reshape("run", Some("<p>new</p>".into()), None, None, "agent").unwrap();
+        s.shape("run", Some("<p>new</p>".into()), None, None, "agent").unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         s.undo("run", "person").unwrap();
@@ -2635,7 +2520,7 @@ mod tests {
     fn whole_state_rewrites_stay_within_the_undo_budget_and_the_newest_always_undoes() {
         let (dir, mut s) = store();
         let big = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
-        s.create("j", "".into(), VERBS.into(), big(0), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), big(0), "agent", false, "", "").unwrap();
         for i in 1..30 {
             s.set_state("j", "", Some(big(i)), "agent").unwrap();
         }
@@ -2650,86 +2535,6 @@ mod tests {
         s.set_state("j", "", Some(json!({})), "agent").unwrap();
         s.undo("j", "person").unwrap();
         assert_eq!(s.get("j").unwrap().state, big(28), "the newest step stays, however big");
-    }
-
-    #[test]
-    fn jellies_saved_with_full_snapshots_keep_their_undo() {
-        let (dir, mut s) = store();
-        s.create("j", "<p>v2</p>".into(), VERBS.into(), json!({"labels": {"a": "x", "b": "y"}}), "agent", false, "", "").unwrap();
-        let path = dir.path().join("jellies").join("j.json");
-        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        saved["jelly"]["view_rev"] = json!(2);
-        saved["undo"] = json!([
-            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {}}, "view_rev": 1},
-            {"view": "<p>v1</p>", "verbs": VERBS, "state": {"labels": {"a": "x"}}, "view_rev": 1},
-        ]);
-        saved.as_object_mut().unwrap().remove("steps");
-        fs::write(&path, saved.to_string()).unwrap();
-        drop(s);
-
-        s = Store::open(dir.path()).unwrap();
-        s.undo("j", "person").unwrap();
-        let j = s.get("j").unwrap();
-        assert_eq!((j.state.clone(), j.view.as_str(), j.view_rev), (json!({"labels": {"a": "x"}}), "<p>v1</p>", 3));
-        s.undo("j", "person").unwrap();
-        assert_eq!(s.get("j").unwrap().state, json!({"labels": {}}));
-        assert!(s.undo("j", "person").is_err());
-        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert!(saved.get("undo").is_none() && saved.get("steps").is_some());
-    }
-
-    #[test]
-    fn migration_preserves_large_legacy_undo_until_new_history_replaces_it() {
-        let (dir, mut s) = store();
-        let old = |i: u64| json!({"blob": format!("{i}-{}", "x".repeat(100_000))});
-        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
-        let path = dir.path().join("jellies").join("j.json");
-        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        saved["undo"] = json!([
-            {"view": "", "verbs": VERBS, "state": old(0), "view_rev": 1},
-            {"view": "", "verbs": VERBS, "state": old(1), "view_rev": 1},
-        ]);
-        saved.as_object_mut().unwrap().remove("steps");
-        let legacy = saved.to_string();
-        fs::write(&path, &legacy).unwrap();
-        drop(s);
-
-        s = Store::open(dir.path()).unwrap();
-        s.set_state("j", "/new", Some(json!(true)), "agent").unwrap();
-        drop(s);
-        s = Store::open(dir.path()).unwrap();
-        s.undo("j", "person").unwrap();
-        assert_eq!(s.get("j").unwrap().state, json!({}));
-        s.undo("j", "person").unwrap();
-        assert_eq!(s.get("j").unwrap().state, old(1));
-        drop(s);
-        s = Store::open(dir.path()).unwrap();
-        s.undo("j", "person").unwrap();
-        assert_eq!(s.get("j").unwrap().state, old(0));
-        assert!(s.undo("j", "person").is_err());
-
-        fs::write(&path, legacy).unwrap();
-        s = Store::open(dir.path()).unwrap();
-        for i in 0..UNDO_DEPTH {
-            s.set_state("j", "/new", Some(json!(i)), "agent").unwrap();
-        }
-        assert!(fs::metadata(&path).unwrap().len() < UNDO_SLACK as u64,
-            "legacy history ages out at the depth limit");
-        for _ in 0..UNDO_DEPTH {
-            s.undo("j", "person").unwrap();
-        }
-        assert_eq!(s.get("j").unwrap().state, json!({}));
-        assert!(s.undo("j", "person").is_err());
-
-        fs::write(&path, saved.to_string()).unwrap();
-        s = Store::open(dir.path()).unwrap();
-        s.set_state("j", "", Some(old(2)), "agent").unwrap();
-        s.set_state("j", "", Some(json!({})), "agent").unwrap();
-        drop(s);
-        s = Store::open(dir.path()).unwrap();
-        s.undo("j", "person").unwrap();
-        assert_eq!(s.get("j").unwrap().state, old(2), "the newest step survives the byte limit");
-        assert!(s.undo("j", "person").is_err(), "new history still obeys the byte budget");
     }
 
     fn logged(s: &Store) -> Vec<String> {
@@ -2754,10 +2559,10 @@ mod tests {
     #[test]
     fn trimming_the_log_keeps_the_newest_lines_and_the_persons_events() {
         let (dir, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
         for i in 0..60 {
             let by = match i % 10 { 3 => "person", 7 => "person:ana", _ => "agent" };
-            s.call("j", "label", json!({"id": format!("k{i}"), "value": "v"}), by).unwrap();
+            s.do_verb("j", "label", json!({"id": format!("k{i}"), "value": "v"}), by).unwrap();
         }
         let path = s.events_path();
         let before = fs::read_to_string(&path).unwrap();
@@ -2784,14 +2589,14 @@ mod tests {
         let last = events.last().unwrap().seq;
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
-        assert_eq!(s.call("j", "label", json!({"id": "z", "value": "v"}), "agent").unwrap().seq, last + 1);
+        assert_eq!(s.do_verb("j", "label", json!({"id": "z", "value": "v"}), "agent").unwrap().seq, last + 1);
     }
 
     #[test]
     fn malformed_persisted_jellies_refuse_to_open_without_changing_files() {
         for contents in ["{", "{}"] {
             let (dir, mut s) = store();
-            s.create("valid", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+            s.make("valid", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
             drop(s);
             let broken = dir.path().join("jellies").join("broken.json");
             fs::write(&broken, contents).unwrap();
@@ -2808,8 +2613,8 @@ mod tests {
     #[test]
     fn persisted_names_must_pass_name_validation() {
         let (dir, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
-        s.create("p:k", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
+        s.make("p:k", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         drop(s);
         let s = Store::open(dir.path()).unwrap();
         assert!(s.get("j").is_ok() && s.get("p:k").is_ok());
@@ -2830,8 +2635,8 @@ mod tests {
     #[test]
     fn jellies_survive_a_restart() {
         let (dir, mut s) = store();
-        s.create("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        s.call("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
+        s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.do_verb("j", "label", json!({"id": "a", "value": "pass"}), "person").unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(s.get("j").unwrap().state, json!({"labels": {"a": "pass"}}));

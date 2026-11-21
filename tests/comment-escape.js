@@ -49,7 +49,7 @@ async page => {
   await page.goto(`${base}/p/escape`);
   await page.waitForFunction(() => window.jelly && document.querySelector('.entry'));
   await page.waitForFunction(() => pendingFocusWrites === 0);
-  const r = await page.request.post(`${base}/api/jellies/page/call`, {data: {verb: 'focus', args: {name}, by: 'test'}});
+  const r = await page.request.post(`${base}/api/jellies/page/do`, {data: {verb: 'focus', args: {name}, by: 'test'}});
   if (!r.ok()) throw Error(await r.text());
   await page.waitForFunction(() => document.querySelector('#full iframe')?.contentDocument?.querySelector('#t-click') && !document.querySelector('#full').hidden);
   const frame = page.frameLocator('#full iframe');

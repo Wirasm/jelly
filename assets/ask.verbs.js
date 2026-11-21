@@ -1,4 +1,4 @@
-// An ask page. Its questions are attention items on this jelly, made by
+// An ask page. Its questions are asks on this jelly, made by
 // `jelly ask NAME --spec`; answers live on those items. State holds only what
 // the page shows around them.
 const verbs = {

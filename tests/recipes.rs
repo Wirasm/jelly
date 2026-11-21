@@ -50,7 +50,7 @@ fn recipes_list_write_and_make_jellies_from_any_directory() {
         assert_eq!(mode & 0o111, 0o111, "driver.sh stays runnable");
     }
 
-    let made = ok(jelly(&["new", "my-plan", "--recipe", "plan"]));
+    let made = ok(jelly(&["make", "my-plan", "--recipe", "plan"]));
     let mut assets: Vec<String> = std::fs::read_dir(Path::new(RECIPES).join("plan/assets")).unwrap().flatten()
         .map(|e| e.file_name().into_string().unwrap()).collect();
     assets.sort();
@@ -68,13 +68,13 @@ fn recipes_list_write_and_make_jellies_from_any_directory() {
     // --state replaces the example state, and the example's assets stay out:
     // the review recipe's full.diff would show beside the agent's own review.
     std::fs::write(temp.path().join("s.json"), r#"{"groups":[]}"#).unwrap();
-    ok(jelly(&["new", "mine", "--recipe", "review", "--state", "s.json"]));
+    ok(jelly(&["make", "mine", "--recipe", "review", "--state", "s.json"]));
     let state: Value = ureq::get(&format!("{url}/api/jellies/p:mine/state")).call().unwrap().into_json().unwrap();
     assert_eq!(state, serde_json::json!({"groups": []}));
     let stored: Value = ureq::get(&format!("{url}/api/jellies/p:mine/assets")).call().unwrap().into_json().unwrap();
     assert_eq!(stored, serde_json::json!([]));
 
-    let unknown = jelly(&["new", "x", "--recipe", "nope"]);
+    let unknown = jelly(&["make", "x", "--recipe", "nope"]);
     assert!(!unknown.status.success());
     assert!(String::from_utf8_lossy(&unknown.stderr).contains("there are map, monitor"), "{unknown:?}");
 

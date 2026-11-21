@@ -1,50 +1,3 @@
-# Attention visibility browser check
-
-Requires Cargo, Chrome and `playwright-cli`. Use a throwaway daemon home. From the
-checkout, build and install the fixture (substitute your own scratch path/port):
-
-```sh
-cargo build --locked --target-dir /tmp/jelly-visibility-target
-printf 'const verbs = {};\n' > /tmp/jelly-visibility-verbs.js
-/tmp/jelly-visibility-target/debug/jelly serve --port 17881 --home /tmp/jelly-visibility-home
-# In another terminal, from the checkout:
-/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 new visibility:fixture \
-  --view tests/attention-visibility.html --verbs /tmp/jelly-visibility-verbs.js
-```
-
-Run the browser from a scratch directory so generated browser files stay outside
-the checkout. A home created by an earlier build retains its stored jelly page;
-use a fresh home, or update that test page with
-`/tmp/jelly-visibility-target/debug/jelly --url http://127.0.0.1:17881 reshape page --view assets/page.html`
-from the checkout before running. The program takes the daemon URL from the open page and creates
-fresh jellies through the API. Use an absolute path to the test:
-
-```sh
-playwright-cli -s=visibility open http://127.0.0.1:17881/p/visibility
-playwright-cli -s=visibility resize 1280 900
-playwright-cli -s=visibility run-code --filename=/path/to/jelly/tests/attention-visibility.js
-playwright-cli -s=visibility resize 390 844
-playwright-cli -s=visibility run-code --filename=/path/to/jelly/tests/attention-visibility.js
-playwright-cli -s=visibility close
-```
-
-The check clicks real dock rows and asserts visibility, shadow-root focus,
-context, measured diagnostics, host/draft/selection preservation, synchronous and
-delayed reveals, subscription behavior, stable shared destinations, persisted
-answers, grouped inline questions with empty and punctuation IDs, readable grouped
-question headings alongside visible focus below the sticky bar, tall preview and
-long-context openings of later grouped questions with focus inside the requested
-question and without unseen Enter submissions, hash/query/path
-history navigation, attribute-driven opacity, visible refresh and focus-write
-failures with retry, delayed focus writes and agent
-focus during local open/close writes, and snapshot registration.
-Bounded-section reveals check that fallback context does not prevent the normal
-card from returning to its anchor. Overlapping opening and comment refreshes
-check that an opening waits for committed attention, including HTTP and network
-failures of the newest request.
-Hidden-section visibility fails on the pre-fix runtime. Stop the throwaway daemon
-after testing; no real jelly home is used.
-
 # Full-view header browser check
 
 Requires Cargo, Chrome and `playwright-cli`. Build from the checkout and start a
@@ -136,7 +89,7 @@ It returns measurements and saves `stream-390.png`, `stream-390-expanded.png` an
 Run `full-view-header.js` against the same daemon to check full-view behavior.
 Stop the daemon afterward with Ctrl-C. Existing homes retain their stored jelly
 page; use a fresh home to test the newly built bundled view. To explicitly update
-a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 reshape page --view assets/page.html`
+a stored page, use `/tmp/jelly-stream-target/debug/jelly --url http://127.0.0.1:17850 shape page --view assets/page.html`
 from the checkout, merging these changes into any customized view first.
 
 # Comment Escape browser check
@@ -168,32 +121,32 @@ the editor check passes either way (the map ignores keys in the editor) and guar
 that editor cancellation keeps working.
 Stop the daemon afterward.
 
-# Reshape-in-place browser check
+# Shape-in-place browser check
 
 Requires Cargo, Chrome and `playwright-cli`. Build from the checkout and start a
 fresh throwaway daemon (substitute your scratch paths and port):
 
 ```sh
-cargo build --locked --target-dir /tmp/jelly-reshape-target
-/tmp/jelly-reshape-target/debug/jelly serve --port 17894 --home /tmp/jelly-reshape-home
+cargo build --locked --target-dir /tmp/jelly-shape-target
+/tmp/jelly-shape-target/debug/jelly serve --port 17894 --home /tmp/jelly-shape-home
 ```
 
 From a scratch directory, run with an absolute path to the script:
 
 ```sh
-playwright-cli -s=reshape open http://127.0.0.1:17894/
-playwright-cli -s=reshape resize 1280 900
-playwright-cli -s=reshape run-code --filename=/path/to/jelly/tests/reshape-in-place.js
-playwright-cli -s=reshape close
+playwright-cli -s=shape open http://127.0.0.1:17894/
+playwright-cli -s=shape resize 1280 900
+playwright-cli -s=shape run-code --filename=/path/to/jelly/tests/shape-in-place.js
+playwright-cli -s=shape close
 ```
 
 The script makes and removes its own jelly. Standalone, on the stream and full
-size, it scrolls the page and a box, types in a field, reshapes, and checks that
+size, it scrolls the page and a box, types in a field, shapes, and checks that
 the new version kept the scroll, the box's scroll, focus, the typed text and its
-selection. It also reshapes a pinned tile. On the jelly page a per-frame sampler
+selection. It also shapes a pinned tile. On the jelly page a per-frame sampler
 fails the check if a visible frame reloads in place or shows an unloaded
 document, and verb calls during a swap must not stall it. Run against a jelly page
-from before the swap (`git show <old>:assets/page.html`, then `jelly reshape
+from before the swap (`git show <old>:assets/page.html`, then `jelly shape
 page`), the sampler and focus checks fail. Existing homes keep their stored
-jelly page; use a fresh home or reshape `page` with `assets/page.html`.
+jelly page; use a fresh home or shape `page` with `assets/page.html`.
 Stop the daemon afterward.

@@ -154,7 +154,7 @@ const term = (text) => esc(text).split("\n").map((l) => (l.startsWith("$ ") ? `<
 const who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 const st = (g) => g.verdict?.kind || (g.mechanical ? "mech" : "open");
 const serves = (g) => [].concat(g.outcome || []); // one outcome id, or several
-const asksAt = (g) => jelly.person.asks.filter((a) => a.anchor?.selector === `#g-${g.id}` && !a.answer && !a.withdrawn).length;
+const asksAt = (g) => jelly.person.asks.filter((a) => a.anchor?.selector === `#g-${g.id}` && !a.answer && !a.unasked).length;
 
 // What is only on this screen: what is on the stage, and which composer is open.
 let sel = null;       // "g:<id>" or "o:<id>"
@@ -245,7 +245,7 @@ function render(state) {
     + outcomes.filter((o) => sel === `o:${o.id}`).map((o) => `<div class="slide">${outcomeCard(o, state)}</div>`).join("");
 
   const done = groups.filter(approved).length, all = groups.length > 0 && done === groups.length;
-  const asks = jelly.person.asks.filter((a) => !a.answer && !a.withdrawn).length, waiting = groups.length - done;
+  const asks = jelly.person.asks.filter((a) => !a.answer && !a.unasked).length, waiting = groups.length - done;
   const C = 2 * Math.PI * 16, part = groups.length ? done / groups.length : 0;
   const head = state.applied ? "Done" : state.go ? "You said go" : all ? "Everything is approved" : `${waiting} to go${asks ? ` · ${asks} question${asks === 1 ? "" : "s"}` : ""}`;
   const sub = state.applied ? state.applied.note : state.go ? `${state.next || ""}: the agent is on it` : `Then: ${state.next || ""}`;
@@ -287,13 +287,13 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.sel) { sel = b.dataset.sel; composing = null; render(jelly.state); return $("stage").scrollIntoView({ block: "nearest", behavior: "smooth" }); }
   if (b.dataset.step) return step(+b.dataset.step);
-  if (b.id === "go-btn") return jelly.call("go").catch(fail);
+  if (b.id === "go-btn") return jelly.do("go").catch(fail);
   const group = b.closest("[data-group]")?.dataset.group;
   if (!group) return;
   if (b.dataset.do) {
     composing = null;
     // Approving moves on to the next change that still needs them.
-    return jelly.call(b.dataset.do, { group }).then(() => { if (b.dataset.do === "approve") { sel = null; render(jelly.state); } }, fail);
+    return jelly.do(b.dataset.do, { group }).then(() => { if (b.dataset.do === "approve") { sel = null; render(jelly.state); } }, fail);
   }
   if (b.dataset.open) {
     composing = composing?.group === group && composing.kind === b.dataset.open ? null : { group, kind: b.dataset.open };
@@ -301,7 +301,7 @@ document.addEventListener("click", (e) => {
     return $(`g-${group}-note`)?.focus();
   }
   if (b.dataset.send) {
-    return jelly.call(b.dataset.send === "question" ? "question" : "push_back", { group, note: $(`g-${group}-note`).value }).then(() => { composing = null; render(jelly.state); }, fail);
+    return jelly.do(b.dataset.send === "question" ? "question" : "push_back", { group, note: $(`g-${group}-note`).value }).then(() => { composing = null; render(jelly.state); }, fail);
   }
 });
 document.addEventListener("input", (e) => { if (e.target.matches(".wipe input")) e.target.parentElement.style.setProperty("--w", e.target.value + "%"); });

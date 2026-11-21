@@ -172,7 +172,7 @@ const started = (s) => (s.status || "next") !== "next";
 const steps = () => jelly.state.steps || [];
 const byId = (id) => steps().find((s) => s.id === id);
 const unmet = (s) => (s.needs || []).map(byId).filter((d) => d && d.status !== "done");
-const asksAt = (s) => jelly.person.asks.filter((a) => a.anchor?.selector === `#s-${s.id}` && !a.answer && !a.withdrawn).length;
+const asksAt = (s) => jelly.person.asks.filter((a) => a.anchor?.selector === `#s-${s.id}` && !a.answer && !a.unasked).length;
 const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min` : m < 720 ? `${Math.round(m / 60)} h` : ""; };
 // The same rule the `move` verb enforces, so the buttons only offer what it allows.
 const canMove = (s, d) => {
@@ -262,7 +262,7 @@ function render(state) {
   $("stage").innerHTML = all.map((s, i) => `<div class="slide"${sel === s.id ? "" : " hidden"}>${card(s, i, all.length)}</div>`).join("");
 
   const done = n("done"), live = all.length - n("vetoed"), C = 2 * Math.PI * 16, part = live ? done / live : 0;
-  const asks = jelly.person.asks.filter((a) => !a.answer && !a.withdrawn).length;
+  const asks = jelly.person.asks.filter((a) => !a.answer && !a.unasked).length;
   const head = state.wrap ? null : all.find(ready) || all.find((s) => st(s) === "blocked") || all.find((s) => st(s) === "doing") || all.find((s) => st(s) === "next" && !unmet(s).length);
   const hk = head ? st(head) : "";
   const line = state.wrap ? ["Finished", state.wrap.text] : !head ? [live && done === live ? "Every step is done" : "Nothing can start", live && done === live ? "" : "The steps left are vetoed or wait on something."]
@@ -300,10 +300,10 @@ document.addEventListener("click", (e) => {
   if (b.dataset.go) return go(+b.dataset.go);
   const step = b.closest("[data-step]")?.dataset.step;
   if (!step) return;
-  if (b.dataset.move) return jelly.call("move", { step, dir: b.dataset.move }).catch(fail);
-  if (b.dataset.do) return jelly.call(b.dataset.do, { step }).catch(fail);
+  if (b.dataset.move) return jelly.do("move", { step, dir: b.dataset.move }).catch(fail);
+  if (b.dataset.do) return jelly.do(b.dataset.do, { step }).catch(fail);
   if (b.dataset.open) { composing = composing === step ? null : step; render(jelly.state); return $(`s-${step}-note`)?.focus(); }
-  if ("send" in b.dataset) return jelly.call("note", { step, text: $(`s-${step}-note`).value }).then(() => { composing = null; render(jelly.state); }, fail);
+  if ("send" in b.dataset) return jelly.do("note", { step, text: $(`s-${step}-note`).value }).then(() => { composing = null; render(jelly.state); }, fail);
 });
 document.addEventListener("input", (e) => { if (e.target.matches(".wipe input")) e.target.parentElement.style.setProperty("--w", e.target.value + "%"); });
 document.addEventListener("keydown", (e) => {
@@ -336,7 +336,7 @@ document.addEventListener("drop", (e) => {
   e.preventDefault();
   const step = dragged, ids = steps().map((s) => s.id), i = ids.indexOf(r.dataset.sel);
   const before = r.classList.contains("drop-before") ? ids[i] : ids[i + 1] ?? null;
-  if (r.dataset.sel !== step && before !== step && ids[ids.indexOf(step) + 1] !== before) jelly.call("move", { step, before }).catch(fail);
+  if (r.dataset.sel !== step && before !== step && ids[ids.indexOf(step) + 1] !== before) jelly.do("move", { step, before }).catch(fail);
 });
 document.addEventListener("dragend", () => { dragged = null; clearDrop(); document.querySelectorAll(".dragging").forEach((r) => r.classList.remove("dragging")); });
 

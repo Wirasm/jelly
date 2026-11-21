@@ -349,15 +349,15 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.goto) { const c = $(b.dataset.goto); if (c?.closest("details")) c.closest("details").open = true; return c?.scrollIntoView({ block: "center", behavior: "smooth" }); }
   if (b.dataset.do === "stop" && Date.now() - armed >= 4000) { armed = Date.now(); return above(jelly.state); }
-  if (b.dataset.do) { armed = 0; return jelly.call(b.dataset.do).catch(fail); }
+  if (b.dataset.do) { armed = 0; return jelly.do(b.dataset.do).catch(fail); }
   const id = b.closest("[data-metric]")?.dataset.metric, m = id && jelly.state.metrics.find((m) => m.id === id);
-  if (m && b.dataset.limit) return jelly.call("threshold", { metric: id, value: JSON.parse(b.dataset.limit) }).catch(fail);
+  if (m && b.dataset.limit) return jelly.do("threshold", { metric: id, value: JSON.parse(b.dataset.limit) }).catch(fail);
   if (m && b.dataset.nudge) {
     const { lo, hi } = scale(m), step = nice((hi - lo) / 20);
-    return jelly.call("threshold", { metric: id, value: +(Math.round((m.threshold.value + step * b.dataset.nudge) / step) * step).toPrecision(6) }).catch(fail);
+    return jelly.do("threshold", { metric: id, value: +(Math.round((m.threshold.value + step * b.dataset.nudge) / step) * step).toPrecision(6) }).catch(fail);
   }
   const a = b.closest("[data-anomaly]")?.dataset.anomaly;
-  if (a && b.dataset.judge !== undefined) return jelly.call("judge", { anomaly: a, kind: b.dataset.judge || null }).catch(fail);
+  if (a && b.dataset.judge !== undefined) return jelly.do("judge", { anomaly: a, kind: b.dataset.judge || null }).catch(fail);
 });
 // Drag a limit. The chart's scale holds still while it moves, and pushes that
 // arrive meanwhile do not pull the line back.
@@ -377,7 +377,7 @@ document.addEventListener("pointerdown", (e) => {
     bar.removeEventListener("pointermove", move); bar.removeEventListener("pointerup", up); bar.removeEventListener("pointercancel", up);
     const value = drag.value, same = value === m.threshold.value;
     const done = () => { drag = null; render(jelly.state); };
-    same ? done() : jelly.call("threshold", { metric: id, value }).then(done, (err) => { done(); fail(err); });
+    same ? done() : jelly.do("threshold", { metric: id, value }).then(done, (err) => { done(); fail(err); });
   };
   bar.addEventListener("pointermove", move); bar.addEventListener("pointerup", up); bar.addEventListener("pointercancel", up);
 });

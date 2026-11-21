@@ -140,7 +140,7 @@
     /* While a trace plays, its step rides at the bottom so the map stays in view. */
     body.tracing #panel { position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 20; max-height: 48vh; overflow-y: auto; border-radius: var(--r) var(--r) 0 0; box-shadow: 0 -10px 30px -12px rgba(0,0,0,.4); padding: 12px 16px 14px; }
     body.tracing .wrap { padding-bottom: 52vh; }
-    body.tracing { --jelly-comment-inset: 10px 10px auto auto; }
+    :root:has(body.tracing) { --jelly-comment-inset: 10px 10px auto auto; }
     .say { font-size: 16px; }
   }
 </style>
@@ -176,7 +176,7 @@ const S = () => jelly.state || {};
 const nodeOf = (id) => (S().nodes || []).find((n) => n.id === id);
 const traceOf = (id) => (S().traces || []).find((t) => t.id === id);
 const flagsOn = (id) => (S().flags || []).filter((f) => f.node === id);
-const asksAt = (id) => jelly.person.asks.filter((a) => a.anchor?.selector === `#n-${id}` && !a.answer && !a.withdrawn).length;
+const asksAt = (id) => jelly.person.asks.filter((a) => a.anchor?.selector === `#n-${id}` && !a.answer && !a.unasked).length;
 const touchedIds = () => (S().nodes || []).filter((n) => n.touched).map((n) => n.id);
 
 // The picture for a trace step: before and after. Terminal text, images, or live HTML.
@@ -413,10 +413,10 @@ document.addEventListener("click", (e) => {
     return render(jelly.state);
   }
   if ("overlay" in d) { overlay = !overlay; return render(jelly.state); }
-  if (d.understood) return jelly.call("understood", { trace: tr.id, yes: d.understood === "yes" }).catch(fail);
+  if (d.understood) return jelly.do("understood", { trace: tr.id, yes: d.understood === "yes" }).catch(fail);
   if (d.flag) { flagging = flagging?.kind === d.flag && flagging.node === sel ? null : { node: sel, kind: d.flag }; render(jelly.state); return $("flag-note")?.focus(); }
-  if ("sendFlag" in d) return jelly.call("flag", { node: flagging.node, kind: flagging.kind, note: $("flag-note").value }).then(() => { flagging = null; render(jelly.state); }, fail);
-  if (d.unflag) return jelly.call("unflag", { flag: d.unflag }).catch(fail);
+  if ("sendFlag" in d) return jelly.do("flag", { node: flagging.node, kind: flagging.kind, note: $("flag-note").value }).then(() => { flagging = null; render(jelly.state); }, fail);
+  if (d.unflag) return jelly.do("unflag", { flag: d.unflag }).catch(fail);
 });
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("textarea, input")) {

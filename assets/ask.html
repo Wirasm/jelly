@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="jelly-attention" content="inline">
 <title>ask</title>
 <style>
   /* Berry by day, Night jelly by night: jelly's own colours. */
@@ -120,8 +119,9 @@
   <div id="past"></div>
 </div>
 <script>
-// The questions are attention items on this jelly (made by `jelly ask --spec`).
-// Answering one calls jelly.answer: an option, words, or both.
+// The questions are asks on this jelly (made by `jelly ask --spec`). This view
+// draws each one itself, so its section carries `data-ask`. Answering calls
+// jelly.person.answer: an option, words, or both.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const L = (i) => String.fromCharCode(65 + i);
@@ -132,7 +132,7 @@ const drafts = {};     // unsent note text per question, kept across re-renders
 
 function current() {
   const g = `round-${jelly.state.round || 1}`;
-  return jelly.person.asks.filter((a) => a.group === g && !a.withdrawn);
+  return jelly.person.asks.filter((a) => a.group === g && !a.unasked);
 }
 
 function render() {
@@ -164,7 +164,7 @@ function question(a, i) {
   const rec = a.options.find((o) => o.id === a.recommend);
   const by = ans && Who(ans.by);
   const state = !ans ? "not answered" : picked ? `${by} picked ${L(a.options.findIndex((o) => o.id === picked))}` : `${by} answered in words`;
-  return `<section class="q ${ans ? "answered" : ""}" id="q-${esc(qid(a))}">
+  return `<section class="q ${ans ? "answered" : ""}" id="q-${esc(qid(a))}" data-ask="${esc(a.id)}">
     <div class="qh"><span class="num">${i + 1}</span><div><h2>${esc(a.title)}</h2>${a.context ? `<p class="qc">${esc(a.context)}</p>` : ""}</div><span class="state">${state}</span></div>
     ${rec ? `<div class="rec"><b>${esc(a.by)} recommends ${L(a.options.indexOf(rec))}: ${esc(rec.label)}.</b> <span>${esc(a.why)}</span></div>` : ""}
     ${a.options.length ? `<div class="opts">${a.options.map((o, k) => option(a, o, k)).join("")}</div>` : ""}
@@ -194,7 +194,7 @@ function renderPast() {
   const old = jelly.person.asks.filter((a) => a.group && a.group !== g);
   $("past").innerHTML = old.length ? `<details class="past"><summary>Earlier rounds (${old.length} questions)</summary>${old.map((a) => {
     const o = a.options.find((x) => x.id === a.answer?.option);
-    return `<div class="row"><b>${esc(a.title)}</b> · ${a.withdrawn ? "replaced by a newer round" : a.answer ? `${o ? esc(o.label) : "answered in words"}${a.answer.text ? `: “${esc(a.answer.text)}”` : ""}` : "not answered"}</div>`;
+    return `<div class="row"><b>${esc(a.title)}</b> · ${a.unasked ? "replaced by a newer round" : a.answer ? `${o ? esc(o.label) : "answered in words"}${a.answer.text ? `: “${esc(a.answer.text)}”` : ""}` : "not answered"}</div>`;
   }).join("")}</details>` : "";
 }
 

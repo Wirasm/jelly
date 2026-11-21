@@ -60,7 +60,7 @@ async function loaded(image) {
   const original = JSON.stringify(jelly.state);
   const history = JSON.stringify(jelly.person.asks);
   let attentionCalls = 0, stateCalls = 0;
-  const open = (asks) => asks.filter(a => !a.answer && !a.withdrawn);
+  const open = (asks) => asks.filter(a => !a.answer && !a.unasked);
   jelly.person.onAsk(() => { attentionCalls++; document.body.dataset.attention = ids(open(jelly.person.asks)); });
   jelly.onState(s => {
     stateCalls++;
@@ -72,7 +72,7 @@ async function loaded(image) {
   assert(ids(jelly.person.asks) === 'a1,a2,a3,a4', 'all history');
   assert(ids(open(jelly.person.asks)) === 'a1,a4', 'open asks');
   assert(jelly.person.asks[1].answer.text === 'captured answer', 'captured answer');
-  assert(jelly.person.asks[2].withdrawn, 'captured withdrawal');
+  assert(jelly.person.asks[2].unasked, 'captured withdrawal');
   assert(jelly.asset('unused.png').startsWith('data:image/png;base64,'), 'unused asset');
   assert(jelly.asset('absent.png') === 'assets/absent.png', 'missing asset fallback');
   await Promise.all([...document.images].map(loaded));
@@ -440,8 +440,8 @@ async function loaded(image) {
   }
   step = 'attention readers';
   const matrix = [];
-  for (const kind of ['ask', 'look']) for (const answer of [undefined, {text: 'yes'}]) for (const withdrawn of [undefined, {by: 'agent'}]) for (const selector of [undefined, '#pictures', '#other']) {
-    matrix.push({id: `item-${matrix.length}`, kind, title: 'test', answer, withdrawn, anchor: selector ? {selector} : undefined});
+  for (const kind of ['ask', 'look']) for (const answer of [undefined, {text: 'yes'}]) for (const unasked of [undefined, {by: 'agent'}]) for (const selector of [undefined, '#pictures', '#other']) {
+    matrix.push({id: `item-${matrix.length}`, kind, title: 'test', answer, unasked, anchor: selector ? {selector} : undefined});
   }
   const readers = [];
   for (const source of [__LIVE_RUNTIME__, __SNAPSHOT_RUNTIME__]) {
@@ -451,7 +451,7 @@ async function loaded(image) {
     document.body.append(frame);
     await ready;
     const w = frame.contentWindow;
-    w.__JELLY__ = {name: 'test:conformance', state: {}, attention: matrix, assets: [], version: 1};
+    w.__JELLY__ = {name: 'test:conformance', state: {}, asks: matrix, assets: [], version: 1};
     w.WebSocket = class {};
     w.fetch = async () => ({ok: true, json: async () => w.__JELLY__});
     w.eval(source);
@@ -462,7 +462,7 @@ async function loaded(image) {
   const calls = [];
   const nativeFetch = window.fetch;
   window.fetch = (...args) => { calls.push(args); return nativeFetch(...args); };
-  for (const mutate of [() => jelly.person.answer('a1', 'x'), () => jelly.call('change'), () => jelly.person.comment({}, 'no'), () => jelly.person.reply('x', 'no'), () => jelly.person.resolve('x')]) {
+  for (const mutate of [() => jelly.person.answer('a1', 'x'), () => jelly.do('change'), () => jelly.person.comment({}, 'no'), () => jelly.person.reply('x', 'no'), () => jelly.person.resolve('x')]) {
     let rejected = false;
     try { await mutate(); } catch (e) { rejected = e.message.includes('read-only'); }
     assert(rejected, 'mutation rejected');

@@ -150,18 +150,18 @@
       "by": "agent"
     },
     {
-      "id": "see-reshape",
+      "id": "see-shape",
       "lane": "see",
       "t": 8280,
       "dur": 20,
       "kind": "bad",
       "approx": true,
       "when": "about 23:20",
-      "label": "After a reshape: no snapshot again",
+      "label": "After a shape: no snapshot again",
       "detail": "Same failure a few minutes later, after the view changed.",
       "show": {
         "kind": "terminal",
-        "after": "$ jelly reshape review --view view.html\ndemo:review v6: reshape\n$ jelly look review --full --width 390\npng      …/home2/renders/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
+        "after": "$ jelly shape review --view view.html\ndemo:review v6: shape\n$ jelly look review --full --width 390\npng      …/home2/renders/demo:review-390.png\n!        No snapshot: the browser took longer than 20 s"
       },
       "by": "agent"
     },
@@ -371,7 +371,7 @@
       ],
       "contradicts": [
         "see-390",
-        "see-reshape",
+        "see-shape",
         "see-split",
         "three-2",
         "ask-four"

@@ -7,9 +7,9 @@ through the picture instead of reading a description of it.
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes map --out DIR
-jelly new map --recipe map --state state.json --about "How <the system> works"
+jelly make map --recipe map --state state.json --about "How <the system> works"
 jelly look map                                # fix every `!` and `error` line first
-jelly focus map
+jelly show map
 ```
 
 The example `state.json` and `assets/` are a real map: jelly itself, with two
@@ -53,23 +53,23 @@ something else: columns instead of rows, a timeline, numbers on the wires.
 - **Say what is risky.** `risk` is where you put the invariant that breaks things
   when ignored. It shows as a warning on the node.
 - **Ask on the node.** `jelly ask map "…" --option … --recommend … --at "#n-<node id>"`
-  puts the question under that node's row, and a `?` on the node.
+  pins the question to that node.
 
 ## Hearing them and answering
 
-The person taps boxes, walks traces and reacts. It arrives in `jelly inbox` as
+The person taps boxes, walks traces and reacts. It arrives in `jelly hear` as
 `flag` (`wrong`, `more` or `careful`, on a node, with a note), `unflag`, and
 `understood` (they reached the end of a trace and it made sense).
 
 ```bash
 # "This is wrong": check the code. If they are right, fix the node as you answer.
-jelly call map answer '{"flag":"f1","note":"You are right: browsers use the WebSocket.","fix":{"what":"…"}}'
+jelly do map answer '{"flag":"f1","note":"You are right: browsers use the WebSocket.","fix":{"what":"…"}}'
 # "Tell me more" or "Careful here": answer in a line or two, or add a trace that shows it.
-jelly call map answer '{"flag":"f2","note":"Each call gets a fresh engine, so nothing leaks between verbs."}'
-jelly call map add_trace @trace.json     # {"id","title","steps":[{"at","say","cite","show"}]}
+jelly do map answer '{"flag":"f2","note":"Each call gets a fresh engine, so nothing leaks between verbs."}'
+jelly do map add_trace @trace.json     # {"id","title","steps":[{"at","say","cite","show"}]}
 # Lay a planned change over the map, or take it off.
-jelly call map touch '{"title":"Per-agent inbox cursors","note":"…","nodes":[{"id":"cli","note":"…"}]}'
-jelly call map untouch
+jelly do map touch '{"title":"Per-agent inbox cursors","note":"…","nodes":[{"id":"cli","note":"…"}]}'
+jelly do map untouch
 ```
 
 New boxes, wires and layers go in with `jelly set map --at /nodes/- '{…}'`. A

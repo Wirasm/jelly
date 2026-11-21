@@ -6,10 +6,10 @@ diff is the backup, not the page.
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes review --out DIR
-jelly new review --recipe review --state state.json --about "Review: <what they asked for>"
+jelly make review --recipe review --state state.json --about "Review: <what they asked for>"
 git diff main...HEAD > /tmp/full.diff && jelly asset review /tmp/full.diff
 jelly look review                             # fix every `!` and `error` line first
-jelly focus review
+jelly show review
 ```
 
 The example `state.json` and `assets/` are a real review: the change that made
@@ -59,18 +59,18 @@ something else: before/after screenshots, a rendered preview, a table of rows.
 
 ## Hearing them and answering
 
-The person approves, pushes back or asks, per group. It arrives in `jelly inbox`
+The person approves, pushes back or asks, per group. It arrives in `jelly hear`
 as `approve`, `push_back`, `question`, `take_back` and `go` calls, with comments
 on single lines (`#g-<id>-L<n>`).
 
 ```bash
 # They pushed back or asked: fix it, then answer on the group. With `delta`,
 # the card shows only what changed since they looked.
-jelly call review revise @revise.json   # {"group","note","diff","delta","evidence"}
-jelly call review revise '{"group":"check","note":"It is safe: the lock is held here."}'   # an answer, no code change
-jelly call review outcome '{"id":"no-browser","status":"seen","evidence":"…"}'
+jelly do review revise @revise.json   # {"group","note","diff","delta","evidence"}
+jelly do review revise '{"group":"check","note":"It is safe: the lock is held here."}'   # an answer, no code change
+jelly do review outcome '{"id":"no-browser","status":"seen","evidence":"…"}'
 # They said go: do `next`, then
-jelly call review applied '{"note":"Committed as 3f2a1c and pushed."}'
+jelly do review applied '{"note":"Committed as 3f2a1c and pushed."}'
 ```
 
 `go` is refused until every group is approved, and any new say takes it back, so

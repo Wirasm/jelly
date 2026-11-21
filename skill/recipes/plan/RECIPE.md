@@ -7,10 +7,10 @@ It answers "where are you, what is next, and can I still change it?"
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes plan --out DIR
-jelly new plan --recipe plan --state state.json --about "Plan: <what they asked for>"
+jelly make plan --recipe plan --state state.json --about "Plan: <what they asked for>"
 jelly look plan                               # fix every `!` and `error` line first
-jelly focus plan
-jelly call plan start '{"step":"schema"}'     # before you touch anything
+jelly show plan
+jelly do plan start '{"step":"schema"}'     # before you touch anything
 ```
 
 The example `state.json` and `assets/` are a real plan: the session that built
@@ -47,7 +47,7 @@ point; change them when the plan needs something else.
   not cleared, and a step whose needs are not done. Do not work around it with
   `jelly set`; do another step, or ask.
 - **Ask on the step.** `jelly ask plan "…" --option … --recommend … --why "…" --at "#s-<step id>"`
-  puts the question on that step's card and a `?` on the track.
+  pins the question to that step and puts a `?` on the track.
 - **Keep the plan true.** When the work changes shape, `add`, `revise` or
   `remove` steps and say why in a `note`. Do not rewrite a done step.
 - **Say when you stop.** `block` with what blocks it and what would unblock it.
@@ -56,21 +56,21 @@ point; change them when the plan needs something else.
 ## Hearing them and answering
 
 The person reorders, vetoes, gates, clears a gate and leaves notes. It arrives
-in `jelly inbox` as `move`, `veto`, `unveto`, `gate`, `clear_gate` and `note`
+in `jelly hear` as `move`, `veto`, `unveto`, `gate`, `clear_gate` and `note`
 calls. Read the inbox before every `start`: a veto on the step in progress
 stops it and puts it back to not started, and you should stop too.
 
 ```bash
-jelly call plan start '{"step":"schema"}'
-jelly call plan progress '{"step":"schema","text":"Three of five tables moved"}'
-jelly call plan finish @finish.json     # {"step","text","show":{"kind":"terminal","before":"…","after":"…"}}
-jelly call plan block '{"step":"deploy","reason":"Staging is down; retry when it answers"}'
-jelly call plan gate '{"step":"merge","note":"Merging is yours to decide."}'
-jelly call plan add '{"id":"backfill","title":"Backfill old rows","needs":["schema"],"before":"deploy"}'
-jelly call plan revise '{"step":"deploy","needs":["schema","backfill"]}'
-jelly call plan remove '{"step":"cleanup"}'
-jelly call plan note '{"step":"deploy","text":"Moved after the backfill, as you asked."}'
-jelly call plan wrap '{"text":"Shipped. The merge waits for you."}'
+jelly do plan start '{"step":"schema"}'
+jelly do plan progress '{"step":"schema","text":"Three of five tables moved"}'
+jelly do plan finish @finish.json     # {"step","text","show":{"kind":"terminal","before":"…","after":"…"}}
+jelly do plan block '{"step":"deploy","reason":"Staging is down; retry when it answers"}'
+jelly do plan gate '{"step":"merge","note":"Merging is yours to decide."}'
+jelly do plan add '{"id":"backfill","title":"Backfill old rows","needs":["schema"],"before":"deploy"}'
+jelly do plan revise '{"step":"deploy","needs":["schema","backfill"]}'
+jelly do plan remove '{"step":"cleanup"}'
+jelly do plan note '{"step":"deploy","text":"Moved after the backfill, as you asked."}'
+jelly do plan wrap '{"text":"Shipped. The merge waits for you."}'
 ```
 
 Answer a note with a `note` on the same step, and act on it. A step moves from

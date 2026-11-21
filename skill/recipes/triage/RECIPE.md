@@ -7,9 +7,9 @@ pile for each, and where were you guessing?"
 
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes triage --out DIR
-jelly new triage --recipe triage --state state.json --about "Triage: <what is being sorted>"
+jelly make triage --recipe triage --state state.json --about "Triage: <what is being sorted>"
 jelly look triage                             # fix every `!` and `error` line first
-jelly focus triage
+jelly show triage
 ```
 
 The example `state.json` is a real triage: the issues and findings from the
@@ -42,7 +42,7 @@ Add items later with the `add` verb, not by editing state: it checks them.
   reason. Say what you saw: "Only bites with two agents in one project."
 - **Impact and effort on every item you can judge.** The scatter is where a
   wrong lane shows: a quick win sitting in Later, a big bet in Do now.
-- **Ask on the item.** A real decision that blocks sorting goes on its card:
+- **Ask on the item.** Pin a real decision that blocks sorting to its card:
   `jelly ask triage "…" --option … --recommend … --at "#i-<item id>"`.
   A lane is `#lane-<lane id>`.
 - **Their move stands.** Once the person has moved an item, `resort` refuses.
@@ -50,7 +50,7 @@ Add items later with the `add` verb, not by editing state: it checks them.
 
 ## Hearing them and answering
 
-What the person does arrives in `jelly inbox` as calls: `keep` (you were unsure
+What the person does arrives in `jelly hear` as calls: `keep` (you were unsure
 and right), `move` (to another lane, or to another place in an ordered lane),
 `note` (why they moved it), `accept` and `reopen` (a lane is sorted, or not
 after all) and `go`. Each moved item keeps `moved.from`, `moved.by` and
@@ -58,13 +58,13 @@ after all) and `go`. Each moved item keeps `moved.from`, `moved.by` and
 
 ```bash
 # New things turned up: add them, sorted, with a reason.
-jelly call triage add @more.json     # {"items":[{"id","ref","title","lane","reason","confidence","impact","effort"}]}
+jelly do triage add @more.json     # {"items":[{"id","ref","title","lane","reason","confidence","impact","effort"}]}
 # You learned something and changed your mind about one they have not moved:
-jelly call triage resort '{"item":"7","lane":"now","reason":"Blocks #1 after all","confidence":0.8}'
+jelly do triage resort '{"item":"7","lane":"now","reason":"Blocks #1 after all","confidence":0.8}'
 # You dealt with one:
-jelly call triage done '{"item":"5","result":"Fixed in ef60c62."}'
+jelly do triage done '{"item":"5","result":"Fixed in ef60c62."}'
 # They said go: do `next`, then
-jelly call triage applied '{"note":"Logged two issues; started on #2."}'
+jelly do triage applied '{"note":"Logged two issues; started on #2."}'
 ```
 
 `go` is refused until every lane is accepted. Adding or re-sorting an item

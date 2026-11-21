@@ -169,7 +169,7 @@ const INK = { accent: "var(--accent-ink)", warn: "color-mix(in srgb, var(--warn)
 const ORDER = ["accent", "warn", "idle", "good", "bad"];
 const who = (by) => (by === jelly.person.by ? "You" : jelly.who(by));
 const short = (it) => String(it.ref || it.id).replace(/^#/, "");
-const asksAt = (it) => jelly.person.asks.filter((a) => a.anchor?.selector === `#i-${it.id}` && !a.answer && !a.withdrawn).length;
+const asksAt = (it) => jelly.person.asks.filter((a) => a.anchor?.selector === `#i-${it.id}` && !a.answer && !a.unasked).length;
 
 // What is only on this screen. Everything else is state.
 let view = "board";   // or "scatter"
@@ -286,7 +286,7 @@ function render(s) {
     ${writing ? `<div class="compose"><textarea id="why-note" aria-label="Why you moved it" placeholder="Why it belongs there"></textarea><button data-send>Send</button></div>` : ""}</div>`;
 
   const done = L.filter((l) => s.accepted?.[l.id]).length, all = L.length > 0 && done === L.length;
-  const asks = jelly.person.asks.filter((a) => !a.answer && !a.withdrawn).length;
+  const asks = jelly.person.asks.filter((a) => !a.answer && !a.unasked).length;
   const C = 2 * Math.PI * 16, part = L.length ? done / L.length : 0;
   const head = s.applied ? "Done" : s.go ? "You said go" : all ? "Every lane is sorted" : [unsure.length && `${unsure.length} unsure`, `${L.length - done} lane${L.length - done === 1 ? "" : "s"} to look at`, asks && `${asks} question${asks === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
   const sub = s.applied ? s.applied.note : s.go ? `${s.next || ""}: the agent is on it` : `Then: ${s.next || ""}`;
@@ -307,7 +307,7 @@ const redraw = () => render(jelly.state);
 function move(item, lane, before) {
   const it = jelly.state.items.find((i) => i.id === item), was = it.lane;
   const args = { item, lane }; if (before !== undefined) args.before = before;
-  return jelly.call("move", args).then(() => {
+  return jelly.do("move", args).then(() => {
     const now = jelly.state.items.find((i) => i.id === item);
     if (now.lane !== was && now.moved) { asked = item; writing = false; } else if (asked === item) asked = null;
     redraw();
@@ -319,16 +319,16 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   const item = b.closest("[data-item]")?.dataset.item, lane = b.closest("[data-lane]")?.dataset.lane;
   if (b.dataset.view) { view = b.dataset.view; return redraw(); }
-  if (b.id === "go-btn") return jelly.call("go").catch(fail);
-  if (b.dataset.accept !== undefined) return jelly.call("accept", { lane }).catch(fail);
-  if (b.dataset.reopen !== undefined) return jelly.call("reopen", { lane }).catch(fail);
-  if (b.dataset.why) return jelly.call("note", { item: asked, note: b.dataset.why }).then(() => { asked = null; redraw(); }, fail);
+  if (b.id === "go-btn") return jelly.do("go").catch(fail);
+  if (b.dataset.accept !== undefined) return jelly.do("accept", { lane }).catch(fail);
+  if (b.dataset.reopen !== undefined) return jelly.do("reopen", { lane }).catch(fail);
+  if (b.dataset.why) return jelly.do("note", { item: asked, note: b.dataset.why }).then(() => { asked = null; redraw(); }, fail);
   if (b.dataset.write !== undefined) { writing = !writing; redraw(); return $("why-note")?.focus(); }
   if (b.dataset.skip !== undefined) { asked = null; writing = false; return redraw(); }
-  if (b.dataset.send !== undefined) return jelly.call("note", { item: asked, note: $("why-note").value }).then(() => { asked = null; writing = false; redraw(); }, fail);
+  if (b.dataset.send !== undefined) return jelly.do("note", { item: asked, note: $("why-note").value }).then(() => { asked = null; writing = false; redraw(); }, fail);
   if (!item) return;
   if (b.dataset.move) return move(item, b.dataset.move);
-  if (b.dataset.keep !== undefined) return jelly.call("keep", { item }).catch(fail);
+  if (b.dataset.keep !== undefined) return jelly.do("keep", { item }).catch(fail);
   if (b.dataset.askWhy !== undefined) { asked = item; writing = false; return redraw(); }
   if (b.dataset.shift) {
     // Sooner: before the one above. After: before the one after the next, or at the end.

@@ -201,7 +201,7 @@ async fn publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, A
         let store = app.store.lock().expect("store lock");
         let j = store.get(name)?;
         let doc = json!({"name": j.name, "about": j.about, "view": j.view, "verbs": j.verbs, "state": j.state,
-            "version": j.version, "view_rev": j.view_rev, "comments": j.comments, "attention": j.attention});
+            "version": j.version, "view_rev": j.view_rev, "comments": j.comments, "asks": j.asks});
         let dir = store.asset_dir(name);
         let files = store.try_assets(name).map_err(|e| ApiError::Internal(format!("could not read assets of {name}: {e}")))?;
         let assets: Vec<(String, Vec<u8>)> = files.into_iter()

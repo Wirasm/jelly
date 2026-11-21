@@ -209,7 +209,7 @@ fn creation_and_asset_uploads_finish_before_output() {
         for closed in [false, true] {
             let mut cmd = command(&fixture.url, &[]);
             if new {
-                cmd.args(["new", "probe:x", "--from"]).arg(dir.path());
+                cmd.args(["make", "probe:x", "--from"]).arg(dir.path());
             } else {
                 cmd.args(["asset", "probe:x"]).args(&files);
             }
@@ -222,7 +222,7 @@ fn creation_and_asset_uploads_finish_before_output() {
                 assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies"));
                 let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
                 assert_eq!(body["name"], "probe:x");
-                req.reply(r#"{"jelly":"probe:x","version":1,"seq":1,"kind":"new"}"#);
+                req.reply(r#"{"jelly":"probe:x","version":1,"seq":1,"kind":"make"}"#);
             }
             for file in &files {
                 let name = file.file_name().unwrap().to_str().unwrap();
@@ -251,12 +251,12 @@ fn creation_and_asset_uploads_finish_before_output() {
 
 #[test]
 fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
-    for cmd in ["events", "wait"] {
+    for cmd in [&["events"][..], &["hear", "--wait"]] {
         let fixture = Fixture::new();
-        let mut child = spawn(command(&fixture.url, &[cmd]).stdout(closed_pipe()));
+        let mut child = spawn(command(&fixture.url, cmd).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.path, "/api/events");
-        write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"seq\":1,\"at_ms\":1,\"kind\":\"call\",\"version\":1,\"view_rev\":1,\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
+        write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"seq\":1,\"at_ms\":1,\"kind\":\"do\",\"version\":1,\"view_rev\":1,\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
         req.stream.flush().unwrap();
         child.quiet(); // req keeps the stream open until after the child exits
     }
@@ -296,7 +296,7 @@ fn dev_stops_before_watching_or_after_a_complete_reshape() {
     let mut req = fixture.request();
     assert_eq!(
         (&*req.method, &*req.path),
-        ("POST", "/api/jellies/probe:x/reshape")
+        ("POST", "/api/jellies/probe:x/shape")
     );
     let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
     assert_eq!(body["view"], "after");
@@ -344,7 +344,7 @@ fn serve_keeps_serving_with_closed_stdout() {
 #[test]
 fn wait_retains_its_timeout_exit_with_closed_stdout() {
     let fixture = Fixture::new();
-    let mut child = spawn(command(&fixture.url, &["wait", "--timeout", "1"]).stdout(closed_pipe()));
+    let mut child = spawn(command(&fixture.url, &["hear", "--wait", "--timeout", "1"]).stdout(closed_pipe()));
     let mut req = fixture.request();
     write!(
         req.stream,
@@ -379,13 +379,13 @@ fn non_broken_pipe_stdout_failure_exits_with_a_diagnostic() {
 fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
     for json in [false, true] {
         let fixture = Fixture::new();
-        let mut args = vec!["wait", "probe:x", "--since", "seq:1"];
+        let mut args = vec!["hear", "--wait", "probe:x", "--since", "seq:1"];
         if json { args.push("--json"); }
         let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.method, "GET");
         assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax");
-        req.reply(r#"{"seq":2,"at_ms":1,"kind":"call","version":2,"view_rev":1,"by":"person","jelly":"probe:x"}"#);
+        req.reply(r#"{"seq":2,"at_ms":1,"kind":"do","version":2,"view_rev":1,"by":"person","jelly":"probe:x"}"#);
         child.quiet();
 
         let spec = tempfile::NamedTempFile::new().unwrap();
@@ -394,7 +394,7 @@ fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
         if json { args.push("--json"); }
         let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
-        assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies/probe:x/ask"));
+        assert_eq!((&*req.method, &*req.path), ("POST", "/api/jellies/probe:x/asks/round"));
         req.reply(r#"{"jelly":"probe:x","seq":3,"state":{"round":1}}"#);
         child.quiet();
     }

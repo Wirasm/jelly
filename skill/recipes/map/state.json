@@ -62,7 +62,7 @@
       "kind": "code",
       "what": "`window.jelly` in every view: call, onState, comments, question cards, and the text snapshot for `jelly look`.",
       "files": [
-        "assets/runtime.js: jelly.call, apply, drawAttention, placeAfter, deadAnchors, postSnapshot"
+        "assets/runtime.js: jelly.do, apply, drawAttention, placeAfter, deadAnchors, postSnapshot"
       ],
       "risk": "One WebSocket per page. An EventSource per view would hit the browser's six-per-host limit."
     },
@@ -122,7 +122,7 @@
       "kind": "code",
       "what": "The axum router: one handler per thing you can do to a jelly. Listens on 127.0.0.1 only, with no login.",
       "files": [
-        "src/server.rs: serve, call, set_state, reshape, attend, comment"
+        "src/server.rs: serve, call, set_state, shape, attend, comment"
       ],
       "risk": "Anything that can reach the port can run verbs.",
       "touched": {
@@ -145,7 +145,7 @@
       "layer": "daemon",
       "label": "Broadcast channel",
       "kind": "code",
-      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket; `jelly wait` and `jelly events` hear it over /api/events.",
+      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket; `jelly hear --wait` and `jelly events` hear it over /api/events.",
       "files": [
         "src/server.rs: App.events, serve, events",
         "src/main.rs: Cmd::Wait, Cmd::Events"
@@ -181,7 +181,7 @@
       "kind": "code",
       "what": "Every jelly in memory, behind one Mutex. Each change bumps the version, saves the jelly and returns an event.",
       "files": [
-        "src/store.rs: Store, call_from, set_state, reshape, commit, event"
+        "src/store.rs: Store, call_from, set_state, shape, commit, event"
       ],
       "risk": "State changes only here. Undo, events and attribution all hang off commit."
     },
@@ -194,14 +194,14 @@
       "files": [
         "src/verbs.rs: run, check, eval, TIME_LIMIT, MEMORY_LIMIT"
       ],
-      "risk": "Never give verbs network access. Live data is pushed in with `jelly call`."
+      "risk": "Never give verbs network access. Live data is pushed in with `jelly do`."
     },
     {
       "id": "undo",
       "layer": "store",
       "label": "Undo",
       "kind": "store",
-      "what": "A call, set or reshape keeps what it takes to go back: the changed lines of state, and the view or verbs it replaced. 100 deep, within twice the state.",
+      "what": "A call, set or shape keeps what it takes to go back: the changed lines of state, and the view or verbs it replaced. 100 deep, within twice the state.",
       "files": [
         "src/store.rs: Step, push_step, undo, UNDO_DEPTH"
       ],
@@ -286,7 +286,7 @@
     {
       "from": "view",
       "to": "runtime",
-      "label": "jelly.call, jelly.onState"
+      "label": "jelly.do, jelly.onState"
     },
     {
       "from": "runtime",
@@ -386,7 +386,7 @@
     {
       "from": "bus",
       "to": "cli",
-      "label": "/api/events: jelly wait, jelly events"
+      "label": "/api/events: jelly hear --wait, jelly events"
     }
   ],
   "traces": [
@@ -400,12 +400,12 @@
         },
         {
           "at": "view",
-          "say": "The button's handler calls jelly.call(\"add\", { title }). The view never writes state itself."
+          "say": "The button's handler calls jelly.do(\"add\", { title }). The view never writes state itself."
         },
         {
           "at": "runtime",
           "say": "The runtime POSTs the verb and its args, signed by: \"person\", with the element they used.",
-          "cite": "assets/runtime.js: jelly.call, post, source"
+          "cite": "assets/runtime.js: jelly.do, post, source"
         },
         {
           "at": "routes",
@@ -428,13 +428,13 @@
           "cite": "src/verbs.rs: run, eval",
           "show": {
             "kind": "terminal",
-            "after": "$ jelly call plan add '{}'\njelly: title needed",
+            "after": "$ jelly do plan add '{}'\njelly: title needed",
             "caption": "A verb that throws changes nothing; its message is the error."
           }
         },
         {
           "at": "undo",
-          "say": "What it takes to go back is pushed for undo: the changed lines of state, and the view or verbs a reshape replaced.",
+          "say": "What it takes to go back is pushed for undo: the changed lines of state, and the view or verbs a shape replaced.",
           "cite": "src/store.rs: push_step"
         },
         {
@@ -448,7 +448,7 @@
           "cite": "src/store.rs: commit, Store::log",
           "show": {
             "kind": "terminal",
-            "after": "$ jelly call plan add '{\"title\":\"second\"}'\ntrial:plan v2: add ran · changed /items",
+            "after": "$ jelly do plan add '{\"title\":\"second\"}'\ntrial:plan v2: add ran · changed /items",
             "caption": "The CLI's one line is built from the same event."
           }
         },

@@ -16,7 +16,7 @@ async page => {
     const button = (name, act) => entry(name).locator(`header [data-act="${act}"]`);
     const activate = async locator => touch ? locator.tap() : locator.click();
     const savedPin = async (name, pinned) => {
-      await page.waitForFunction(async ({name,pinned}) => (await (await fetch(`/api/jellies/${name}`)).json()).pinned === pinned, {name,pinned});
+      await page.waitForFunction(async ({name,pinned}) => (await (await fetch(`/api/jellies/${name}`)).json()).kept === pinned, {name,pinned});
       await entry(name).waitFor({state:pinned ? 'detached' : 'visible'});
     };
     const comment = async (name, on) => {
@@ -93,8 +93,8 @@ async page => {
       const long = names[1];
       await post(`/api/jellies/${long}/working`, {what:'Preparing the plan',by:'worker'.repeat(20)});
       await post(`/api/jellies/${long}/comment`, {anchor:{selector:'#target'},text:'Review this section'});
-      await post(`/api/jellies/${long}/attention`, {kind:'look',id:'review',title:'Review the plan'});
-      await post(`/api/jellies/${long}/call`, {verb:'activity',args:{},by:'activity'.repeat(20)});
+      await post(`/api/jellies/${long}/asks`, {kind:'look',id:'review',title:'Review the plan'});
+      await post(`/api/jellies/${long}/do`, {verb:'activity',args:{},by:'activity'.repeat(20)});
       await page.waitForFunction(name => {
         const meta = document.querySelector(`.entry[data-name="${name}"] .who`);
         return meta?.querySelector('.work') && meta.textContent.includes('open comment') && meta.textContent.includes('for you') && meta.querySelector('.last')?.textContent.includes('activity');
@@ -165,7 +165,7 @@ async page => {
         await exitComment(name);
         await activate(button(name,'pin'));
         await savedPin(name,true);
-        await post(`/api/jellies/${name}/pin`, {pinned:false});
+        await post(`/api/jellies/${name}/keep`, {pinned:false});
         await savedPin(name,false);
         page.once('dialog', dialog => dialog.dismiss());
         await activate(button(name,'rm'));

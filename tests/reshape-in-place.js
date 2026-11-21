@@ -1,6 +1,6 @@
-// A reshape updates open pages in place; see tests/README.md.
+// A shape updates open pages in place; see tests/README.md.
 async page => {
-  const base = new URL(page.url()).origin, project = `reshape-${Date.now()}`, name = `${project}:fixture`;
+  const base = new URL(page.url()).origin, project = `shape-${Date.now()}`, name = `${project}:fixture`;
   const assert = (ok, message) => { if (!ok) throw Error(message); };
   const post = async (path, data) => {
     const r = await page.request.post(base + path, {data: {...data, by: 'test'}});
@@ -13,10 +13,10 @@ async page => {
     <div>${'<div class="row">row</div>'.repeat(25)}</div><input id="note"><div>${'<div class="row">row</div>'.repeat(25)}</div>
     <p id="n"></p><script>jelly.onState((s) => { document.getElementById('n').textContent = 'n=' + s.n; });</script>`;
   let rev = 0;
-  const reshape = () => post(`/api/jellies/${name}/reshape`, {view: view(`v${++rev}`)});
+  const shape = () => post(`/api/jellies/${name}/shape`, {view: view(`v${++rev}`)});
   await post('/api/jellies', {name, view: view('v0'), verbs: 'const verbs = { inc(s) { s.n++; } };', state: {n: 0}});
 
-  // Scroll, focus the field and type, reshape, and check what the new version kept.
+  // Scroll, focus the field and type, shape, and check what the new version kept.
   const results = [];
   const check = async (mode, frame, scroll, extra = async () => {}) => {
     await (await frame()).evaluate(() => { document.getElementById('box').scrollTop = 40; });
@@ -25,7 +25,7 @@ async page => {
     await (await frame()).evaluate(() => document.getElementById('note').setSelectionRange(1, 3));
     const before = await scrollOf(mode);
     await page.evaluate(() => { window.watching = true; });
-    await reshape();
+    await shape();
     await extra();
     const label = `v${rev}`;
     await shows(frame, label);
@@ -85,10 +85,10 @@ async page => {
   scrollOf = () => page.evaluate(() => document.getElementById('stream').scrollTop);
   await check('stream', entry, () => page.evaluate(() => { document.getElementById('stream').scrollTop = 400; }));
 
-  // Verb calls during a swap must not restart it, and two quick reshapes end on the last.
+  // Verb calls during a swap must not restart it, and two quick shapes end on the last.
   await check('stream, busy', entry, () => page.evaluate(() => { document.getElementById('stream').scrollTop = 400; }), async () => {
-    for (let i = 0; i < 6; i++) { await post(`/api/jellies/${name}/call`, {verb: 'inc', args: {}}); await page.waitForTimeout(30); }
-    await reshape();
+    for (let i = 0; i < 6; i++) { await post(`/api/jellies/${name}/do`, {verb: 'inc', args: {}}); await page.waitForTimeout(30); }
+    await shape();
   });
   assert(await (await entry()).locator('#n').textContent() === 'n=6', 'stream: state after the busy swap');
 
@@ -100,11 +100,11 @@ async page => {
   await page.locator('#back').click();
 
   // A pinned tile swaps too.
-  await post(`/api/jellies/${name}/pin`, {pinned: true});
+  await post(`/api/jellies/${name}/keep`, {pinned: true});
   const tile = page.locator('.tile iframe:not(.next)');
   await tile.contentFrame().locator('#title').waitFor();
   await page.evaluate(() => { window.watching = true; });
-  await reshape();
+  await shape();
   await shows(async () => (await tile.elementHandle()).contentFrame(), `v${rev}`);
   await page.evaluate(() => { window.watching = false; });
   assert(await page.locator('.tile iframe').count() === 1, 'tile: one frame after the swap');

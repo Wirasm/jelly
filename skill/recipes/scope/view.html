@@ -174,11 +174,11 @@ function say(msg) {
   clearTimeout(toastT);
   toastT = setTimeout(() => ($("toast").textContent = ""), 5000);
 }
-const call = (verb, args) => jelly.call(verb, args).catch((e) => say(e.message));
+const call = (verb, args) => jelly.do(verb, args).catch((e) => say(e.message));
 
 function draw() {
   const state = current(), R = result(state);
-  if (!R) { $("result").innerHTML = `<div><small>No result yet</small>Run <code>jelly call ${esc(jelly.name)} recount</code>.</div>`; return; }
+  if (!R) { $("result").innerHTML = `<div><small>No result yet</small>Run <code>jelly do ${esc(jelly.name)} recount</code>.</div>`; return; }
   const items = state.items || [], levers = state.levers || [], groups = state.groups || [], rec = state.recommended;
   const unit = state.unit || "", amt = (n) => `${n1(n)}${unit ? " " + unit : ""}`;
   const by = Object.fromEntries(items.map((i) => [i.id, i]));
@@ -313,7 +313,7 @@ document.addEventListener("change", (e) => {
   const value = Number(e.target.value), l = (jelly.state.levers || []).find((l) => l.id === id);
   const settle = () => { if (drag?.id === id) drag = null; draw(); };
   if (l && l.value === value) return settle();
-  jelly.call("lever", { id, value }).then(settle, (err) => { settle(); say(err.message); });
+  jelly.do("lever", { id, value }).then(settle, (err) => { settle(); say(err.message); });
 });
 
 // The project's DESIGN.md tokens, when this is served by the daemon.
@@ -326,7 +326,7 @@ if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
 jelly.onState(draw);
 jelly.person.onAsk(draw);
 // New verbs can bring a new model.
-jelly.events?.((ev) => { if (ev.jelly === jelly.name && ev.kind === "reshape") loadModel(); });
+jelly.events?.((ev) => { if (ev.jelly === jelly.name && ev.kind === "shape") loadModel(); });
 loadModel();
 </script>
 </body>

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "jelly", about = "Small live apps that agents and people shape while they run")]
+#[command(name = "jelly", version, about = "Small live apps that agents and people shape while they run")]
 struct Cli {
     /// Daemon address for client commands.
     #[arg(long, env = "JELLY_URL", default_value = startup::DEFAULT_URL, global = true)]
@@ -67,7 +67,7 @@ enum Cmd {
         all: bool,
     },
     /// Make a jelly from a view and verbs. Use - to read a file from stdin.
-    New {
+    Make {
         name: String,
         /// Start from a folder with view.html, verbs.js, state.json and assets/,
         /// such as what `jelly pull` or `jelly recipes NAME --out` wrote.
@@ -97,12 +97,12 @@ enum Cmd {
     /// get wrong. With a NAME, print its RECIPE.md; with --out, write its files.
     Recipes {
         name: Option<String>,
-        /// Write the recipe's files into this folder to edit, then `jelly new NAME --from DIR`.
+        /// Write the recipe's files into this folder to edit, then `jelly make NAME --from DIR`.
         #[arg(long, requires = "name")]
         out: Option<PathBuf>,
     },
     /// Call a verb, exactly as a button in the view would.
-    Call {
+    Do {
         name: String,
         verb: String,
         /// Arguments as JSON, @FILE to read a file, or - for stdin.
@@ -125,7 +125,7 @@ enum Cmd {
     /// Print state, or the part at a JSON pointer such as /labels.
     State { name: String, pointer: Option<String> },
     /// Swap the view and/or verbs while the jelly runs. State is kept.
-    Reshape {
+    Shape {
         name: String,
         #[arg(long)]
         view: Option<PathBuf>,
@@ -136,12 +136,12 @@ enum Cmd {
         about: Option<String>,
     },
     /// Undo the last change to the view, verbs or state, by anyone. Comments,
-    /// answers and pins are not undone.
+    /// answers and keeps are not undone.
     Undo { name: String },
-    /// Keep a jelly.
-    Pin { name: String },
+    /// Keep a jelly: it stays on the jelly page instead of being put away after a quiet week.
+    Keep { name: String },
     /// Stop keeping a jelly.
-    Unpin { name: String },
+    Unkeep { name: String },
     /// Remove a jelly and its history.
     Rm { name: String },
     /// Stream events as JSON lines, for one jelly or all.
@@ -168,7 +168,7 @@ enum Cmd {
     /// person to look at something; they answer "seen" or with a word back.
     ///
     /// `jelly ask NAME --spec spec.json` makes an ask page: one or more questions,
-    /// each an attention item with options (label, does, gains, costs, effort, a
+    /// each an ask with options (label, does, gains, costs, effort, a
     /// live HTML preview), a recommendation and why. Asking again with the same
     /// name starts a new round. Spec: {"title", "context", "questions": [{"id",
     /// "question", "context", "recommend", "why", "options": [...]}]}.
@@ -197,7 +197,7 @@ enum Cmd {
         /// More to read before answering, shown under the question.
         #[arg(long, default_value = "")]
         context: String,
-        /// Block until the person answers or the ask is withdrawn, then print the answer.
+        /// Block until the person answers or the ask is unasked, then print the answer.
         #[arg(long, conflicts_with = "spec")]
         wait: bool,
         /// With --wait: give up after this many seconds (exit 2).
@@ -248,12 +248,14 @@ enum Cmd {
         #[arg(long, value_name = "NAME")]
         save: Option<String>,
     },
-    /// Everything waiting on the person in this project (or everywhere with
-    /// --all), one line per item.
-    Attention {
-        #[arg(long)]
+    /// What is waiting: the asks that wait on the person, then their open comments,
+    /// which wait on you. One line each. This project's jellies, or one jelly's.
+    Waiting {
+        name: Option<String>,
+        /// Every project.
+        #[arg(long, conflicts_with = "name")]
         all: bool,
-        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        /// Only your jellies: ones made or last shaped under your --as / JELLY_AS name.
         #[arg(long)]
         mine: bool,
     },
@@ -261,8 +263,11 @@ enum Cmd {
     /// order, then print what is on screen, the verbs that ran and what they
     /// changed. Nothing is saved, recorded or undoable.
     ///
-    /// --json prints {jelly, version, steps, calls, errors, failed, problems,
-    /// png, state, outline}; `failed.step` counts from 0.
+    /// A dialog the page opens (alert, confirm, prompt) is printed as a `dialog`
+    /// line and does not stop the steps: a confirm is answered OK, a prompt cancelled.
+    ///
+    /// --json prints {jelly, version, steps, calls, errors, dialogs, failed,
+    /// problems, png, state, outline}; `failed.step` counts from 0.
     Try {
         name: String,
         /// Click the element this CSS selector matches. Repeatable.
@@ -287,13 +292,13 @@ enum Cmd {
     /// Leave a note for the next agent who picks this jelly up.
     Note { name: String, text: String },
     /// Write the full jelly into a folder: view.html, verbs.js, state.json and
-    /// assets/, the files `jelly new --from` and `jelly dev` read.
+    /// assets/, the files `jelly make --from` and `jelly dev` read.
     Pull {
         name: String,
         /// Default: ./<name>
         dir: Option<PathBuf>,
     },
-    /// Watch a pulled folder and reshape the jelly on every save.
+    /// Watch a pulled folder and shape the jelly on every save.
     Dev {
         name: String,
         dir: Option<PathBuf>,
@@ -305,44 +310,20 @@ enum Cmd {
         set: Option<PathBuf>,
     },
     /// Take back an ask that no longer applies.
-    Withdraw { name: String, id: String },
+    Unask { name: String, id: String },
     /// Open a jelly full size on the person's screen. No name closes it.
-    Focus { name: Option<String> },
+    Show { name: Option<String> },
     /// Say you are changing a jelly, so the person waits ("rebuilding the header").
-    Working { name: String, what: String },
-    /// Say you are done changing a jelly.
-    Done { name: String },
-    /// Block until someone other than you changes the jelly, then print what
-    /// they did in one line. This is how an agent waits for the person.
-    Wait {
-        /// Exclusive starting point from a mutation (seq:N). Replays recorded events, without state.
-        #[arg(long)]
-        since: Option<SequenceToken>,
-        /// Leave out to wait on every jelly (the jelly page's own changes are skipped).
-        name: Option<String>,
-        /// Give up after this many seconds (exit 2).
-        #[arg(long)]
-        timeout: Option<u64>,
-    },
-    /// List comments pinned to parts of a jelly's view, one line each with its
-    /// thread. Leave out NAME for every jelly: this is the person's to-do list for you.
-    Comments {
-        name: Option<String>,
-        /// Include resolved comments.
-        #[arg(long)]
-        all: bool,
-        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
-        #[arg(long)]
-        mine: bool,
+    /// `--done` says you are finished.
+    Working {
+        name: String,
+        #[arg(required_unless_present = "done")]
+        what: Option<String>,
+        #[arg(long, conflicts_with = "what")]
+        done: bool,
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
     Move { name: String, to: String },
-    /// Mark a comment as dealt with.
-    Resolve { name: String, id: String },
-    /// Hide a jelly from the jelly page without deleting it.
-    Archive { name: String },
-    /// Bring an archived jelly back to the jelly page.
-    Restore { name: String },
     /// Add files (images, video, models, data) next to a jelly. A view refers
     /// to them as `assets/<file>`. They stay out of state and undo.
     Asset {
@@ -358,7 +339,7 @@ enum Cmd {
     ///
     /// `--to ana@example.com` shares it live through your relay (`jelly relay`)
     /// and prints a link for Ana. She can use the jelly from any device: click,
-    /// answer, comment. You hear her in `jelly inbox` and `jelly wait` as
+    /// answer, comment. You hear her in `jelly hear` and `jelly hear --wait` as
     /// person:ana@example.com. Each person gets their own link; asking again
     /// prints the same one. jelly sends no email: pass the link on yourself.
     /// `--link` prints a view-only link: anyone with it watches the jelly change
@@ -372,8 +353,8 @@ enum Cmd {
     /// `--pin` again makes a new one and the old one stops.
     ///
     /// While a jelly is shared, the relay holds the live copy: it keeps working
-    /// while this machine sleeps, and your changes (call, set, reshape, ask,
-    /// withdraw, reply) go there. Undo, move, rm and a new ask round wait until
+    /// while this machine sleeps, and your changes (call, set, shape, ask,
+    /// unask, reply) go there. Undo, move, rm and a new ask round wait until
     /// `jelly unshare`.
     Share {
         name: String,
@@ -420,17 +401,31 @@ enum Cmd {
         /// (Not named `url`: that would collide with the global --url.)
         address: Option<String>,
     },
-    /// What the person did in this project's jellies since you last asked.
-    /// Reader identity: explicit --as / JELLY_AS, then --session-id /
-    /// JELLY_SESSION_ID, Claude session environment or hook input, then the
-    /// invoking parent's PID and start time. Conversation IDs survive resume.
+    /// What the person did in this project's jellies since you last listened.
     /// With --hook, starts silently and prints nothing when there is nothing new,
-    /// so it can run at the start of every agent turn. After startup, an inbox
-    /// request that times out prints one line.
-    Inbox {
+    /// so it can run at the start of every agent turn.
+    ///
+    /// `--wait` blocks instead, until someone other than you changes NAME (or any
+    /// jelly), then prints what they did in one line. Exit 2 on --timeout. This
+    /// is how an agent waits for the person.
+    ///
+    /// Who is listening: --as / JELLY_AS, then --session-id / JELLY_SESSION_ID,
+    /// Claude's session, then the invoking parent process.
+    Hear {
+        /// Block until someone else changes this jelly; leave out for any jelly.
+        #[arg(requires = "wait")]
+        name: Option<String>,
+        #[arg(long, conflicts_with_all = ["hook", "mine"])]
+        wait: bool,
+        /// With --wait: start after this change (seq:N), replaying what was recorded since.
+        #[arg(long, requires = "wait")]
+        since: Option<SequenceToken>,
+        /// With --wait: give up after this many seconds (exit 2).
+        #[arg(long, requires = "wait")]
+        timeout: Option<u64>,
         #[arg(long)]
         hook: bool,
-        /// Only your jellies: ones made or last reshaped under your --as / JELLY_AS name.
+        /// Only your jellies: ones made or last shaped under your --as / JELLY_AS name.
         #[arg(long)]
         mine: bool,
         /// Stable conversation ID, shared by commands, hooks and resumed sessions.
@@ -441,7 +436,9 @@ enum Cmd {
     Reply {
         name: String,
         id: String,
-        text: String,
+        /// Leave out with --resolve to close the thread without a word.
+        #[arg(required_unless_present = "resolve")]
+        text: Option<String>,
         /// Close the thread: you dealt with it.
         #[arg(long)]
         resolve: bool,
@@ -567,7 +564,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
     if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. }) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
-        let quiet = matches!(cli.cmd, Cmd::Inbox { hook: true, .. });
+        let quiet = matches!(cli.cmd, Cmd::Hear { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
             return if quiet { Ok(()) } else { Err(e.into()) };
         }
@@ -576,7 +573,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
     if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
-        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Inbox { .. }) {
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
     // A change prints the daemon's event as it is, or one line about it.
@@ -658,15 +655,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             for j in &list {
                 let mut tags = vec![format!("v{}", j["version"])];
                 let n = |k: &str| j[k].as_u64().unwrap_or(0);
-                if n("attention") > 0 { tags.push(format!("{} waiting on the person", n("attention"))); }
+                if n("open_asks") > 0 { tags.push(format!("{} waiting on the person", n("open_asks"))); }
                 if n("open_comments") > 0 { tags.push(format!("{} open comments", n("open_comments"))); }
-                if j["pinned"].as_bool() == Some(true) { tags.push("pinned".into()); }
+                if j["kept"].as_bool() == Some(true) { tags.push("kept".into()); }
                 if j["archived"].as_bool() == Some(true) { tags.push("archived".into()); }
                 output(format_args!("{}  {}  ({})\n", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), tags.join(", ")))?;
             }
             Ok(())
         }
-        Cmd::New { name, from, recipe, view, verbs, state, replace, about } => {
+        Cmd::Make { name, from, recipe, view, verbs, state, replace, about } => {
             let recipe = recipe.map(|r| recipes::get(&r)).transpose()?;
             sync_design(&cli.url, &project());
             let in_from = |file: &str| from.as_ref().map(|d| d.join(file));
@@ -686,8 +683,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 Some(s) => serde_json::from_str(&s).map_err(|e| format!("state is not JSON: {e}"))?,
                 None => json!({}),
             };
-            let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project()});
+            let project = project();
+            let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project});
             let ev = send("POST", &api(""), body)?;
+            // `inbox`, `ls` and `attention` show the project you run them from, so
+            // from the person's repo they would never show this jelly.
+            if project.is_empty() && cli.project.is_none() && !name.contains(':') {
+                eprintln!("jelly: {name} is in no project, because this folder is not in a git repo. `jelly hear` run from a repo will not show what the person does in it. Put it in one with `jelly move {name} PROJECT`, or make jellies from the repo: `jelly make {name} --from FOLDER`.");
+            }
             // The folder's or recipe's assets come along, as `jelly asset` would add them.
             let made = ev["jelly"].as_str().unwrap_or(&name).to_string();
             let jelly = api(&format!("/{made}"));
@@ -711,7 +714,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             for r in recipes::RECIPES {
                 output(format_args!("{:<9} {}\n", r.name, r.use_when()))?;
             }
-            output(format_args!("\nRead one: jelly recipes plan. Make a jelly from it: jelly new NAME --recipe plan.\n"))
+            output(format_args!("\nRead one: jelly recipes plan. Make a jelly from it: jelly make NAME --recipe plan.\n"))
         }
         Cmd::Recipes { name: Some(name), out: None } => {
             output(format_args!("{}", recipes::get(&name)?.text("RECIPE.md").unwrap_or("")))
@@ -720,12 +723,12 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let r = recipes::get(&name)?;
             r.write(&dir)?;
             let files: Vec<&str> = r.files.iter().map(|(p, _)| *p).filter(|p| !p.starts_with("assets/")).collect();
-            output(format_args!("{}/  {}  assets/ ({})\nEdit, then: jelly new {name} --from {}\n",
+            output(format_args!("{}/  {}  assets/ ({})\nEdit, then: jelly make {name} --from {}\n",
                 dir.display(), files.join("  "), r.assets().count(), dir.display()))
         }
-        Cmd::Call { name, verb, args } => {
+        Cmd::Do { name, verb, args } => {
             let args = json_arg(&args, "args")?;
-            report(send("POST", &api(&format!("/{}/call", id(&name)?)), json!({"verb": verb, "args": args, "by": by}))?)
+            report(send("POST", &api(&format!("/{}/do", id(&name)?)), json!({"verb": verb, "args": args, "by": by}))?)
         }
         Cmd::Set { name, value, at, rm } => {
             let value = match (rm, value) {
@@ -739,13 +742,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let p = pointer.map(|p| format!("?pointer={}", encode(&p))).unwrap_or_default();
             print(get(&api(&format!("/{}/state{p}", id(&name)?)))?)
         }
-        Cmd::Reshape { name, view, verbs, about } => {
+        Cmd::Shape { name, view, verbs, about } => {
             let body = json!({"view": view.map(|p| read(&p)).transpose()?, "verbs": verbs.map(|p| read(&p)).transpose()?, "about": about, "by": by});
-            report(send("POST", &api(&format!("/{}/reshape", id(&name)?)), body)?)
+            report(send("POST", &api(&format!("/{}/shape", id(&name)?)), body)?)
         }
         Cmd::Undo { name } => report(send("POST", &api(&format!("/{}/undo", id(&name)?)), json!({"by": by}))?),
-        Cmd::Pin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": true}))?),
-        Cmd::Unpin { name } => report(send("POST", &api(&format!("/{}/pin", id(&name)?)), json!({"by": by, "pinned": false}))?),
+        Cmd::Keep { name } => report(send("POST", &api(&format!("/{}/keep", id(&name)?)), json!({"by": by, "kept": true}))?),
+        Cmd::Unkeep { name } => report(send("POST", &api(&format!("/{}/keep", id(&name)?)), json!({"by": by, "kept": false}))?),
         Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name)?, encode(&by))), Value::Null)?),
         Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n)).transpose()?;
@@ -771,14 +774,14 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }).collect::<Result<_, String>>()?;
             let anchor = at.map(|sel| json!({"selector": sel})).unwrap_or(Value::Null);
             let body = json!({"title": q, "options": options, "seen": seen, "recommend": recommend, "why": why, "anchor": anchor, "context": context, "by": by});
-            let ev = send("POST", &api(&format!("/{}/attention", id(&name)?)), body)?;
+            let ev = send("POST", &api(&format!("/{}/asks", id(&name)?)), body)?;
             if !wait {
                 return report(ev);
             }
             // stdout carries only the answer; the ask line still says where the card shows.
             eprintln!("{}", report_line(&ev));
             let (Some(jelly), Some(item)) = (ev["jelly"].as_str(), ev["args"]["id"].as_str()) else {
-                return Err("the daemon did not say which attention item it made".into());
+                return Err("the daemon did not say which ask it made".into());
             };
             let item = await_answer(&cli.url, jelly, item, timeout)?;
             if !json {
@@ -789,43 +792,67 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             out["jelly"] = json!(jelly);
             print(out)
         }
-        Cmd::Attention { all, mine } => {
-            let p = if all { String::new() } else { project() };
-            let only = mine_name(mine, &cli.by)?.map(|m| format!("&mine={}", encode(&m))).unwrap_or_default();
-            let list = get(&format!("{}/api/attention?project={}{only}", cli.url, encode(&p)))?;
+        Cmd::Waiting { name, all, mine } => {
+            let mine = mine_name(mine, &cli.by)?;
+            let one = name.map(|n| id(&n)).transpose()?;
+            // One jelly is asked for by its full name, whatever project you are in.
+            let p = if all || one.is_some() { String::new() } else { project() };
+            let wanted = |jelly: &Value| one.as_ref().is_none_or(|n| jelly == n.as_str());
+            let only = mine.as_ref().map(|m| format!("&mine={}", encode(m))).unwrap_or_default();
+            let asks: Vec<Value> = get(&format!("{}/api/asks?project={}{only}", cli.url, encode(&p)))?.as_array().cloned().unwrap_or_default()
+                .into_iter().filter(|a| wanted(&a["jelly"])).collect();
+            let commented: Vec<String> = get(&api(""))?.as_array().into_iter().flatten()
+                .filter(|j| wanted(&j["name"]) && (p.is_empty() || j["project"] == p.as_str()))
+                .filter(|j| mine.as_ref().is_none_or(|m| j["owner"] == m.as_str()))
+                .filter(|j| j["open_comments"].as_u64().unwrap_or(0) > 0)
+                .filter_map(|j| j["name"].as_str().map(String::from)).collect();
+            let mut comments = Vec::new();
+            for n in &commented {
+                for mut c in get(&api(&format!("/{n}")))?["comments"].as_array().cloned().unwrap_or_default() {
+                    if c["resolved"] != true {
+                        c["jelly"] = json!(n);
+                        comments.push(c);
+                    }
+                }
+            }
             if json {
-                return print(list);
+                return print(json!({"asks": asks, "comments": comments}));
             }
-            let items = list.as_array().cloned().unwrap_or_default();
-            if items.is_empty() {
-                output(format_args!("Nothing waits on the person{}.\n", if p.is_empty() { String::new() } else { format!(" in project {p} (--all for every project)") }))?;
+            if asks.is_empty() && comments.is_empty() {
+                let place = match &one { Some(n) => format!(" on {n}"), None if p.is_empty() => String::new(), None => format!(" in project {p} (--all for every project)") };
+                return output(format_args!("Nothing is waiting{place}.\n"));
             }
-            for item in items {
-                let a = store::Attention::deserialize(&item).map_err(|e| e.to_string())?;
-                output(format_args!("{}  {}\n", item["jelly"].as_str().unwrap_or("?"), a.summary()))?;
+            // Asks wait on the person; their comments wait on you.
+            for a in &asks {
+                let ask = store::Ask::deserialize(a).map_err(|e| e.to_string())?;
+                output(format_args!("on them  {}  {}\n", a["jelly"].as_str().unwrap_or("?"), ask.summary()))?;
+            }
+            for c in &comments {
+                let comment = store::Comment::deserialize(c).map_err(|e| e.to_string())?;
+                output(format_args!("on you   {}\n", comment_line(c["jelly"].as_str().unwrap_or("?"), &comment)))?;
             }
             Ok(())
         }
-        Cmd::Withdraw { name, id: aid } => report(send("POST", &api(&format!("/{}/attention/{}/withdraw", id(&name)?, encode(&aid))), json!({"by": by}))?),
-        Cmd::Focus { name } => report(send("POST", &format!("{}/api/focus", cli.url), json!({"name": name.map(|n| id(&n)).transpose()?, "by": by}))?),
-        Cmd::Working { name, what } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
-        Cmd::Done { name } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": null, "by": by}))?),
+        Cmd::Unask { name, id: aid } => report(send("POST", &api(&format!("/{}/asks/{}/unask", id(&name)?, encode(&aid))), json!({"by": by}))?),
+        Cmd::Show { name } => report(send("POST", &format!("{}/api/show", cli.url), json!({"name": name.map(|n| id(&n)).transpose()?, "by": by}))?),
+        // `--done` sends no `what`, which clears it.
+        Cmd::Working { name, what, .. } => report(send("POST", &api(&format!("/{}/working", id(&name)?)), json!({"what": what, "by": by}))?),
         Cmd::Ask { spec: None, .. } => Err("give a question (an ask on that jelly) or --spec FILE (an ask jelly)".into()),
         Cmd::Ask { name, spec: Some(spec), .. } => {
             let spec: Value = serde_json::from_str(&read(&spec)?).map_err(|e| format!("spec is not JSON: {e}"))?;
             // The store's rule: a spec without `questions` is one question.
             let questions = spec.get("questions").map_or(1, |q| q.as_array().map_or(0, Vec::len));
-            let r = send("POST", &api(&format!("/{}/ask", id(&name)?)), json!({"spec": spec, "project": project(), "by": by}))?;
+            let r = send("POST", &api(&format!("/{}/asks/round", id(&name)?)), json!({"spec": spec, "project": project(), "by": by}))?;
             let jelly = r["jelly"].as_str().unwrap_or(&name).to_string();
             let round = &r["state"]["round"];
             let since = format!("seq:{}", r["seq"]);
             if json {
-                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly wait {jelly} --since {since} --json")}));
+                return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly hear --wait {jelly} --since {since} --json")}));
             }
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
             Ok(())
         }
-        Cmd::Wait { name, timeout, since } => {
+        Cmd::Hear { wait: true, name, timeout, since, .. } => {
             let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
                 .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
@@ -879,46 +906,8 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Err("the event stream ended".into())
         }
-        Cmd::Comments { name, all, mine } => {
-            let one = name.is_some();
-            let mine = mine_name(mine, &cli.by)?;
-            let names: Vec<String> = match name {
-                Some(n) => vec![id(&n)?],
-                None => {
-                    let p = project();
-                    get(&api(""))?.as_array().into_iter().flatten()
-                    .filter(|j| p.is_empty() || j["project"] == p.as_str())
-                    .filter(|j| mine.as_ref().is_none_or(|m| j["owner"] == m.as_str()))
-                    .filter(|j| all || j["open_comments"].as_u64().unwrap_or(0) > 0)
-                    .filter_map(|j| j["name"].as_str().map(String::from)).collect()
-                }
-            };
-            let mut list = Vec::new();
-            let mut lines = Vec::new();
-            for n in &names {
-                let j = get(&api(&format!("/{n}")))?;
-                for mut f in j["comments"].as_array().cloned().unwrap_or_default() {
-                    if all || f["resolved"] != true {
-                        lines.push(comment_line(n, &store::Comment::deserialize(&f).map_err(|e| e.to_string())?));
-                        f["jelly"] = json!(n);
-                        list.push(f);
-                    }
-                }
-            }
-            if json {
-                return print(json!(list));
-            }
-            if lines.is_empty() {
-                let p = project();
-                let place = if one { format!(" on {}", names[0]) } else if p.is_empty() { String::new() } else { format!(" in project {p}") };
-                output(format_args!("No {}comments{place}.\n", if all { "" } else { "open " }))?;
-            }
-            for l in lines {
-                output(format_args!("{l}\n"))?;
-            }
-            Ok(())
-        }
-        Cmd::Reply { name, id: cid, text, resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
+        Cmd::Reply { name, id: cid, text: None, .. } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
+        Cmd::Reply { name, id: cid, text: Some(text), resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
         Cmd::Look { name, text, width, full, problems, poster, compare, save } => {
             let mut q = vec![];
@@ -1024,9 +1013,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 let view = (nv != v).then(|| std::fs::read_to_string(dir.join("view.html"))).transpose().map_err(|e| e.to_string())?;
                 let verbs = (nb != b).then(|| std::fs::read_to_string(dir.join("verbs.js"))).transpose().map_err(|e| e.to_string())?;
                 (v, b) = (nv, nb);
-                match send("POST", &api(&format!("/{name}/reshape")), json!({"view": view, "verbs": verbs, "by": by})) {
-                    Ok(ev) => output(format_args!("reshaped v{} ({})\n", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")))?,
-                    Err(e) => { eprintln!("not reshaped: {e}"); },
+                match send("POST", &api(&format!("/{name}/shape")), json!({"view": view, "verbs": verbs, "by": by})) {
+                    Ok(ev) => output(format_args!("shaped v{} ({})\n", ev["version"], [view.is_some().then_some("view"), verbs.is_some().then_some("verbs")].into_iter().flatten().collect::<Vec<_>>().join(" + ")))?,
+                    Err(e) => { eprintln!("not shaped: {e}"); },
                 }
             }
         }
@@ -1043,8 +1032,6 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 None => { output(format_args!("{}", ureq::get(&url).call().map_err(describe)?.into_string().map_err(|e| e.to_string())?))?; Ok(()) }
             }
         }
-        Cmd::Archive { name } => report(send("POST", &api(&format!("/{}/archive", id(&name)?)), json!({"by": by}))?),
-        Cmd::Restore { name } => report(send("POST", &api(&format!("/{}/restore", id(&name)?)), json!({"by": by}))?),
         Cmd::Asset { name, files, rm: true } => {
             for f in files {
                 let file = f.to_string_lossy();
@@ -1128,11 +1115,10 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
-        Cmd::Inbox { hook, mine, session_id } => {
+        Cmd::Hear { hook, mine, session_id, .. } => {
             let mine = mine_name(mine, &cli.by)?;
             inbox(&cli.url, &project(), hook, cli.by, mine, session_id)
         }
-        Cmd::Resolve { name, id: cid } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
                 (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)?),
@@ -1273,7 +1259,7 @@ fn deliver_inbox(
         Ok(())
     })();
     match result {
-        Err(CommandError::Message(e)) if hook => writeln!(output, "jelly inbox failed: {e}").map_err(CommandError::Output),
+        Err(CommandError::Message(e)) if hook => writeln!(output, "jelly hear failed: {e}").map_err(CommandError::Output),
         result => result,
     }
 }
@@ -1289,7 +1275,7 @@ fn write_inbox(output: &mut impl Write, project: &str, hook: bool, batch: &store
         for item in &batch.events {
             writeln!(output, "- {}: {}", item.event.jelly, item.text)?;
         }
-        writeln!(output, "Details: `jelly state NAME`, `jelly comments`. Answer on a comment with `jelly reply`.")?;
+        writeln!(output, "Details: `jelly state NAME`, `jelly waiting`. Answer on a comment with `jelly reply`.")?;
     }
     output.flush()
 }
@@ -1307,18 +1293,18 @@ fn detect_project(given: Option<String>) -> String {
     name.trim_matches('-').chars().take(64).collect()
 }
 
-/// Blocks until attention item `item` on `jelly` is answered or withdrawn, and
+/// Blocks until ask `item` on `jelly` is answered or unasked, and
 /// returns it. It subscribes before reading the item, and reads it again on
 /// every event of that jelly or lag notification, so no answer is missed.
-fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Result<store::Attention, String> {
+fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Result<store::Ask, String> {
     let mut req = ureq::get(&format!("{url}/api/events?jelly={}", encode(jelly)));
     if let Some(t) = timeout {
         req = req.timeout(std::time::Duration::from_secs(t));
     }
-    let settled = || -> Result<Option<store::Attention>, String> {
+    let settled = || -> Result<Option<store::Ask>, String> {
         let j = get(&format!("{url}/api/jellies/{jelly}"))?;
-        let items = Vec::<store::Attention>::deserialize(&j["attention"]).map_err(|e| e.to_string())?;
-        let found = items.into_iter().find(|a| a.id == item).ok_or_else(|| format!("{jelly} has no attention item {item}"))?;
+        let items = Vec::<store::Ask>::deserialize(&j["asks"]).map_err(|e| e.to_string())?;
+        let found = items.into_iter().find(|a| a.id == item).ok_or_else(|| format!("{jelly} has no ask {item}"))?;
         Ok((!found.is_open()).then_some(found))
     };
     let resp = req.call().map_err(describe)?;
@@ -1328,8 +1314,8 @@ fn await_answer(url: &str, jelly: &str, item: &str, timeout: Option<u64>) -> Res
 fn read_answer(
     events: impl BufRead,
     item: &str,
-    mut settled: impl FnMut() -> Result<Option<store::Attention>, String>,
-) -> Result<store::Attention, String> {
+    mut settled: impl FnMut() -> Result<Option<store::Ask>, String>,
+) -> Result<store::Ask, String> {
     if let Some(done) = settled()? {
         return Ok(done);
     }
@@ -1352,10 +1338,10 @@ fn read_answer(
 }
 
 /// What the person made of an ask: `a1 answered: roomy · "keep the table"`.
-fn answer_line(item: &store::Attention) -> String {
-    let answer = match (&item.withdrawn, &item.answer) {
+fn answer_line(item: &store::Ask) -> String {
+    let answer = match (&item.unasked, &item.answer) {
         (None, Some(answer)) => answer,
-        _ => return format!("{} withdrawn", item.id),
+        _ => return format!("{} unasked", item.id),
     };
     let option = answer.option.clone().filter(|o| !o.is_empty());
     let note = Some(&answer.text).filter(|t| !t.is_empty()).map(|t| format!("{t:?}"));
@@ -1375,10 +1361,10 @@ fn report(ev: Value) -> Result<(), CommandError> {
 fn report_line(ev: &Value) -> String {
     let s = |v: &Value| v.as_str().unwrap_or("").to_string();
     let what = match ev["kind"].as_str().unwrap_or("") {
-        "call" => format!("{} ran", s(&ev["verb"])),
-        "attention" => format!("asked {} {:?}; {}. Answers arrive in `jelly inbox`", s(&ev["args"]["id"]), s(&ev["args"]["title"]), placement(ev)),
+        "do" => format!("{} ran", s(&ev["verb"])),
+        "ask" => format!("asked {} {:?}; {}. Answers arrive in `jelly hear`", s(&ev["args"]["id"]), s(&ev["args"]["title"]), shown(ev)),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
-        "new" => "made".into(),
+        "make" => "made".into(),
         k => k.to_string(),
     };
     let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
@@ -1388,7 +1374,7 @@ fn report_line(ev: &Value) -> String {
 
 /// What `jelly ask --spec` did, in one line.
 fn ask_line(jelly: &str, round: &Value, questions: usize, since: &str) -> String {
-    format!("{jelly} round {round}: asked {questions} question{}. Answers arrive in `jelly inbox`, or block on `jelly wait {jelly} --since {since}`", if questions == 1 { "" } else { "s" })
+    format!("{jelly} round {round}: asked {questions} question{}. Answers arrive in `jelly hear`, or block on `jelly hear --wait {jelly} --since {since}`", if questions == 1 { "" } else { "s" })
 }
 
 /// One comment and its thread, for an agent's to-do list.
@@ -1397,38 +1383,26 @@ fn comment_line(jelly: &str, c: &store::Comment) -> String {
     format!("{jelly}  {} on {}{}: {:?}{thread}{}", c.id, store::comment_place(&c.anchor), store::named(&c.by), c.text, if c.resolved { " (resolved)" } else { "" })
 }
 
-/// The change that ended `jelly wait`, in one line.
+/// The change that ended `jelly hear --wait`, in one line.
 fn wait_line(e: &store::Event) -> String {
     format!("{} v{}: {} {}", e.jelly, e.version, e.by, e.describe())
 }
 
 /// Where an ask shows on the page, as the daemon found it: `anchor`
 /// says what became of its `--at`, and is absent when nothing could check.
-fn placement(ev: &Value) -> String {
-    let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return "it shows at the top of the page".into() };
-    use server::AnchorStatus;
-    let status = AnchorStatus::deserialize(&ev["anchor"]).ok();
-    let inline = ev["anchor_inline"] == true;
-    if ev["anchor_exposed"] == true && status != Some(AnchorStatus::Invalid) {
-        return format!("{at} is in a part that is unavailable right now, so the question is shown at the top");
-    }
-    let fallback = if inline { "placement not checked: the view places its own attention" } else { "so it shows at the top" };
-    match status {
-        Some(AnchorStatus::Below) => format!("it shows on the page below {at}"),
-        Some(AnchorStatus::Invalid) => format!("{at} has invalid CSS selector syntax, {fallback}"),
-        Some(AnchorStatus::Missing) => format!("{at} matches nothing on the page, {fallback}"),
-        Some(AnchorStatus::Floating) => format!("{at} is in a fixed or sticky part of the page, {fallback}"),
-        Some(AnchorStatus::Hidden) => if inline {
-            format!("{at} is not on screen right now, placement not checked: the view places its own attention")
-        } else {
-            format!("it shows below {at}, which is not on screen right now")
-        },
-        Some(AnchorStatus::Fallback) => {
-            let destination = server::AnchorDestination::deserialize(&ev["anchor_destination"])
-                .map_or_else(|_| "somewhere else".into(), |d| d.describe());
-            format!("it shows {destination} instead; {}", ev["anchor_reason"].as_str().unwrap_or(""))
-        },
-        _ => format!("it shows below {at} if that matches something, else at the top: not checked ({})",
+fn shown(ev: &Value) -> String {
+    const STACK: &str = "it shows in jelly's stack of questions";
+    let Some(at) = ev["args"]["anchor"]["selector"].as_str() else { return format!("{STACK}, unless the view draws it") };
+    let drawn = ev["drawn"] == true;
+    let place = if drawn { "the view draws it" } else { STACK };
+    match server::AskAnchor::deserialize(&ev["anchor"]) {
+        Ok(server::AskAnchor::Matched) if drawn => place.into(),
+        Ok(server::AskAnchor::Matched) => format!("{place}, with a pin on {at}"),
+        Ok(server::AskAnchor::Missing) if drawn => format!("{place}; {at} matches nothing on the page"),
+        Ok(server::AskAnchor::Missing) => format!("{at} matches nothing on the page, so it has no pin; {place}"),
+        Ok(server::AskAnchor::Invalid) if drawn => format!("{place}; {at} has invalid CSS selector syntax"),
+        Ok(server::AskAnchor::Invalid) => format!("{at} has invalid CSS selector syntax, so it has no pin; {place}"),
+        _ => format!("{STACK}, unless the view draws it; whether {at} is on the page was not checked ({})",
             ev["anchor_unchecked"].as_str().unwrap_or("no snapshot")),
     }
 }
@@ -1490,9 +1464,9 @@ fn reference(j: &Value) -> String {
         format!("updated {}", server::ago(n("updated_ms"))),
         format!("v{}", n("version")),
     ];
-    if n("attention") > 0 { facts.push(format!("{} waiting on the person", n("attention"))); }
+    if n("open_asks") > 0 { facts.push(format!("{} waiting on the person", n("open_asks"))); }
     if n("open_comments") > 0 { facts.push(format!("{} open comments", n("open_comments"))); }
-    if j["pinned"].as_bool() == Some(true) { facts.push("pinned".into()); }
+    if j["kept"].as_bool() == Some(true) { facts.push("kept".into()); }
     if j["archived"].as_bool() == Some(true) { facts.push("archived".into()); }
     format!("{} · {}\n  {}", j["name"].as_str().unwrap_or("?"), j["about"].as_str().unwrap_or(""), facts.join(" · "))
 }
@@ -1558,7 +1532,7 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_line, placement, wait_line, write_output};
+    use super::{answer_line, shown, wait_line, write_output};
     use std::io::{self, Write};
     use serde_json::json;
 
@@ -1614,13 +1588,13 @@ mod tests {
             }).unwrap_err().to_string(), "alias startup");
         }
         for project in ["", "test"] {
-            let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "inbox", "--hook"]);
+            let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", project, "hear", "--hook"]);
             assert!(run_with_start(cli, |_, quiet| {
                 assert!(quiet);
                 Err("startup failed".into())
             }).is_ok());
         }
-        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", "", "inbox", "--hook"]);
+        let cli = parse(&["jelly", "--url", super::startup::DEFAULT_URL, "--project", "", "hear", "--hook"]);
         let mut called = false;
         assert!(run_with_start(cli, |_, quiet| { called = true; assert!(quiet); Ok(()) }).is_ok());
         assert!(called, "outside-project hook must start before its early return");
@@ -1628,7 +1602,7 @@ mod tests {
         let home = tempfile::NamedTempFile::new().unwrap();
         let cli = parse(&["jelly", "serve", "--port", "0", "--home", home.path().to_str().unwrap()]);
         assert!(run_with_start(cli, |_, _| panic!("serve must bypass startup")).is_err());
-        let cli = parse(&["jelly", "--url", "http://127.0.0.1:9999", "--project", "", "inbox", "--hook"]);
+        let cli = parse(&["jelly", "--url", "http://127.0.0.1:9999", "--project", "", "hear", "--hook"]);
         assert!(run_with_start(cli, |_, _| panic!("custom URL must bypass startup")).is_ok());
     }
 
@@ -1703,7 +1677,7 @@ mod tests {
         for error in ["could not find invoking parent process", "could not find parent process start time"] {
             let mut output = Vec::new();
             super::deliver_inbox("unused", "p", true, Err(error.into()), &mut output).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), format!("jelly inbox failed: {error}\n"));
+            assert_eq!(String::from_utf8(output).unwrap(), format!("jelly hear failed: {error}\n"));
             assert_eq!(super::deliver_inbox("unused", "p", false, Err(error.into()), &mut Vec::new()).unwrap_err().to_string(), error);
         }
     }
@@ -1729,7 +1703,7 @@ mod tests {
             fn flush(&mut self) -> io::Result<()> { Err(io::Error::other("flush failed")) }
         }
         for fail_write in [true, false] {
-            let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "call",
+            let body = json!({"events": [{"seq": 4, "at_ms": 1, "jelly": "p:sample", "kind": "do",
                 "by": "person", "version": 1, "view_rev": 1, "text": "click {}"}], "through": 4}).to_string();
             let (url, server) = inbox_response(&body);
             let request = crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: "a".into() }, mine: None };
@@ -1797,32 +1771,13 @@ mod tests {
         assert_eq!(answered(json!("roomy"), "but keep the dense table"), r#"a1 answered: roomy · "but keep the dense table""#);
         assert_eq!(answered(json!("roomy"), ""), "a1 answered: roomy");
         assert_eq!(answered(json!(null), "neither"), r#"a1 answered: "neither""#);
-        assert_eq!(item(json!({"withdrawn": {"by": "agent", "at_ms": 2}})), "a1 withdrawn");
+        assert_eq!(item(json!({"unasked": {"by": "agent", "at_ms": 2}})), "a1 unasked");
     }
 
     #[test]
-    fn an_ask_says_where_its_card_really_shows() {
-        let at = |extra: serde_json::Value| {
-            let mut ev = json!({"args": {"anchor": {"selector": "#list"}}});
-            ev.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-            placement(&ev)
-        };
-        assert_eq!(at(json!({"anchor": "below"})), "it shows on the page below #list");
-        for exposed in [false, true] {
-            assert_eq!(placement(&json!({"args":{"anchor":{"selector":"["}}, "anchor":"invalid", "anchor_exposed":exposed})), "[ has invalid CSS selector syntax, so it shows at the top");
-        }
-        for (status, diagnosis) in [("invalid", "has invalid CSS selector syntax"), ("missing", "matches nothing on the page"), ("floating", "is in a fixed or sticky part of the page"), ("hidden", "is not on screen right now")] {
-            assert_eq!(at(json!({"anchor": status, "anchor_inline": true})), format!("#list {diagnosis}, placement not checked: the view places its own attention"));
-        }
-        assert_eq!(at(json!({"anchor": "missing"})), "#list matches nothing on the page, so it shows at the top");
-        assert_eq!(at(json!({"anchor": "floating"})), "#list is in a fixed or sticky part of the page, so it shows at the top");
-        assert_eq!(at(json!({"anchor": "hidden"})), "it shows below #list, which is not on screen right now");
-        assert_eq!(at(json!({"anchor": "hidden", "anchor_exposed": true})), "#list is in a part that is unavailable right now, so the question is shown at the top");
-        assert_eq!(at(json!({"anchor":"fallback", "anchor_destination":{"kind":"after", "selector":"#tiles"}, "anchor_reason":"layout"})), "it shows after #tiles instead; layout");
-        assert_eq!(at(json!({"anchor":"fallback", "anchor_destination":{"kind":"top"}, "anchor_reason":"no boundary"})), "it shows at the top instead; no boundary");
-
-        let unchecked = at(json!({"anchor_unchecked": "no Chrome found"}));
-        assert!(unchecked.contains("not checked (no Chrome found)") && !unchecked.starts_with("it shows on the page below"));
-        assert_eq!(placement(&json!({"args": {"anchor": null}})), "it shows at the top of the page");
+    fn an_ask_that_was_not_checked_says_so() {
+        let unchecked = shown(&json!({"args": {"anchor": {"selector": "#list"}}, "anchor_unchecked": "no Chrome found"}));
+        assert!(unchecked.contains("whether #list is on the page was not checked (no Chrome found)"), "{unchecked}");
+        assert_eq!(shown(&json!({"args": {"anchor": null}})), "it shows in jelly's stack of questions, unless the view draws it");
     }
 }

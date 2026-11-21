@@ -126,8 +126,8 @@ fn archive_failure(closed_stderr: bool) {
     }
     std::fs::remove_dir(home.path().join("jellies").join(format!("{}.json.tmp", disk::name("test:a")))).unwrap();
     agent
-        .post(&format!("{url}/api/jellies/test:a/pin"))
-        .send_json(json!({"pinned": true, "by": "test"}))
+        .post(&format!("{url}/api/jellies/test:a/keep"))
+        .send_json(json!({"kept": true, "by": "test"}))
         .expect("the store accepts changes after a failed archive");
     assert!(daemon.0.try_wait().unwrap().is_none());
     if !closed_stderr {

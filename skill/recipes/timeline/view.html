@@ -42,8 +42,6 @@
   #tools .lead { margin-left: auto; }
   #legend { font-size: 12.5px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   #legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
-  /* Inline-blocks all the way up to #axis: jelly lifts a question asked about a
-     mark out of inline boxes, so it lands below the plot instead of inside the SVG. */
   #plot { display: inline-block; width: 100%; vertical-align: top; position: relative; background: var(--card); border: 1.5px solid var(--line); border-radius: var(--r); overflow: hidden; touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none; }
   #plot.drag { cursor: grabbing; }
   #plot svg { display: inline-block; vertical-align: top; width: 100%; }
@@ -358,7 +356,7 @@ function drawDetail(state) {
 function drawHyps(state) {
   const hs = state.hypotheses || [], byId = Object.fromEntries((state.marks || []).map((m) => [m.id, m]));
   $("hyps").innerHTML = `<small>What could explain it</small>` + (hs.length ? "" : `<p class="why">No explanation yet.</p>`) + hs.map((h) => {
-    const on = h.id === selHyp, v = h.verdict, asks = jelly.person.asks.filter((a) => a.anchor?.selector === `#h-${h.id}` && !a.answer && !a.withdrawn).length;
+    const on = h.id === selHyp, v = h.verdict, asks = jelly.person.asks.filter((a) => a.anchor?.selector === `#h-${h.id}` && !a.answer && !a.unasked).length;
     const chips = (ids, c) => (ids || []).filter((id) => byId[id]).map((id) => `<button class="chip ${c}${id === selMark ? " on" : ""}" data-mark="${esc(id)}">${c === "sup" ? "+" : "−"} ${esc(byId[id].label)}</button>`).join("");
     return `<section class="hyp${on ? " on" : ""}${v ? ` v-${v.kind}` : ""}" id="h-${esc(h.id)}" data-hyp-card="${esc(h.id)}">
       <button class="hd" data-hyp="${esc(h.id)}" aria-expanded="${on}"><span class="t">${esc(h.text)}</span>
@@ -474,17 +472,17 @@ document.addEventListener("click", (e) => {
   if (d.step) return step(+d.step);
   if (d.mark) return show(d.mark, true);
   if (d.hyp) { selHyp = selHyp === d.hyp && b.classList.contains("hd") ? null : d.hyp; noting = null; render(s); return b.classList.contains("hd") || $(`h-${d.hyp}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
-  if ("pin" in d) return jelly.call((s.marks.find((m) => m.id === selMark) || {}).pinned ? "unpin" : "pin", { mark: selMark }).catch(fail);
-  if ("unpin" in d) return jelly.call("unpin", { mark: selMark }).catch(fail);
+  if ("pin" in d) return jelly.do((s.marks.find((m) => m.id === selMark) || {}).pinned ? "unpin" : "pin", { mark: selMark }).catch(fail);
+  if ("unpin" in d) return jelly.do("unpin", { mark: selMark }).catch(fail);
   const hyp = b.closest("[data-hyp-card]")?.dataset.hypCard;
-  if (d.verdict) return jelly.call("judge", { hypothesis: hyp, verdict: d.verdict, note: (s.hypotheses.find((h) => h.id === hyp)?.verdict || {}).note || "" }).catch(fail);
-  if ("takeback" in d) { noting = null; return jelly.call("take_back", { hypothesis: hyp }).catch(fail); }
+  if (d.verdict) return jelly.do("judge", { hypothesis: hyp, verdict: d.verdict, note: (s.hypotheses.find((h) => h.id === hyp)?.verdict || {}).note || "" }).catch(fail);
+  if ("takeback" in d) { noting = null; return jelly.do("take_back", { hypothesis: hyp }).catch(fail); }
   if ("note" in d) { noting = noting === hyp ? null : hyp; render(s); return $(`h-${hyp}-note`)?.focus(); }
-  if ("savenote" in d) { const h = s.hypotheses.find((h) => h.id === hyp); return jelly.call("judge", { hypothesis: hyp, verdict: h.verdict.kind, note: $(`h-${hyp}-note`).value }).then(() => { noting = null; render(jelly.state); }, fail); }
+  if ("savenote" in d) { const h = s.hypotheses.find((h) => h.id === hyp); return jelly.do("judge", { hypothesis: hyp, verdict: h.verdict.kind, note: $(`h-${hyp}-note`).value }).then(() => { noting = null; render(jelly.state); }, fail); }
   if ("know" in d) { const m = s.marks.find((m) => m.id === selMark) || s.marks[0]; knowing = { kind: "info", lane: m.lane, rel: "after", mark: m.id }; return render(s); }
   if ("knowCancel" in d) { knowing = null; return render(s); }
   if (d.k) { knowing[d.k] = d.v; return render(s); }
-  if ("addknow" in d) return jelly.call("know", { ...knowing, mark: $("know-mark").value, text: $("know-text").value }).then(() => { knowing = null; $("know-text").value = ""; render(jelly.state); }, fail);
+  if ("addknow" in d) return jelly.do("know", { ...knowing, mark: $("know-mark").value, text: $("know-text").value }).then(() => { knowing = null; $("know-text").value = ""; render(jelly.state); }, fail);
 });
 document.addEventListener("change", (e) => { if (e.target.id === "know-mark" && knowing) knowing.mark = e.target.value; });
 document.addEventListener("keydown", (e) => {

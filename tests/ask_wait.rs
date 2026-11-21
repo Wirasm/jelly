@@ -45,7 +45,7 @@ fn daemon() -> Daemon {
     d
 }
 
-/// On the first attention event, waits `after`, then posts `action` to that
+/// On the first ask event, waits `after`, then posts `action` to that
 /// item as the person would.
 fn react(url: &str, after: Duration, action: &'static str, body: Value) -> std::thread::JoinHandle<()> {
     let url = url.to_string();
@@ -55,10 +55,10 @@ fn react(url: &str, after: Duration, action: &'static str, body: Value) -> std::
             let line = line.unwrap();
             let Some(data) = line.strip_prefix("data:") else { continue };
             let ev: Value = serde_json::from_str(data.trim()).unwrap();
-            if ev["kind"] == "attention" {
+            if ev["kind"] == "ask" {
                 let item = ev["args"]["id"].as_str().unwrap();
                 std::thread::sleep(after);
-                ureq::post(&format!("{url}/api/jellies/t:q/attention/{item}/{action}")).send_json(body).unwrap();
+                ureq::post(&format!("{url}/api/jellies/t:q/asks/{item}/{action}")).send_json(body).unwrap();
                 return;
             }
         }
@@ -110,14 +110,14 @@ fn a_seen_ask_answered_with_nothing_prints_seen() {
 #[test]
 fn a_withdrawn_ask_returns_and_json_prints_the_item() {
     let d = daemon();
-    let other = react(&d.url, Duration::ZERO, "withdraw", json!({"by": "other"}));
+    let other = react(&d.url, Duration::ZERO, "unask", json!({"by": "other"}));
     let out = ask(&d.url, &["--json", "--timeout", "20"]);
     other.join().unwrap();
     assert!(out.status.success(), "{out:?}");
     let item: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(item["id"], "a1");
     assert_eq!(item["jelly"], "t:q");
-    assert_eq!(item["withdrawn"]["by"], "other");
+    assert_eq!(item["unasked"]["by"], "other");
 }
 
 #[test]
