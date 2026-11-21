@@ -211,7 +211,7 @@ async fn publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, A
     };
     let (r, share) = (relay.clone(), record.share.clone());
     let published = blocking(move || {
-        r.publish(&share, &doc, RUNTIME_JS)?;
+        r.publish(&share, &doc, &RUNTIME_JS)?;
         assets.iter().try_for_each(|(f, b)| r.put_asset(&share, f, b, content_type(f)))
     }).await;
     if let Err(e) = published {

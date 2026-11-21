@@ -107,6 +107,19 @@ this in memory by socket and drops it when the socket closes. `look`, `ask` and
 `show` report it; the jelly page counts for every jelly. People on a share link
 are not counted.
 
+## The jelly stylesheet
+
+`assets/jelly.css` holds jelly's tokens (`--jy-*`, each a `light-dark()` pair) and
+a few parts (`jy-bar`, `jy-chip`, `jy-btn`, `jy-action`, `jy-tag`, `jy-dot`,
+`jy-mark`). `server.rs` replaces the `"__JELLY_CSS__"` placeholder in
+`runtime.js` with the file's text, and that composed runtime is what
+`/runtime.js`, a share and an export get. The runtime adds it to the page's head
+before first paint. Tokens are set on `.jy` and `:host`: `<jelly-ui class="jy">`
+always has them, a view has them with `<html class="jy">`, and a shadow root with
+the text of `jelly.css` (`window.jelly.css`) in its own style element. The
+runtime forces `jy-dark` or `jy-light` on its own parts from the view's
+background, so they match the page they sit on.
+
 ## Shares on the jelly page
 
 `GET /api/shares` lists every shared jelly with its people. For each share the

@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html class="jy">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,17 +8,15 @@
   /* Plain on purpose. With a DESIGN.md in the project its tokens take over. */
   :root {
     --jelly-comment-inset: auto 10px calc(var(--foot, 68px) + 10px) auto;
-    --bg: #fbfaf8; --card: #fff; --ink: #1f1a1d; --ink-2: #4c4449; --muted: #6e656a; --line: #e8e2e4; --soft: #f4f0f1;
-    --accent: var(--color-primary, #c8255d); --accent-ink: var(--accent); --r: var(--rounded-md, 14px);
-    --good: #237a3d; --good-soft: #e3f3e6; --warn: #c98a00; --warn-soft: #fff1c7; --bad: #c9392f; --idle: #b9b0b5;
+    --bg: var(--jy-page); --card: var(--jy-card); --ink: var(--jy-ink); --ink-2: var(--jy-ink-2); --muted: var(--jy-muted); --line: var(--jy-line); --soft: var(--jy-soft);
+    --accent: var(--jy-action); --accent-ink: var(--jy-brand-text); --r: 14px;
+    --good: var(--jy-good); --good-soft: var(--jy-good-soft); --warn: var(--jy-warn); --warn-soft: var(--jy-warn-soft); --bad: var(--jy-bad); --idle: var(--jy-idle);
     --on: #fff;
     color-scheme: light;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) { :root {
-    --bg: #15131a; --card: #1e1b25; --ink: #f1ecf4; --ink-2: #d2c9d8; --muted: #a096aa; --line: #322c3d; --soft: #262130;
-    --good: #5fcf80; --good-soft: #1d3324; --warn: #ffcf3f; --warn-soft: #3a3014; --bad: #ff7a70; --idle: #5a5266;
-    --accent-ink: var(--color-primary, #ff5c95); --on: #15131a;
+    --on: #15131a;
     color-scheme: dark;
   } }
   * { box-sizing: border-box; }
@@ -388,13 +386,6 @@ document.addEventListener("keydown", (e) => {
 let wide = innerWidth < 720;
 addEventListener("resize", () => { if ((innerWidth < 720) !== wide) { wide = innerWidth < 720; redraw(); } });
 
-// The project's DESIGN.md tokens, when this is served by the daemon.
-if (location.protocol.startsWith("http") && jelly.name.includes(":")) {
-  const l = document.createElement("link");
-  l.rel = "stylesheet"; l.href = `/p/${encodeURIComponent(jelly.name.split(":")[0])}/design.css`;
-  l.onerror = () => l.remove();
-  document.head.appendChild(l);
-}
 jelly.onState(render);
 jelly.person.onAsk(redraw);
 </script>

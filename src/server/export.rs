@@ -284,7 +284,7 @@ mod share_tests {
                 format!("<div class=discard-root><template shadowrootmode={mode}><share-gc-probe></share-gc-probe></template></div>").repeat(25)
             }).collect::<String>())
             .replace("__TEST_RESULT__", &callback)
-            .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS).unwrap().replace("</", "<\\/"))
+            .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS.as_str()).unwrap().replace("</", "<\\/"))
             .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS).unwrap().replace("</", "<\\/"));
         let (dir, app) = fixture(&view);
         {

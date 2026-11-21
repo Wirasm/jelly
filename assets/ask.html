@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html class="jy">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,16 +7,15 @@
 <style>
   /* Berry by day, Night jelly by night: jelly's own colours. */
   :root {
-    --bg: #fff8f3; --card: #ffffff; --ink: #2a1620; --ink-2: #4a3340; --muted: #7d606c; --line: #f0dfe5; --line-2: #e2c6d1; --soft: #fdf0f4;
-    --accent: #c8255d; --accent-2: #d81b60; --accent-soft: #ffe1ec; --accent-line: #f5b8cd; --sun-soft: #fff1c7; --sun-ink: #6b4700;
-    --good: #2f7d3b; --good-soft: #e3f3e6; --bad: #b8382f; --stage: #2a1620; --stage-ink: #fff4f8;
+    --bg: var(--jy-page); --card: var(--jy-card); --ink: var(--jy-ink); --ink-2: var(--jy-ink-2); --muted: var(--jy-muted); --line: var(--jy-line); --line-2: var(--jy-line-2); --soft: var(--jy-soft);
+    --accent: var(--jy-brand-text); --accent-2: var(--jy-action); --accent-soft: var(--jy-brand-soft); --accent-line: #f5b8cd; --sun-soft: var(--jy-sun-soft); --sun-ink: #6b4700;
+    --good: var(--jy-good); --good-soft: var(--jy-good-soft); --bad: var(--jy-bad); --stage: #2a1620; --stage-ink: #fff4f8;
     color-scheme: light;
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) { :root {
-    --bg: #14111c; --card: #1d1928; --ink: #f1ecf7; --ink-2: #d6cde4; --muted: #a79dbb; --line: #2e2740; --line-2: #3d3454; --soft: #241f31;
-    --accent: #ff6b9b; --accent-2: #d81b60; --accent-soft: #3a1e2e; --accent-line: #6b2f4a; --sun-soft: #3a3014; --sun-ink: #ffcf3f;
-    --good: #6fd38a; --good-soft: #1d3324; --bad: #ff7a70; --stage: #0e0c14; --stage-ink: #f1ecf7;
+    --accent-line: #6b2f4a; --sun-ink: #ffcf3f;
+    --stage: #0e0c14; --stage-ink: #f1ecf7;
     color-scheme: dark;
   } }
   * { box-sizing: border-box; }

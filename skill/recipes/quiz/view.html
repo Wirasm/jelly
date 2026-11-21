@@ -1,7 +1,7 @@
-<!doctype html><meta charset="utf-8"><title>Quiz</title>
+<!doctype html><html class="jy jy-dark"><head><meta charset="utf-8"><title>Quiz</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{--bg:#1e1033;--fg:#fff;--mute:#c4b5fd;--card:#2e1a4f;--o0:#e11d48;--o1:#2563eb;--o2:#d97706;--o3:#16a34a}
+:root{--bg:var(--jy-page);--fg:var(--jy-ink);--mute:var(--jy-muted);--card:var(--jy-card);--o0:#d81b60;--o1:#2563eb;--o2:#b45309;--o3:#15803d}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui;min-height:100vh;padding:18px}
 main{max-width:900px;margin:auto;text-align:center} h1{font-size:28px;margin:6px 0} .mute{color:var(--mute)}
 .q{font-size:clamp(22px,4vw,34px);font-weight:800;margin:18px 0}
@@ -12,7 +12,7 @@ main{max-width:900px;margin:auto;text-align:center} h1{font-size:28px;margin:6px
 .timer{height:10px;background:#ffffff22;border-radius:6px;overflow:hidden;margin-top:6px}.timer i{display:block;height:100%;background:#facc15}
 .board{background:var(--card);border-radius:14px;padding:12px 16px;margin-top:18px;text-align:left}
 .row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #ffffff14}.row.me{color:#facc15;font-weight:700}
-.join{margin-top:24px} .join input{font:18px system-ui;padding:10px;border-radius:10px;border:0;width:220px} .join button{font:700 18px system-ui;padding:10px 18px;border-radius:10px;border:0;background:#facc15;margin-left:6px;cursor:pointer}
+.join{margin-top:24px} .join input{font:18px system-ui;padding:10px;border-radius:10px;border:0;width:220px} .join button{font:700 18px system-ui;padding:10px 18px;border-radius:10px;border:0;background:#facc15;color:#1e1033;margin-left:6px;cursor:pointer}
 .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}.chip{background:var(--card);border-radius:20px;padding:6px 12px}
 .right{outline:4px solid #4ade80} .bonus{display:inline-block;background:#facc15;color:#1e1033;font-weight:800;border-radius:20px;padding:4px 12px;margin-top:6px;animation:pop .5s ease} @keyframes pop{from{transform:scale(.6)}} .note{min-height:24px;margin-top:10px;color:#fde68a}
 @media(max-width:520px){.opts{grid-template-columns:1fr}}

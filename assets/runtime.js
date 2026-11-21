@@ -270,6 +270,8 @@
   window.jelly = {
     name: boot.name,
     about: boot.about,
+    /** jelly's own stylesheet, for a view's shadow roots: `<style>${jelly.css}</style>`. */
+    get css() { return JELLY_CSS; },
     get state() { return state; },
     onState(fn) { subs.push(fn); fn(state, null); },
     async do(verb, args = {}) {
@@ -328,34 +330,48 @@
   // ---- comments: markers on the elements they are about ------------------------
 
   // Views place Comment with --jelly-comment-inset on :root.
+  // jelly's own look (assets/jelly.css), put here by the daemon. Every control
+  // below is styled from its tokens, so jelly's parts look the same everywhere.
+  const JELLY_CSS = "__JELLY_CSS__";
   const css = `
-    .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px -apple-system, sans-serif;
-      background: #1a2021; color: #d6dedc; border: 1px solid #2f383a; border-radius: 999px; padding: 5px 11px; cursor: pointer; opacity: .85; }
-    .jf-btn.on { background: #e0a24f; color: #1b2221; border-color: #e0a24f; opacity: 1; }
-    .jf-btn.jf-send { inset: var(--jelly-send-inset, auto auto 10px 10px); background: #e8336f; color: #fff; border-color: #e8336f; font-weight: 600; opacity: 1; }
-    .jf-hover { outline: 2px dashed #e0a24f !important; outline-offset: 2px; cursor: crosshair !important; }
-    .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: #e0a24f; color: #1b2221;
-      font: 600 11px -apple-system, sans-serif; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
-    .jf-marker.agent { background: #46c4b8; }
-    .jf-marker.ask { background: #e8336f; color: #fff; border-radius: 50%; }
+    jelly-ui { font-family: var(--jy-font); }
+    .jf-btn { position: fixed; inset: var(--jelly-comment-inset, auto 10px 10px auto); z-index: 2147483000; font: 12px var(--jy-font);
+      background: var(--jy-card); color: var(--jy-ink); border: 1px solid var(--jy-line-2); border-radius: 999px; padding: 5px 11px 5px 8px; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 6px 18px -8px var(--jy-shadow); }
+    .jf-btn::before { content: ""; width: 15px; height: 15px; background: var(--jy-blob) center / contain no-repeat; }
+    .jf-btn:hover { background: var(--jy-brand-soft); }
+    .jf-btn.on { background: var(--jy-sun); color: var(--jy-sun-ink); border-color: var(--jy-sun); }
+    .jf-btn.jf-send { inset: var(--jelly-send-inset, auto auto 12px 10px); background: var(--jy-action); color: var(--jy-action-ink); border-color: var(--jy-action); font-weight: 600;
+      padding: 6px 13px 6px 9px; box-shadow: 0 3px 0 var(--jy-action-edge); }
+    .jf-btn.jf-send:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--jy-action-edge); }
+    .jf-hover { outline: 2px dashed #e8336f !important; outline-offset: 2px; cursor: crosshair !important; }
+    .jf-marker { position: absolute; z-index: 2147482999; width: 20px; height: 20px; border-radius: 50% 50% 0 50%; background: var(--jy-sun); color: var(--jy-sun-ink);
+      font: 600 11px var(--jy-font); display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+    .jf-marker.agent { background: var(--jy-on); color: var(--jy-on-ink); }
+    .jf-marker.ask { background: var(--jy-action); color: var(--jy-action-ink); border-radius: 50%; }
     .jf-marker.done { opacity: .55; }
-    .jf-pop { color-scheme: light; position: absolute; z-index: 2147483001; width: 260px; background: #fff; color: #1b2221; border: 1px solid #e2e7e5; border-radius: 10px;
-      box-shadow: 0 14px 34px -10px rgba(0,0,0,.45); padding: 8px; font: 12px -apple-system, sans-serif; }
-    .jf-pop .jf-on { font: 10px ui-monospace, Menlo, monospace; color: #66726f; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .jf-pop textarea { width: 100%; box-sizing: border-box; min-height: 54px; font: 12px -apple-system, sans-serif; border: 1px solid #e2e7e5; border-radius: 6px; padding: 5px; resize: vertical; }
+    .jf-pop { position: absolute; z-index: 2147483001; width: 260px; background: var(--jy-card); color: var(--jy-ink); border: 1px solid var(--jy-line-2); border-radius: 12px;
+      box-shadow: 0 18px 40px -18px var(--jy-shadow); padding: 8px; font: 12px var(--jy-font); }
+    .jf-pop .jf-on { font: 10px var(--jy-mono); color: var(--jy-muted); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .jf-pop textarea { width: 100%; box-sizing: border-box; min-height: 54px; font: 12px var(--jy-font); color: var(--jy-ink); background: var(--jy-page); border: 1px solid var(--jy-line-2); border-radius: 8px; padding: 5px; resize: vertical; }
     .jf-pop .jf-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; align-items: center; }
-    .jf-pop button { font: 12px -apple-system, sans-serif; color: #1b2221; border: 1px solid #e2e7e5; background: #fff; border-radius: 6px; padding: 3px 9px; cursor: pointer; }
-    .jf-pop button.jf-send { background: #0f7b74; color: #fff; border-color: #0f7b74; }
-    .jf-pop .jf-by { font: 10px ui-monospace, monospace; color: #b26a12; }
+    .jf-pop button { font: 12px var(--jy-font); color: var(--jy-ink); border: 1px solid var(--jy-line); background: var(--jy-card); border-radius: 7px; padding: 3px 9px; cursor: pointer; }
+    .jf-pop button.jf-send { background: var(--jy-action); color: var(--jy-action-ink); border-color: var(--jy-action); font-weight: 600; }
+    .jf-pop .jf-by { font: 10px var(--jy-mono); color: var(--jy-muted); }
     .jf-pop .jf-thread { display: grid; gap: 6px; margin-bottom: 6px; max-height: 260px; overflow-y: auto; }
-    .jf-pop .jf-msg { border-left: 2px solid #e0a24f; padding: 1px 0 1px 7px; }
-    .jf-pop .jf-msg.agent { border-color: #46c4b8; }
-    .jf-pop .jf-msg.agent .jf-by { color: #0f7b74; }
+    .jf-pop .jf-msg { border-left: 2px solid var(--jy-sun); padding: 1px 0 1px 7px; }
+    .jf-pop .jf-msg.agent { border-color: var(--jy-brand); }
+    .jf-pop .jf-msg.agent .jf-by { color: var(--jy-brand-text); }
     .jf-pop .jf-text { white-space: pre-wrap; margin-top: 1px; }
-    .jf-pop .jf-done { font-size: 11px; color: #66726f; }
-    .jf-work { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2147483000; background: #141a19; color: #e8eeec; border-radius: 999px; padding: 6px 14px 6px 12px; font: 12.5px -apple-system, sans-serif; display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); }
-    .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: #46c4b8; animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }
+    .jf-pop .jf-done { font-size: 11px; color: var(--jy-muted); }
+    .jf-work { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2147483000; background: var(--jy-on); color: var(--jy-on-ink); border-radius: 999px; padding: 6px 14px 6px 12px; font: 12.5px var(--jy-font); display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px -8px var(--jy-shadow); }
+    .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: var(--jy-brand); animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }
     `;
+  // In the page before it first paints, so a view that takes jelly's look
+  // (<html class="jy">) never shows without it.
+  const style = document.createElement("style");
+  style.textContent = JELLY_CSS + css;
+  document.head?.appendChild(style);
   let commenting = false, hovered = null, pop = null;
   const btn = document.createElement("button");
   btn.className = "jf-btn";
@@ -369,6 +385,8 @@
   function ui() {
     if (!layer?.isConnected) {
       layer = document.createElement("jelly-ui");
+      layer.className = "jy";
+      scheme(layer);
       layer.style.cssText = "position:absolute;top:0;left:0;width:0;height:0";
       document.documentElement.appendChild(layer);
     }
@@ -458,6 +476,7 @@
   }
 
   function drawMarkers() {
+    if (layer) scheme(layer);
     drawAsks();
     markerEls.forEach((p) => p.remove());
     markerEls = [];
@@ -510,8 +529,7 @@
     :host { all: initial; position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147482998; display: flex; justify-content: center; pointer-events: none; }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: normal; text-transform: none; }
     .sheet { pointer-events: auto; width: min(640px, calc(100vw - 16px)); margin-bottom: 8px; display: grid; justify-items: center; gap: 6px;
-      --bg:#fff; --ink:#2a1620; --soft:#6b5260; --line:#f0dfe5; --tint:#fdf0f4; --accent:#e8336f; --accent-ink:#a3134c; }
-    .sheet.dark { --bg:#25162c; --ink:#f6e8f2; --soft:#c3a9bd; --line:#43294d; --tint:#33203b; --accent:#ff5c95; --accent-ink:#ff8fb6; }
+      --bg: var(--jy-card); --ink: var(--jy-ink); --soft: var(--jy-muted); --line: var(--jy-line-2); --tint: var(--jy-soft); --accent: var(--jy-brand); --accent-ink: var(--jy-brand-text); }
     .tab { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: var(--ink); color: var(--bg); box-shadow: 0 6px 18px -6px rgba(0,0,0,.5); }
     .list { width: 100%; max-height: min(70vh, 560px); overflow-y: auto; display: grid; gap: 8px; padding: 2px; }
     .shut .list { display: none; }
@@ -534,7 +552,7 @@
     .row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
     textarea { flex: 1; min-width: 0; min-height: 40px; font-size: 14px; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; }
     textarea:focus { outline: none; border-color: var(--accent); }
-    .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 10px; background: var(--accent-ink); color: var(--bg); white-space: nowrap; }
+    .go { all: unset; cursor: pointer; font-size: 14px; font-weight: 600; padding: 9px 16px; border-radius: 999px; background: var(--jy-action); color: var(--jy-action-ink); white-space: nowrap; }
     .go[disabled] { opacity: .4; cursor: default; }
     .hint { font-size: 12px; color: var(--soft); margin-top: 6px; }
     .done { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
@@ -543,6 +561,12 @@
     .c.answered { border-left-color: #3aa57a; padding: 10px 14px; }`;
 
   // Light or dark from the page's own background, so the card belongs to the page.
+  // jelly's parts match the view they sit on, light or dark, whatever the reader's own setting.
+  function scheme(el) {
+    const dark = pageIsDark();
+    el.classList.toggle("jy-dark", dark);
+    el.classList.toggle("jy-light", !dark);
+  }
   function pageIsDark() {
     for (const el of [document.body, document.documentElement]) {
       const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
@@ -619,7 +643,7 @@
     if (!stack?.isConnected) {
       stack = document.createElement("jelly-asks");
       stack.className = "jf-ask";
-      (stack.shadowRoot || stack.attachShadow({ mode: "open" })).innerHTML = `<style>${CARD_CSS}</style><div class="sheet"><button class="tab"></button><div class="list"></div></div>`;
+      (stack.shadowRoot || stack.attachShadow({ mode: "open" })).innerHTML = `<style>${CARD_CSS}${JELLY_CSS}</style><div class="sheet"><button class="tab"></button><div class="list"></div></div>`;
       stack.shadowRoot.querySelector(".tab").onclick = () => { stackOpen = !stackOpen; drawAsks(); };
       cards.clear();
       ui().appendChild(stack);
@@ -651,7 +675,7 @@
       askPins.push(pin);
     });
     const open = items.filter(isOpen).length;
-    sheet.classList.toggle("dark", pageIsDark());
+    scheme(stack);
     sheet.classList.toggle("shut", !stackOpen);
     sheet.querySelector(".tab").textContent = (open ? `${open} question${open > 1 ? "s" : ""}` : "Answered") + (stackOpen ? " · hide" : " · show");
     postSnapshot();
@@ -1069,9 +1093,7 @@
   }
 
   addEventListener("DOMContentLoaded", () => {
-    const style = document.createElement("style");
-    style.textContent = css;
-    document.head.appendChild(style);
+    if (!style.isConnected) document.head.appendChild(style);
     // A view that draws its own comment control opts out with <meta name="jelly-comment" content="off">.
     const optOut = document.querySelector('meta[name="jelly-comment"]')?.content === "off";
     if (!embedded && !optOut && share?.can_act !== false) ui().appendChild(btn);

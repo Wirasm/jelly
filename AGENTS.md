@@ -43,6 +43,13 @@ thing: no aliases for commands, flags or runtime fields.
   `archived` alone, so a fed jelly nobody opens still goes quiet.
 - `send` is the person handing the turn back. `jelly hear --wait` returns on it and
   on nothing else unless `--every` is given. Do not make other events wake a wait.
+- `assets/jelly.css` is the one source of jelly's own look. The daemon puts it
+  inside the runtime it serves, so views, shared pages and exported files all
+  carry it. The runtime's controls, the jelly page, the ask page and the recipes
+  take their colours from its `--jy-*` tokens; do not add colour values to them.
+  The file must never contain a closing style tag: views put it in a style element.
+- jelly's look is for jelly's parts only. A view gets the tokens only by asking
+  (`<html class="jy">`); nothing from jelly.css may style a view that did not.
 - Recipes are frames and starting points, not a component library. A recipe that
   holds the person's product (`compare`) gives the product's screens no CSS.
 
