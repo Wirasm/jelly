@@ -42,6 +42,8 @@ const SNAPSHOT_JS: &str = include_str!("../assets/snapshot.js");
 const ASK_VIEW: &str = include_str!("../assets/ask.html");
 const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
 const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
+/// An archived jelly nobody restored is removed this long after it was archived.
+const REMOVE_AFTER_MS: u64 = 30 * 24 * 3600 * 1000;
 
 struct App {
     store: Mutex<Store>,
@@ -181,10 +183,20 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
 
     // Jellies nobody keeps or touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
+    // Thirty quiet days after that they are removed, unless they are shared.
     let sweeper = app.clone();
     tokio::spawn(async move {
         loop {
-            let swept = sweeper.store.lock().expect("store lock").sweep(ARCHIVE_AFTER_MS);
+            let swept = {
+                let mut store = sweeper.store.lock().expect("store lock");
+                let mut swept = store.sweep(ARCHIVE_AFTER_MS);
+                for name in store.forgotten(REMOVE_AFTER_MS) {
+                    if sweeper.live(&name).is_none() {
+                        swept.extend(store.remove(&name, "jelly").ok());
+                    }
+                }
+                swept
+            };
             for ev in swept {
                 let _ = sweeper.events.send(ev);
             }

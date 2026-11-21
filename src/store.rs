@@ -844,6 +844,13 @@ impl Store {
         }).collect()
     }
 
+    /// Archived jellies nobody touched for `idle_ms` since: `sweep` archived
+    /// them, nobody restored them, and now they can go.
+    pub fn forgotten(&self, idle_ms: u64) -> Vec<String> {
+        let cutoff = now_ms().saturating_sub(idle_ms);
+        self.list().filter(|j| j.archived && !j.kept && j.updated_ms < cutoff).map(|j| j.name.clone()).collect()
+    }
+
     pub fn set_archived(&mut self, name: &str, archived: bool, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         self.entry(name)?.jelly.archived = archived;
@@ -2423,6 +2430,9 @@ mod tests {
         let swept: Vec<String> = s.sweep(0).into_iter().map(|e| e.jelly).collect();
         assert_eq!(swept, ["old"], "kept and open-comment jellies stay");
         assert!(s.get("old").unwrap().archived);
+        assert!(s.forgotten(60_000).is_empty(), "archived just now, so it stays for a while");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(s.forgotten(0), ["old"], "only archived jellies are ever forgotten");
         s.do_verb("old", "label", json!({"id": "a", "value": "x"}), "agent").unwrap();
         assert!(!s.get("old").unwrap().archived, "a change brings it back");
     }
