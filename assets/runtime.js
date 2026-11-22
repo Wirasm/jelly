@@ -84,6 +84,19 @@
     window.prompt = dialog("prompt", null, ", cancelled");
   }
   const noteError = (msg) => { if (errors.length < 10 && msg && !errors.includes(msg)) { errors.push(String(msg).slice(0, 300)); postSnapshot(); } };
+  // Someone at the page sees what failed too: a button that throws otherwise
+  // looks like a button that does nothing. Not for a file that did not load.
+  let failEl = null, failT = null;
+  function showFailure(msg) {
+    if (agentMode || !msg) return;
+    failEl ??= Object.assign(document.createElement("button"), { className: "jf-fail", title: "Close", onclick: () => failEl.remove() });
+    failEl.textContent = `This did not work: ${String(msg).slice(0, 200)}`;
+    ui().appendChild(failEl);
+    clearTimeout(failT);
+    failT = setTimeout(() => failEl.remove(), 12000);
+  }
+  addEventListener("error", (e) => { if (e.error || e.message) showFailure(e.error?.message || e.message); });
+  addEventListener("unhandledrejection", (e) => showFailure(e.reason?.message || e.reason));
   addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
   const consoleError = console.error.bind(console);
@@ -366,6 +379,9 @@
     .jf-pop .jf-text { white-space: pre-wrap; margin-top: 1px; }
     .jf-pop .jf-done { font-size: 11px; color: var(--jy-muted); }
     .jf-work { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2147483000; background: var(--jy-on); color: var(--jy-on-ink); border-radius: 999px; padding: 6px 14px 6px 12px; font: 12.5px var(--jy-font); display: flex; gap: 8px; align-items: center; box-shadow: 0 8px 24px -8px var(--jy-shadow); }
+    .jf-fail { position: fixed; left: 50%; bottom: 52px; transform: translateX(-50%); z-index: 2147483002; max-width: min(520px, calc(100vw - 24px)); text-align: left;
+      background: var(--jy-card); color: var(--jy-ink); border: 1px solid var(--jy-bad); border-left-width: 4px; border-radius: 10px; padding: 8px 12px; font: 12.5px var(--jy-font);
+      cursor: pointer; box-shadow: 0 8px 24px -8px var(--jy-shadow); overflow-wrap: anywhere; }
     .jf-work i { width: 8px; height: 8px; border-radius: 50%; background: var(--jy-brand); animation: jf-blink 1s infinite; } @keyframes jf-blink { 50% { opacity: .3; } }
     `;
   // In the page before it first paints, so a view that takes jelly's look
@@ -921,6 +937,23 @@
     }
     return found;
   }
+  // What the view's own scripts and on* attributes use of `jelly` that the runtime
+  // does not have. A view written from an older copy of the skill does this, and
+  // it only throws when someone clicks, so a render alone never shows it.
+  function unknownJelly() {
+    const sources = [...document.scripts].filter((s) => !s.src && !isOurs(s) && !s.textContent.startsWith("window.__JELLY__=")).map((s) => s.textContent)
+      .concat([...document.body.querySelectorAll("*")].filter((e) => !isOurs(e)).flatMap((e) => [...e.attributes].filter((a) => a.name.startsWith("on")).map((a) => a.value)));
+    const found = new Set(), has = `it has ${Object.keys(jelly).join(", ")}`;
+    // `jelly.x(` or `jelly.x.`, so a file name such as "jelly.png" is not read as a use.
+    for (const src of sources) for (const [, first, second, call] of src.matchAll(/(?<![\w$.\/-])jelly\.([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?(?=\s*([(.]))/g)) {
+      const group = jelly[first];
+      if (!(first in jelly)) found.add(`jelly.${first} (${has})`);
+      else if (!second && call === "(" && typeof group !== "function") found.add(`jelly.${first}() (it is not a function)`);
+      // Only jelly's own groups, such as person: state is the view's data.
+      else if (second && first !== "state" && group && typeof group === "object" && !(second in group)) found.add(`jelly.${first}.${second} (jelly.${first} has ${Object.keys(group).join(", ")})`);
+    }
+    return [...found];
+  }
   // Layout, control and loading problems, by kind.
   function problems() {
     const W = innerWidth, out = [], add = (kind, items) => { if (items.length) out.push({ kind, items: items.slice(0, 100) }); };
@@ -967,6 +1000,7 @@
       if (c.matches("input:not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea")
         && !c.labels?.length && !c.getAttribute("aria-label") && !c.getAttribute("aria-labelledby") && !c.title && !c.placeholder) unlabeled.push(name);
     }
+    add("the view uses a part of jelly that does not exist, so it fails on a click", unknownJelly());
     add("off the screen", off);
     add("covered by another element", covered);
     add("too small to tap (under 24px)", small);
