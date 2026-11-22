@@ -28,6 +28,7 @@ mod feed;
 mod hear;
 mod look;
 mod share;
+mod wake;
 
 pub(crate) use ask::AskAnchor;
 use ask::*;
@@ -209,6 +210,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
     let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
     share::resume(&app);
     feed::start(app.clone());
+    wake::start(&app);
 
     // Jellies nobody keeps or touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -292,6 +294,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/asks/{id}/answer", post(answer))
         .route("/api/jellies/{name}/asks/{id}/unask", post(unask))
         .route("/api/jellies/{name}/send", post(send))
+        .route("/api/wake", post(wake::add))
         .route("/api/jellies/{name}/working", post(working))
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))

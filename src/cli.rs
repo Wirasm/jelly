@@ -82,6 +82,16 @@ pub enum Cmd {
         #[arg(long, default_value = "")]
         about: String,
     },
+    /// Set jelly up for the coding agents on this machine: Claude Code, Codex
+    /// and Pi. Each gets the jelly skill; Claude Code also gets the hook that
+    /// reports what the person did, and Pi the extension that starts a turn when
+    /// they press Send. Run it again after updating jelly. A skill folder that
+    /// is a link (your own checkout) is left alone.
+    Setup {
+        /// Print what would be written, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// List the built-in recipes: starting points for jellies that are easy to
     /// get wrong. With a NAME, print its RECIPE.md; with --out, write its files.
     Recipes {
@@ -424,14 +434,20 @@ pub enum Cmd {
     /// hear` for what they did. `--every` returns on the first change by anyone
     /// but you. Exit 2 on --timeout. Run it in the background and it wakes you.
     ///
+    /// `--wake` is for an agent that cannot keep a command running after its turn
+    /// (Codex): it returns at once, and when the person presses Send in NAME (or
+    /// in any jelly of this project) the daemon queues a message to your session,
+    /// which starts your next turn.
+    ///
     /// Who is listening: --as / JELLY_AS, then --session-id / JELLY_SESSION_ID,
     /// Claude's session, then the invoking parent process.
     Hear {
-        /// Block until someone else changes this jelly; leave out for any jelly.
-        #[arg(requires = "wait")]
+        /// With --wait or --wake: the jelly to listen to; leave out for any jelly.
         name: Option<String>,
         #[arg(long, conflicts_with_all = ["hook", "mine"])]
         wait: bool,
+        #[arg(long, conflicts_with_all = ["wait", "hook", "mine"])]
+        wake: bool,
         /// With --wait: start after this change (seq:N), replaying what was recorded since.
         #[arg(long, requires = "wait")]
         since: Option<SequenceToken>,
