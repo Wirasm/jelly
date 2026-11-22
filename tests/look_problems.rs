@@ -155,3 +155,17 @@ fn links_scrolled_away_in_a_tab_bar_are_not_covered() {
         <div style="position: absolute; top: 30px; left: 30px; width: 120px; height: 60px; background: #eee">On top</div>"#, None);
     assert!(out.contains("covered by another element"), "{out}");
 }
+
+/// The bug from a real session: an agent with an old copy of the skill wrote
+/// `jelly.call`, which loads fine and throws on every click.
+#[test]
+fn a_view_using_a_jelly_function_that_does_not_exist_is_caught() {
+    let out = problems(r#"<button id="add" onclick="jelly.person.sent()">Add</button>
+        <script>document.getElementById("add").onclick = () => jelly.call("add", {});</script>"#, None);
+    assert!(out.contains("fails on a click: jelly.call (it has name, about, css, state, onState, do,"), "{out}");
+    assert!(out.contains("fails on a click: jelly.person.sent (jelly.person has"), "{out}");
+    assert_clean(r#"<button id="add">Add</button>
+        <script>const logo = "jelly.png", doc = "see jelly.app/docs";
+        document.getElementById("add").onclick = () => jelly.do("add", { n: jelly.state.items.length });
+        jelly.onState(() => {}); jelly.person.onAsk(() => {});</script>"#, None);
+}

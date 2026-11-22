@@ -109,8 +109,10 @@ jelly show sketch.html             # one HTML file straight to their screen: a j
 
 Run `jelly look` before you focus a jelly or ask about it, read its png, and fix
 every `error` and `!` line. Problems come with a selector you can paste into
-`try` and `--at`. Check buttons and fields with `try`, not a browser driver:
-your clicks there are never recorded as the person. An `alert`, `confirm` or
+`try` and `--at`. A jelly with buttons or fields is not ready until `try` has
+used one and its verb shows under `calls`: `look` only loads the page, and a
+broken button looks fine until someone clicks it. Use `try`, not a browser
+driver: your clicks there are never recorded as the person. An `alert`, `confirm` or
 `prompt` the page opens prints as a `dialog` line; a confirm is answered OK and
 a prompt cancelled. After a change, `--compare`
 against the version you started from marks problems you made as `new:`.
