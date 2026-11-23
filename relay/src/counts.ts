@@ -40,7 +40,13 @@ interface Day { shares: number; returning_shares: number; opens: number; rooms: 
  *  so "rooms of 3 or more" is the sum of the keys from 3 up. */
 export function counts(sql: SqlStorage) {
   const days = new Map<string, Day>();
-  const total: Day & { sharers: number } = { shares: 0, returning_shares: 0, opens: 0, rooms: {}, sharers: sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM sharers").one().n };
+  const one = (query: string) => sql.exec<{ n: number }>(query).one().n;
+  const total: Day & { sharers: number; came_back: number } = {
+    shares: 0, returning_shares: 0, opens: 0, rooms: {},
+    sharers: one("SELECT COUNT(*) AS n FROM sharers"),
+    // The number jelly steers by: shares that had three or more people in on two different days.
+    came_back: one("SELECT COUNT(*) AS n FROM (SELECT share FROM rooms WHERE peak >= 3 GROUP BY share HAVING COUNT(*) >= 2)"),
+  };
   const at = (day: string) => days.get(day) ?? days.set(day, { shares: 0, returning_shares: 0, opens: 0, rooms: {} }).get(day)!;
   for (const { day, ...n } of sql.exec<{ day: string; shares: number; returning_shares: number; opens: number }>("SELECT day, shares, returning_shares, opens FROM days")) {
     Object.assign(at(day), n);

@@ -74,10 +74,10 @@ test("shares, returning shares, opens and people per share land in today's bucke
     await open(b, link(4)),
   ];
   const day = { shares: 2, returning_shares: 1, opens: 4, rooms: { 1: 1, 4: 1 } };
-  await settled({ days: [{ day: today, ...day }], total: { ...day, sharers: 1 } });
+  await settled({ days: [{ day: today, ...day }], total: { ...day, sharers: 1, came_back: 0 } });
 
   // The peak stays when people leave, and a link that never opened counts nothing.
   for (const ws of sockets) ws.close();
   assert.equal((await fetch(new URL(`/j/${a}${link(9)}`, url))).status, 404);
-  await settled({ days: [{ day: today, ...day }], total: { ...day, sharers: 1 } });
+  await settled({ days: [{ day: today, ...day }], total: { ...day, sharers: 1, came_back: 0 } });
 });

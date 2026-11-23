@@ -73,7 +73,7 @@ curl -fsS -H "Authorization: Bearer $(jq -r .secret ~/.jelly/relay.json)" "$(jq 
 ```json
 {
   "days": [{ "day": "2026-11-23", "shares": 2, "returning_shares": 1, "opens": 4, "rooms": { "1": 1, "3": 1 } }],
-  "total": { "shares": 2, "returning_shares": 1, "opens": 4, "rooms": { "1": 1, "3": 1 }, "sharers": 1 }
+  "total": { "shares": 2, "returning_shares": 1, "opens": 4, "rooms": { "1": 1, "3": 1 }, "sharers": 1, "came_back": 0 }
 }
 ```
 
@@ -91,6 +91,10 @@ curl -fsS -H "Authorization: Bearer $(jq -r .secret ~/.jelly/relay.json)" "$(jq 
   where three were in together; rooms of 3 or more is the sum from `"3"` up. A
   person with two pages open is one person. You are not counted, only the
   people on links, and each page on the view-only link is one person.
+- `came_back` (in `total` only): shares that had three or more people in on
+  two different days. This is the number jelly steers by. A meeting that makes
+  a fresh share each week does not count yet: the relay only knows a share, not
+  the team behind it.
 
 Besides the daily numbers the relay stores the hash of the secret, and for
 each share its id with its peak for each day.
