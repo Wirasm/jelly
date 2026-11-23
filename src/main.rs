@@ -130,7 +130,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Doctor | Cmd::PlanApproved) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Doctor | Cmd::PlanApproved) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Hear { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -141,7 +141,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
     if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
-        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Pr { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Hear { wait: false, .. }) {
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Pr { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
     // A change prints the daemon's event as it is, or one line about it.
@@ -845,6 +845,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 }
             }
             Ok(())
+        }
+        Cmd::Takedown { link } => {
+            let relay = relay::Home(default_home()?).relay()?;
+            let share = relay::share_of(&link)?;
+            match relay.takedown(&share) {
+                Ok(()) => output(format_args!("share {share} is down on {}: every link to it stopped, its open pages closed, and the relay deleted its copy\n", relay.url)),
+                Err(relay::Fail::Gone) => Err(format!("{} has no share {share}: it already ended, or the link is for another relay", relay.url).into()),
+                Err(e) => Err(e.to_string().into()),
+            }
         }
         Cmd::Hear { hook, mine, session_id, .. } => {
             let mine = mine_name(mine, &cli.by)?;

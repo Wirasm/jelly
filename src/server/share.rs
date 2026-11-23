@@ -161,10 +161,10 @@ pub(crate) async fn share(app: &Shared, name: &str, who: &str, days: u64) -> Res
         None => relay::token(22)?,
     };
     let (r, share, s, w) = (relay.clone(), record.share.clone(), secret.clone(), who.to_string());
-    let expires_at = blocking(move || r.mint(&share, &s, &w, days)).await.map_err(api)?;
+    let made = blocking(move || r.mint(&share, &s, &w, days)).await.map_err(api)?;
     record.links.insert(who.into(), secret.clone());
     home(app).save(&record)?;
-    Ok(json!({"jelly": name, "url": relay.link(&record.share, &secret), "who": who, "expires_at": expires_at}))
+    Ok(json!({"jelly": name, "url": relay::link(relay.pages(&made), &record.share, &secret), "who": who, "expires_at": made["expires_at"]}))
 }
 
 /// Makes a new PIN for a room, sharing the jelly first if it is not shared yet.
@@ -177,7 +177,7 @@ pub(crate) async fn pin(app: &Shared, name: &str, hours: u64, days: u64) -> Resu
     let share = live.record.lock().await.share.clone();
     let r = relay.clone();
     let made = blocking(move || r.pin(&share, hours, days)).await.map_err(api)?;
-    Ok(json!({"jelly": name, "pin": made["pin"], "url": relay.join_page(), "expires_at": made["expires_at"], "tries": made["tries"]}))
+    Ok(json!({"jelly": name, "pin": made["pin"], "url": relay::join_page(relay.pages(&made)), "expires_at": made["expires_at"], "tries": made["tries"]}))
 }
 
 async fn live_or_publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, ApiError> {
@@ -259,7 +259,9 @@ pub(crate) async fn list(app: &Shared) -> Result<Value, ApiError> {
         };
         row["jelly"] = json!(jelly);
         // The owner's own way in, when a link was minted here: links made with a PIN have none.
-        row["links"] = json!(links.iter().map(|(who, secret)| (who.clone(), relay.link(&share, secret))).collect::<std::collections::BTreeMap<_, _>>());
+        // When the relay did not answer, these are on its own URL, which sends them on to where its pages are.
+        let urls: std::collections::BTreeMap<_, _> = links.iter().map(|(who, secret)| (who.clone(), relay::link(relay.pages(&row), &share, secret))).collect();
+        row["links"] = json!(urls);
         out.push(row);
     }
     out.sort_by(|a, b| a["jelly"].as_str().cmp(&b["jelly"].as_str()));

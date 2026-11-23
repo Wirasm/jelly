@@ -286,6 +286,7 @@ jelly share plan --link          # a live view-only link: anyone watches, nobody
 jelly share quiz --pin           # a room on a call: a 6-digit PIN and a join page; people type it with their email
 jelly unshare quiz --pin         # nobody new joins; people already in stay
 jelly unshare plan --to ana@example.com # only Ana's links stop (PIN joiners too); `jelly unshare plan` stops them all
+jelly takedown <link>            # a reported share on your relay, by its link or share id: deleted there, every link stops
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly keep plan                  # keep it; jellies nobody keeps are archived after a quiet week and removed 30 days later
 jelly rm plan

@@ -18,6 +18,12 @@
 //
 // The relay counts its own use (counts.ts): shares, opens and people per share,
 // by day. GET /api/counts returns them to the holder of RELAY_SECRET.
+//
+// A view is HTML someone else wrote, shown under this relay's host. With
+// SHARE_ORIGIN set, the pages people open (/j, /pin, /a) are served only from
+// that origin, so a bad page cannot get the host the daemon publishes to
+// flagged. REPORT_URL puts a Report link on every link page, and
+// DELETE /api/live/<share id> takes a share down for good.
 
 import { DurableObject } from "cloudflare:workers";
 import { engine, run, Refusal } from "./verbs";
@@ -29,7 +35,14 @@ interface Env {
   LIVE: DurableObjectNamespace<Live>;
   PINS: DurableObjectNamespace<Pins>;
   RELAY_SECRET: string;
+  /** Where shared pages are served from, like "https://pages.example". Unset: this relay's own host. */
+  SHARE_ORIGIN?: string;
+  /** Where a person reports a shared page. The share id is added to its end. Unset: no Report link. */
+  REPORT_URL?: string;
 }
+
+/** The origin links are made on, when it is not the one the daemon publishes to. */
+const shareOrigin = (env: Env) => (env.SHARE_ORIGIN ? new URL(env.SHARE_ORIGIN).origin : undefined);
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 interface Comment { id: string; anchor: Json; text: string; by: string; at_ms: number; resolved: boolean; replies: { text: string; by: string; at_ms: number }[] }
@@ -358,7 +371,8 @@ export class Live extends DurableObject<Env> {
     const [secret, ws] = rest.split("/");
     const hash = await sha256(secret);
     const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number; opened_ms: number | null }>("SELECT who, can_act, opened_ms FROM people WHERE hash = ?", hash).toArray()[0];
-    if (ws !== "ws") return row ? new Response(shell(this.doc?.about ?? ""), { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
+    const report = this.env.REPORT_URL ? this.env.REPORT_URL + this.share : undefined;
+    if (ws !== "ws") return row ? new Response(shell(this.doc?.about ?? "", report), { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
     if (req.headers.get("Upgrade") !== "websocket") return text("expected a WebSocket\n", 426);
     const [client, server] = Object.values(new WebSocketPair());
     if (!row || !this.doc) {
@@ -441,7 +455,7 @@ export class Live extends DurableObject<Env> {
         if (!/^[A-Za-z0-9]{22}$/.test(p.secret)) return text("bad secret\n", 400);
         this.admit(await sha256(p.secret), p.who, p.can_act);
         // A share lasts as long as its longest link.
-        return Response.json({ expires_at: await this.extend(p.days) });
+        return Response.json({ expires_at: await this.extend(p.days), share_origin: shareOrigin(this.env) });
       }
       if (path === "people" && req.method === "GET") {
         // One row per person, whatever number of links they hold: when they last
@@ -449,7 +463,7 @@ export class Live extends DurableObject<Env> {
         const rows = sql.exec<{ who: string; can_act: number; opened_ms: number | null }>(
           "SELECT who, MAX(can_act) AS can_act, MAX(opened_ms) AS opened_ms FROM people GROUP BY who ORDER BY who").toArray();
         const people = rows.map((r) => ({ who: r.who, can_act: r.can_act === 1, opened_ms: r.opened_ms, here: this.ctx.getWebSockets(`p:${r.who}`).length }));
-        return Response.json({ people, expires_at: await this.ctx.storage.getAlarm() });
+        return Response.json({ people, expires_at: await this.ctx.storage.getAlarm(), share_origin: shareOrigin(this.env) });
       }
       if (path === "people" && req.method === "DELETE") {
         const who = url.searchParams.get("who") ?? "";
@@ -464,7 +478,7 @@ export class Live extends DurableObject<Env> {
         const p = await json<{ hours: number; days: number }>();
         const share_expires_at = await this.extend(p.days);
         const made = await this.env.PINS.getByName("pins").make(share, Math.min(Math.max(p.hours, 1), MAX_HOURS));
-        return Response.json({ ...made, tries: PIN_TRIES, share_expires_at });
+        return Response.json({ ...made, tries: PIN_TRIES, share_expires_at, share_origin: shareOrigin(this.env) });
       }
       if (path === "pin" && req.method === "DELETE") {
         if (!(await this.env.PINS.getByName("pins").drop(share))) throw new Refusal(`${this.doc.name} has no PIN`);
@@ -605,6 +619,13 @@ export default {
     const live = (share: string, rest: string) => env.LIVE.getByName(share).fetch(new Request(`https://live/${share}/${rest}${url.search}`, req));
 
     if (path === "/robots.txt") return text("User-agent: *\nDisallow: /\n");
+
+    // What people open lives on the share origin only. A link made before it
+    // was set still arrives here, and goes on to the same path there.
+    const pages = shareOrigin(env);
+    if (pages && new URL(pages).host !== url.host && (path === "/pin" || LINK.test(path) || ASSET.test(path))) {
+      return new Response(null, { status: 308, headers: { Location: pages + path + url.search, ...HEADERS } });
+    }
 
     if (path === "/pin" && req.method === "GET") {
       return new Response(joinPage, { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": JOIN_CSP, ...HEADERS } });

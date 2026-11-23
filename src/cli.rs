@@ -459,6 +459,15 @@ pub enum Cmd {
         /// (Not named `url`: that would collide with the global --url.)
         address: Option<String>,
     },
+    /// Take a share down on your relay, by its link or share id, when a shared
+    /// page was reported. Unlike `jelly unshare` it needs no jelly here: it
+    /// works on any share on the relay in $JELLY_HOME/relay.json, with that
+    /// file's publish secret. Every link to the share stops at once, open
+    /// pages close, and the relay deletes its copy. Nothing brings it back.
+    Takedown {
+        /// A link (https://<relay>/j/<44 characters>) or a share id (its first 22 characters after /j/).
+        link: String,
+    },
     /// What the person did in this project's jellies since you last listened.
     /// With --hook, starts silently and prints nothing when there is nothing new,
     /// so it can run at the start of every agent turn.
