@@ -16,7 +16,9 @@ export const TARGETS = {
   "x86_64-unknown-linux-gnu": { os: "linux", cpu: "x64" },
   "x86_64-pc-windows-msvc": { os: "win32", cpu: "x64" },
 };
-const packageName = ({ os, cpu }) => `jellyware-${os}-${cpu}`;
+// Scoped, because npm refuses unscoped names such as jellyware-win32-x64 as spam.
+const folder = ({ os, cpu }) => `jelly-${os}-${cpu}`;
+const packageName = (p) => `@getjellyware/${folder(p)}`;
 const shared = {
   license: "FSL-1.1-MIT",
   repository: { type: "git", url: "git+https://github.com/Wirasm/jelly.git" },
@@ -30,7 +32,7 @@ if (kind === "platform") {
   const [target, binary, out] = rest;
   const platform = TARGETS[target];
   if (!platform) throw new Error(`no npm platform for ${target}; there are ${Object.keys(TARGETS).join(", ")}`);
-  const dir = join(out, packageName(platform));
+  const dir = join(out, folder(platform));
   mkdirSync(join(dir, "bin"), { recursive: true });
   const file = join(dir, "bin", platform.os === "win32" ? "jelly.exe" : "jelly");
   copyFileSync(binary, file);
