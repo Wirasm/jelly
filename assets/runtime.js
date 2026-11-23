@@ -698,7 +698,7 @@
     postSnapshot();
   }
   let drawQueued = false;
-  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawMarkers(); }); } };
+  const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawMarkers(); placeSend(); }); } };
   new MutationObserver((ms) => {
     if (ms.some((m) => !isOurs(m.target.nodeType === 1 ? m.target : m.target.parentElement) && (m.type !== "childList" || ![...m.addedNodes, ...m.removedNodes].every((n) => n.nodeType === 1 && isOurs(n))))) queueDraw();
   }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
@@ -777,6 +777,29 @@
     }
     sendEl.textContent = `${unsent} change${unsent > 1 ? "s" : ""} · Send`;
     if (!sendEl.isConnected) ui().appendChild(sendEl);
+    placeSend();
+  }
+  // Send sits in a corner, where a view often has its own buttons (a chat's
+  // reply row). When it would lie on one, it moves up until it is clear of
+  // them, and back down when they are gone.
+  function placeSend() {
+    if (!sendEl?.isConnected) return;
+    sendEl.style.bottom = "";
+    for (let i = 0; i < 4; i++) {
+      const r = sendEl.getBoundingClientRect();
+      let top = Infinity;
+      for (const x of [r.left + 2, (r.left + r.right) / 2, r.right - 2]) for (const y of [r.top + 2, (r.top + r.bottom) / 2, r.bottom - 2]) {
+        for (const el of document.elementsFromPoint(x, y)) {
+          const c = isOurs(el) ? null : el.closest(CONTROL), box = c?.getBoundingClientRect();
+          // A whole card that is clickable stays usable around the button.
+          if (c && box.height <= 3 * r.height) top = Math.min(top, box.top);
+        }
+      }
+      if (top === Infinity) return;
+      // No room above: where it was is no worse.
+      if (top - 8 - r.height < 0) { sendEl.style.bottom = ""; return; }
+      sendEl.style.bottom = `${innerHeight - top + 8}px`;
+    }
   }
   function drawWorking() {
     workEl?.remove();
