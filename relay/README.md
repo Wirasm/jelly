@@ -59,6 +59,64 @@ PIN ends, until the share does.
 - The email is whatever the person types; the PIN proves only that they were
   told it. Anyone with the PIN can join under any email, someone else's too.
 
+## What the relay counts
+
+The relay counts its own use, by day (UTC), so you can see whether sharing is
+used. No client is involved, and it keeps no IP, no email and nothing from a
+jelly. `GET /api/counts` with the publish secret returns the last 30 days that
+had anything, oldest first, and the sum of every day counted:
+
+```bash
+curl -fsS -H "Authorization: Bearer $(jq -r .secret ~/.jelly/relay.json)" "$(jq -r .url ~/.jelly/relay.json)/api/counts"
+```
+
+```json
+{
+  "days": [{ "day": "2026-11-23", "shares": 2, "returning_shares": 1, "opens": 4, "rooms": { "1": 1, "3": 1 } }],
+  "total": { "shares": 2, "returning_shares": 1, "opens": 4, "rooms": { "1": 1, "3": 1 }, "sharers": 1 }
+}
+```
+
+- `shares`: jellies shared that day. Another link to a jelly that is already
+  shared is not a new share.
+- `returning_shares`: the shares made with a publish secret that had shared
+  before. The relay tells sharers apart by a hash of that secret, and a relay
+  has one secret, so `sharers` is 1 until you run `jelly relay URL` again: the
+  new secret counts as a new sharer.
+- `opens`: links opened that day. A link opened again the same day counts once,
+  so a page that reconnects does not add to it. A link preview that only
+  fetches the page does not count: the page has to connect.
+- `rooms`: how many shares had that many people connected at once, at their
+  peak that day. `{"1": 1, "3": 1}` is one share one person looked at and one
+  where three were in together; rooms of 3 or more is the sum from `"3"` up. A
+  person with two pages open is one person. You are not counted, only the
+  people on links, and each page on the view-only link is one person.
+
+Besides the daily numbers the relay stores the hash of the secret, and for
+each share its id with its peak for each day.
+
+### See them in a jelly
+
+The `monitor` recipe charts numbers that are pushed to it, and a feed pushes the
+totals every hour (it needs `curl` and `jq`):
+
+```bash
+cat > counts.json <<'EOF'
+{"title": "Relay counts", "about": "What my relay has seen.", "status": "ready", "headline": "rooms3", "control": {"seq": 0},
+ "metrics": [{"id": "rooms3", "label": "Rooms of 3 or more", "better": "higher"}, {"id": "shares", "label": "Shares made", "better": "higher"},
+             {"id": "returning", "label": "Shares by a returning sharer", "better": "higher"}, {"id": "opens", "label": "Links opened", "better": "higher"}]}
+EOF
+jelly make relay-counts --recipe monitor --state counts.json --about "What my relay has seen"
+jelly feed relay-counts push --every 3600 -- sh -c '
+  curl -fsS -H "Authorization: Bearer $(jq -r .secret ~/.jelly/relay.json)" "$(jq -r .url ~/.jelly/relay.json)/api/counts" |
+  jq "{points: [.total | {m: \"shares\", v: .shares}, {m: \"returning\", v: .returning_shares}, {m: \"opens\", v: .opens},
+       {m: \"rooms3\", v: ([.rooms | to_entries[] | select((.key | tonumber) >= 3) | .value] | add // 0)}]}"'
+```
+
+Each chart is a total over time, so a line that climbs is the trend. `rooms3`
+counts a share once for every day three or more people were in it. The
+recipe's Pause and Stop buttons do nothing here: no run is listening.
+
 ## How it works
 
 - Each shared jelly is one Durable Object. It holds the view, verbs, state,
@@ -70,6 +128,9 @@ PIN ends, until the share does.
   `look` work as before. It keeps working while your laptop sleeps; the daemon
   catches up when it reconnects.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.
+
+`npm test` runs the relay locally and checks what it counts; `npm run check`
+typechecks it. Neither deploys anything.
 
 ## What it guarantees
 
