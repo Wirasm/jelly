@@ -10,6 +10,17 @@ const SKILL: &str = include_str!("../skill/SKILL.md");
 const PI_EXTENSION: &str = include_str!("../assets/pi-extension.ts");
 /// Runs at the start of every Claude Code turn; prints nothing when nothing is new.
 const HOOK: &str = "jelly hear --hook";
+/// Runs when the person approves a plan in Claude Code's plan mode.
+const PLAN_HOOK: &str = "jelly plan-approved";
+
+/// What `jelly plan-approved` prints: Claude Code hands `additionalContext` to
+/// the agent with the approval. Whether the plan is worth a jelly is the agent's call.
+pub fn plan_approved() -> Value {
+    json!({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+        "The person approved your plan. Before you change anything, show it to them as a plan jelly, so they can \
+         follow the work and steer it: run `jelly recipes plan` and do what it says. \
+         Skip this only for a plan of three steps or fewer."}})
+}
 
 /// Sets up every agent that has a folder in `home`, and says what it did, one
 /// line per thing. With `dry_run` nothing is written.
@@ -18,7 +29,9 @@ pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
     let claude = home.join(".claude");
     if claude.is_dir() {
         out.push(skill("Claude Code", &claude.join("skills/jelly"), dry_run)?);
-        out.push(claude_hook(&claude.join("settings.json"), dry_run)?);
+        let settings = claude.join("settings.json");
+        out.push(claude_hook(&settings, "hook", "UserPromptSubmit", json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}), dry_run)?);
+        out.push(claude_hook(&settings, "plan", "PostToolUse", json!({"matcher": "ExitPlanMode", "hooks": [{"type": "command", "command": PLAN_HOOK, "timeout": 3}]}), dry_run)?);
     }
     let codex = home.join(".codex");
     if codex.is_dir() {
@@ -88,31 +101,32 @@ fn done(dry_run: bool, existed: bool) -> &'static str {
     }
 }
 
-/// Adds `jelly hear --hook` to Claude Code's UserPromptSubmit hooks, unless a
-/// hook there already runs it.
-fn claude_hook(path: &Path, dry_run: bool) -> Result<String, String> {
+/// Adds `entry` to Claude Code's hooks for `event`, unless a hook already runs
+/// its command.
+fn claude_hook(path: &Path, what: &str, event: &str, entry: Value, dry_run: bool) -> Result<String, String> {
+    let command = entry["hooks"][0]["command"].as_str().expect("a hook entry names its command");
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
         Err(e) => return Err(format!("could not read {}: {e}", path.display())),
     };
-    if text.contains(HOOK) {
-        return Ok(line("Claude Code", "hook", path, "already there"));
+    if text.contains(command) {
+        return Ok(line("Claude Code", what, path, "already there"));
     }
     let Ok(mut settings) = serde_json::from_str::<Value>(&text) else {
-        return Ok(line("Claude Code", "hook", path, "left alone: it is not valid JSON"));
+        return Ok(line("Claude Code", what, path, "left alone: it is not valid JSON"));
     };
     let hooks = settings.as_object_mut().map(|s| s.entry("hooks").or_insert_with(|| json!({})));
-    let prompt = hooks.and_then(Value::as_object_mut).map(|h| h.entry("UserPromptSubmit").or_insert_with(|| json!([])));
-    let Some(list) = prompt.and_then(Value::as_array_mut) else {
-        return Ok(line("Claude Code", "hook", path, "left alone: its hooks are not in the usual shape"));
+    let listed = hooks.and_then(Value::as_object_mut).map(|h| h.entry(event).or_insert_with(|| json!([])));
+    let Some(list) = listed.and_then(Value::as_array_mut) else {
+        return Ok(line("Claude Code", what, path, "left alone: its hooks are not in the usual shape"));
     };
-    list.push(json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}));
+    list.push(entry);
     if !dry_run {
         let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
         fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
     }
-    Ok(line("Claude Code", "hook", path, if dry_run { "would add" } else { "added" }))
+    Ok(line("Claude Code", what, path, if dry_run { "would add" } else { "added" }))
 }
 
 #[cfg(test)]
@@ -146,11 +160,13 @@ mod tests {
         let settings: Value = serde_json::from_str(&fs::read_to_string(at(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["model"], "x");
         assert_eq!(settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], HOOK);
+        assert_eq!(settings["hooks"]["PostToolUse"][0], json!({"matcher": "ExitPlanMode", "hooks": [{"type": "command", "command": PLAN_HOOK, "timeout": 3}]}));
 
         // A second run changes nothing it should not.
         let again = run(home.path(), false).unwrap().join("\n");
         assert!(again.contains("already there") && again.contains("updated"), "{again}");
         let after: Value = serde_json::from_str(&fs::read_to_string(at(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(after["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
+        assert_eq!(after["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
     }
 }
