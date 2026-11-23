@@ -43,6 +43,12 @@ alternatives or a reason is refused. Never hand the person an empty question.
 The first `jelly` command starts the daemon if it is not running. `JELLY_URL` (or
 `--url`) points the CLI at another daemon; the jelly page is then at that address.
 
+When something about jelly does not work, run `jelly doctor`: one line per
+check, each failing line with the command that fixes it. `jelly update` installs
+the latest release and writes this skill again. Read it again afterwards, and
+whenever `jelly hear` says your skill is behind: commands and `window.jelly`
+may have changed.
+
 ## Make a jelly
 
 Write three files in a scratch folder, never in the person's repo. Run `jelly`

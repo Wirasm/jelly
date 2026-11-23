@@ -83,7 +83,7 @@ pub(super) async fn note(State(app): State<Shared>, Path(name): Path<String>, Js
     app.change(|s| s.note(&name, &r.text, &by(r.by)?))
 }
 
-pub(super) fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 

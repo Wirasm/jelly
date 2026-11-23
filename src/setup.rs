@@ -4,115 +4,173 @@
 use crate::recipes::RECIPES;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
 const PI_EXTENSION: &str = include_str!("../assets/pi-extension.ts");
 /// Runs at the start of every Claude Code turn; prints nothing when nothing is new.
 const HOOK: &str = "jelly hear --hook";
 
-/// Sets up every agent that has a folder in `home`, and says what it did, one
-/// line per thing. With `dry_run` nothing is written.
-pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
+const CODEX_NOTE: &str = "Codex        note   Codex's sandbox blocks jelly from reaching its daemon. Let it through by adding to ~/.codex/config.toml: \
+    `[sandbox_workspace_write]` and under it `network_access = true`; files stay sandboxed. \
+    Or approve each `jelly` command as Codex asks. To hand the turn to the person, Codex runs `jelly hear --wake NAME` and ends its turn";
+
+/// One thing jelly keeps in an agent's folder.
+pub struct Item {
+    pub agent: &'static str,
+    /// "skill", "hook" or "wake".
+    pub what: &'static str,
+    pub path: PathBuf,
+    kind: Kind,
+}
+
+enum Kind {
+    /// The skill folder: SKILL.md and the recipes it points at.
+    Skill,
+    /// `jelly hear --hook` among Claude Code's UserPromptSubmit hooks.
+    Hook,
+    /// One file with this text.
+    File(&'static str),
+}
+
+/// How an item on disk compares with what this jelly would write.
+pub enum State {
+    Current,
+    /// The person's own arrangement (a checkout of jelly), which `setup` leaves alone.
+    Link(PathBuf),
+    Missing,
+    Stale,
+}
+
+/// What belongs where, for every agent that has a folder in `home`. `setup`
+/// writes from this list and `doctor` checks against it.
+pub fn items(home: &Path) -> Vec<Item> {
+    let item = |agent, what, path, kind| Item { agent, what, path, kind };
+    let mut items = Vec::new();
     let claude = home.join(".claude");
     if claude.is_dir() {
-        out.push(skill("Claude Code", &claude.join("skills/jelly"), dry_run)?);
-        out.push(claude_hook(&claude.join("settings.json"), dry_run)?);
+        items.push(item("Claude Code", "skill", claude.join("skills/jelly"), Kind::Skill));
+        items.push(item("Claude Code", "hook", claude.join("settings.json"), Kind::Hook));
     }
     let codex = home.join(".codex");
     if codex.is_dir() {
-        out.push(skill("Codex", &codex.join("skills/jelly"), dry_run)?);
-        out.push("Codex        note   Codex's sandbox blocks jelly from reaching its daemon. Let it through by adding to ~/.codex/config.toml: \
-            `[sandbox_workspace_write]` and under it `network_access = true`; files stay sandboxed. \
-            Or approve each `jelly` command as Codex asks. To hand the turn to the person, Codex runs `jelly hear --wake NAME` and ends its turn".into());
+        items.push(item("Codex", "skill", codex.join("skills/jelly"), Kind::Skill));
     }
     let pi = home.join(".pi/agent");
     if pi.is_dir() {
-        out.push(skill("Pi", &pi.join("skills/jelly"), dry_run)?);
-        out.push(file("Pi", "wake", &pi.join("extensions/jelly.ts"), PI_EXTENSION, dry_run)?);
+        items.push(item("Pi", "skill", pi.join("skills/jelly"), Kind::Skill));
+        items.push(item("Pi", "wake", pi.join("extensions/jelly.ts"), Kind::File(PI_EXTENSION)));
     }
-    if out.is_empty() {
-        return Err("found no agent to set up: there is no ~/.claude, ~/.codex or ~/.pi/agent".into());
+    items
+}
+
+pub const NO_AGENT: &str = "there is no ~/.claude, ~/.codex or ~/.pi/agent";
+
+/// Sets up every agent that has a folder in `home`, and says what it did, one
+/// line per thing. With `dry_run` nothing is written.
+pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
+    let items = items(home);
+    if items.is_empty() {
+        return Err(format!("found no agent to set up: {NO_AGENT}"));
+    }
+    let mut out = Vec::new();
+    for item in &items {
+        out.push(item.write(dry_run)?);
+        if item.agent == "Codex" {
+            out.push(CODEX_NOTE.into());
+        }
     }
     Ok(out)
 }
 
-fn line(agent: &str, what: &str, path: &Path, did: &str) -> String {
-    format!("{agent:<12} {what:<6} {} ({did})", path.display())
+/// Every file of the skill folder, by its path inside it.
+fn skill_files() -> impl Iterator<Item = (PathBuf, &'static [u8])> {
+    let recipes = RECIPES.iter().flat_map(|r| r.files.iter().map(|(path, bytes)| (Path::new("recipes").join(r.name).join(path), *bytes)));
+    std::iter::once((PathBuf::from("SKILL.md"), SKILL.as_bytes())).chain(recipes)
 }
 
-/// The skill folder: SKILL.md and the recipes it points at. A link there is the
-/// person's own arrangement (a checkout of jelly), so it stays.
-fn skill(agent: &str, dir: &Path, dry_run: bool) -> Result<String, String> {
-    if let Ok(target) = fs::read_link(dir) {
-        return Ok(line(agent, "skill", dir, &format!("left alone: it is a link to {}", target.display())));
-    }
-    let existed = dir.exists();
-    if !dry_run {
-        let failed = |e: std::io::Error| format!("could not write the skill to {}: {e}", dir.display());
-        // Recipes a newer jelly dropped must not stay behind.
-        if existed { fs::remove_dir_all(dir).map_err(failed)?; }
-        fs::create_dir_all(dir).map_err(failed)?;
-        fs::write(dir.join("SKILL.md"), SKILL).map_err(failed)?;
-        for recipe in RECIPES {
-            for (path, bytes) in recipe.files {
-                let to = dir.join("recipes").join(recipe.name).join(path);
-                fs::create_dir_all(to.parent().expect("a file has a folder")).map_err(failed)?;
-                fs::write(to, bytes).map_err(failed)?;
-            }
+impl Item {
+    pub fn state(&self) -> State {
+        if let Ok(target) = fs::read_link(&self.path) {
+            return State::Link(target);
+        }
+        let same = |path: &Path, bytes: &[u8]| fs::read(path).is_ok_and(|on_disk| on_disk == bytes);
+        match self.kind {
+            _ if !self.path.exists() => State::Missing,
+            Kind::Skill if skill_files().all(|(file, bytes)| same(&self.path.join(file), bytes)) => State::Current,
+            Kind::File(text) if same(&self.path, text.as_bytes()) => State::Current,
+            Kind::Skill | Kind::File(_) => State::Stale,
+            Kind::Hook if fs::read_to_string(&self.path).is_ok_and(|text| text.contains(HOOK)) => State::Current,
+            Kind::Hook => State::Missing,
         }
     }
-    Ok(line(agent, "skill", dir, done(dry_run, existed)))
-}
 
-fn file(agent: &str, what: &str, path: &Path, text: &str, dry_run: bool) -> Result<String, String> {
-    if let Ok(target) = fs::read_link(path) {
-        return Ok(line(agent, what, path, &format!("left alone: it is a link to {}", target.display())));
+    fn line(&self, did: &str) -> String {
+        format!("{:<12} {:<6} {} ({did})", self.agent, self.what, self.path.display())
     }
-    let existed = path.exists();
-    if !dry_run {
-        let failed = |e: std::io::Error| format!("could not write {}: {e}", path.display());
-        fs::create_dir_all(path.parent().expect("a file has a folder")).map_err(failed)?;
-        fs::write(path, text).map_err(failed)?;
-    }
-    Ok(line(agent, what, path, done(dry_run, existed)))
-}
 
-fn done(dry_run: bool, existed: bool) -> &'static str {
-    match (dry_run, existed) {
-        (true, true) => "would update",
-        (true, false) => "would write",
-        (false, true) => "updated",
-        (false, false) => "written",
+    fn write(&self, dry_run: bool) -> Result<String, String> {
+        if let Kind::Hook = self.kind {
+            return self.write_hook(dry_run);
+        }
+        // A link is the person's own arrangement (a checkout of jelly), so it stays.
+        if let Ok(target) = fs::read_link(&self.path) {
+            return Ok(self.line(&format!("left alone: it is a link to {}", target.display())));
+        }
+        let existed = self.path.exists();
+        if !dry_run {
+            let failed = |e: std::io::Error| format!("could not write {}: {e}", self.path.display());
+            let write = |to: &Path, bytes: &[u8]| {
+                fs::create_dir_all(to.parent().expect("a file has a folder")).map_err(failed)?;
+                fs::write(to, bytes).map_err(failed)
+            };
+            match self.kind {
+                Kind::Skill => {
+                    // Recipes a newer jelly dropped must not stay behind.
+                    if existed { fs::remove_dir_all(&self.path).map_err(failed)?; }
+                    for (file, bytes) in skill_files() {
+                        write(&self.path.join(file), bytes)?;
+                    }
+                }
+                Kind::File(text) => write(&self.path, text.as_bytes())?,
+                Kind::Hook => unreachable!("the hook is written above"),
+            }
+        }
+        Ok(self.line(match (dry_run, existed) {
+            (true, true) => "would update",
+            (true, false) => "would write",
+            (false, true) => "updated",
+            (false, false) => "written",
+        }))
     }
-}
 
-/// Adds `jelly hear --hook` to Claude Code's UserPromptSubmit hooks, unless a
-/// hook there already runs it.
-fn claude_hook(path: &Path, dry_run: bool) -> Result<String, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
-        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
-    };
-    if text.contains(HOOK) {
-        return Ok(line("Claude Code", "hook", path, "already there"));
+    /// Adds `jelly hear --hook` to Claude Code's UserPromptSubmit hooks, unless a
+    /// hook there already runs it.
+    fn write_hook(&self, dry_run: bool) -> Result<String, String> {
+        let path = &self.path;
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+            Err(e) => return Err(format!("could not read {}: {e}", path.display())),
+        };
+        if text.contains(HOOK) {
+            return Ok(self.line("already there"));
+        }
+        let Ok(mut settings) = serde_json::from_str::<Value>(&text) else {
+            return Ok(self.line("left alone: it is not valid JSON"));
+        };
+        let hooks = settings.as_object_mut().map(|s| s.entry("hooks").or_insert_with(|| json!({})));
+        let prompt = hooks.and_then(Value::as_object_mut).map(|h| h.entry("UserPromptSubmit").or_insert_with(|| json!([])));
+        let Some(list) = prompt.and_then(Value::as_array_mut) else {
+            return Ok(self.line("left alone: its hooks are not in the usual shape"));
+        };
+        list.push(json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}));
+        if !dry_run {
+            let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
+            fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        }
+        Ok(self.line(if dry_run { "would add" } else { "added" }))
     }
-    let Ok(mut settings) = serde_json::from_str::<Value>(&text) else {
-        return Ok(line("Claude Code", "hook", path, "left alone: it is not valid JSON"));
-    };
-    let hooks = settings.as_object_mut().map(|s| s.entry("hooks").or_insert_with(|| json!({})));
-    let prompt = hooks.and_then(Value::as_object_mut).map(|h| h.entry("UserPromptSubmit").or_insert_with(|| json!([])));
-    let Some(list) = prompt.and_then(Value::as_array_mut) else {
-        return Ok(line("Claude Code", "hook", path, "left alone: its hooks are not in the usual shape"));
-    };
-    list.push(json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}));
-    if !dry_run {
-        let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
-        fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-    }
-    Ok(line("Claude Code", "hook", path, if dry_run { "would add" } else { "added" }))
 }
 
 #[cfg(test)]

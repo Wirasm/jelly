@@ -211,6 +211,12 @@
   .party { position: fixed; inset: 0; pointer-events: none; z-index: 30; }
   .drop { position: absolute; width: 10px; height: 10px; border-radius: 50% 50% 50% 0; animation: fall 1.4s cubic-bezier(.2,.6,.4,1) forwards; }
   @keyframes fall { from { transform: translate(0,0) rotate(0); opacity: 1; } to { transform: translate(var(--dx), var(--dy)) rotate(260deg); opacity: 0; } }
+  /* a newer jelly: a quiet card in the corner of the stream */
+  .update { position: absolute; left: 16px; bottom: 16px; z-index: 5; max-width: min(420px, calc(100% - 32px)); padding: 10px 12px; display: grid; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .update[hidden] { display: none; }
+  .update b { color: var(--ink); font-weight: 600; }
+  .update code { display: block; margin-top: 4px; font: 11px ui-monospace, Menlo, monospace; color: var(--ink); overflow-wrap: anywhere; }
+  .update .row { display: flex; gap: 8px; align-items: center; }
   .hl-target { outline: 3px solid #e8336f !important; outline-offset: 4px; border-radius: 6px; transition: outline-color .3s; }
   @media (prefers-reduced-motion: reduce) { .logo, .logo .eyes, .entry.arrive, .badge-new, .dock-btn, .dock-panel, .need.melt, .drop { animation: none !important; } }
 </style>
@@ -227,6 +233,7 @@
   <div class="streamwrap">
     <main class="stream" id="stream"><div class="col" id="col"></div></main>
     <button class="newpill" id="newpill" hidden></button>
+    <div class="update jy-card" id="update" role="status" hidden></div>
   </div>
   <aside id="board" aria-label="Kept jellies"></aside>
   <div class="dock" id="dock" hidden>
@@ -1020,6 +1027,46 @@
   // Who is here changes without any event reaching this page, so ask again now and then.
   setInterval(loadShares, 20000);
   loadShares();
+  // ---- a newer jelly ---------------------------------------------------------
+  // The daemon asks npm once a day. This page asks the daemon every hour, and
+  // every second while an update runs: the daemon's new start time says the new
+  // jelly is up, and the page reloads to get its own new version.
+  let release = null, updating = false, releaseTimer = 0, laterFor = null;
+  try { laterFor = localStorage.getItem("jelly.later"); } catch {}
+  function drawUpdate() {
+    const v = release, el = $("update");
+    el.hidden = !(updating || ((v.newer || v.failed) && laterFor !== v.latest));
+    if (el.hidden) return;
+    const row = (html) => `<div class="row"><i class="jy-mark"></i><span>${html}</span></div>`;
+    const head = row(`<b>jelly ${esc(v.latest)} is out.</b> You have ${esc(v.version)}.`);
+    const buttons = (action) => `<div class="row">${action ? `<button class="jy-action" data-update>${action}</button>` : ""}<button class="btn quiet" data-later>Later</button></div>`;
+    el.innerHTML = updating ? row(`<b>Updating to jelly ${esc(v.latest)}.</b> This page reloads when it is ready.`)
+      : v.failed ? `${head}<div>The update did not work: ${esc(v.failed)}</div>${buttons("Try again")}`
+      : v.install === "npm" ? head + buttons("Update now")
+      : `${head}<div>This one was built from source. Ask your agent to run:${v.commands.map((c) => `<code>${esc(c)}</code>`).join("")}</div>${buttons("")}`;
+  }
+  async function checkRelease() {
+    clearTimeout(releaseTimer);
+    try {
+      const v = await (await fetch("/api/version")).json();
+      if (release && v.started_ms !== release.started_ms) return location.reload();
+      release = v; updating = v.updating;
+      drawUpdate();
+    } catch {} // the daemon is starting again
+    releaseTimer = setTimeout(checkRelease, updating ? 1000 : 3600e3);
+  }
+  $("update").addEventListener("click", async (e) => {
+    if (e.target.closest("[data-later]")) {
+      laterFor = release.latest;
+      try { localStorage.setItem("jelly.later", laterFor); } catch {}
+      return drawUpdate();
+    }
+    if (!e.target.closest("[data-update]")) return;
+    const r = await fetch("/api/update", { method: "POST" });
+    if (!r.ok) return alert((await r.json()).error);
+    checkRelease();
+  });
+  checkRelease();
   // Unnamed, everything this browser does is "person", as it always was.
   const drawMe = () => { $("me").textContent = jelly.person.name ? `You: ${jelly.person.name}` : "Set your name"; };
   $("me").onclick = () => {

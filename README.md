@@ -70,10 +70,21 @@ a checkout, `cargo install --path .` replaces the first line and needs Rust.
 npm install -g jellyware  # the `jelly` command, a prebuilt binary
 jelly setup               # the skill, and what wakes each agent, for Claude Code, Codex and Pi
 jelly ls                  # starts the daemon: http://127.0.0.1:7878
+jelly doctor              # what is missing or behind, each line with the command that fixes it
+jelly update              # later: the latest release, every agent's skill again, the daemon restarted
 ```
 
 `jelly setup` writes for each agent it finds in your home folder, and says what
-it wrote. `--dry-run` only says it. Run it again after updating jelly.
+it wrote. `--dry-run` only says it.
+
+The daemon asks npm once a day for the latest release
+(`https://registry.npmjs.org/jellyware/latest`, nothing about you in the
+request; `JELLY_UPDATE_URL=off` stops it). When one is out, the jelly page
+offers it to the person, `jelly hear --hook` says so once a day, and `jelly
+doctor` exits 1. `jelly update` installs it with `npm install -g
+jellyware@latest`; a jelly built from a checkout gets the two commands to run
+instead. Read the skill again after an update: commands and `window.jelly` may
+have changed.
 
 | Agent | Skill | Hears the person |
 |---|---|---|
@@ -129,7 +140,9 @@ a time in QuickJS with a 1 second, 64 MB limit and no network, which keeps every
 change attributable and undoable. Live data is pushed in from outside with
 `jelly do`, or by a feed: a command the daemon runs on a timer. Feeds live in a
 file in the home that only `jelly feed` writes, so nothing that reaches the port
-can make the daemon run a command. Data lives in `$JELLY_HOME` or `~/.jelly`.
+can make the daemon run a command of its choosing. The one command a request
+can start is fixed: the jelly page's "Update now" installs the latest jellyware
+release. Data lives in `$JELLY_HOME` or `~/.jelly`.
 
 Sharing live goes through a relay on your person's own Cloudflare account:
 [`relay/README.md`](relay/README.md).

@@ -1,0 +1,4 @@
+# Daemons started by `cargo test` and `cargo run` do not ask npm for the latest
+# release. A test that needs the check points JELLY_UPDATE_URL at its own stub.
+[env]
+JELLY_UPDATE_URL = "off"
