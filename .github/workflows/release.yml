@@ -77,9 +77,9 @@ jobs:
           # Artifacts do not keep the executable bit.
           chmod +x dist/*/bin/jelly
           # The platform packages first: jellyware depends on them.
-          for dir in dist/jellyware-*; do npm publish "$dir" --access public --provenance; done
+          for dir in dist/jellyware-*; do npm publish "./$dir" --access public --provenance; done
           node npm/pack.mjs main "$VERSION" dist
-          npm publish dist/jellyware --access public --provenance
+          npm publish ./dist/jellyware --access public --provenance
       - name: GitHub release with the binaries
         env:
           GH_TOKEN: ${{ github.token }}
