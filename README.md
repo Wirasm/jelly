@@ -82,6 +82,10 @@ it wrote. `--dry-run` only says it. Run it again after updating jelly.
 | Pi | `~/.pi/agent/skills/jelly` | An extension starts a turn when they press Send |
 | Codex | `~/.codex/skills/jelly` | The agent runs `jelly hear --wake NAME`; the daemon then queues a message to its session on Send |
 
+Claude Code gets a second hook, `jelly plan-approved`, on `ExitPlanMode`: when
+the person approves a plan of more than three steps, the agent is told to show
+it as a plan jelly before it starts, so a jelly appears without anyone asking.
+
 A skill folder that is a link is left alone, so a checkout stays in charge:
 `ln -s "$PWD/skill" ~/.claude/skills/jelly`. Codex runs commands in a sandbox
 that cannot reach the daemon. Let jelly through with two lines in
