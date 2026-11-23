@@ -32,6 +32,9 @@ pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
         let settings = claude.join("settings.json");
         out.push(claude_hook(&settings, "hook", "UserPromptSubmit", json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}), dry_run)?);
         out.push(claude_hook(&settings, "plan", "PostToolUse", json!({"matcher": "ExitPlanMode", "hooks": [{"type": "command", "command": PLAN_HOOK, "timeout": 3}]}), dry_run)?);
+        out.push("Claude Code  note   Claude Code asks the person before each `jelly` command. To stop that, add \
+            \"Bash(jelly:*)\" to permissions.allow in ~/.claude/settings.json. It is not added for you: \
+            `jelly feed` runs any command, so the rule lets the agent run commands without asking".into());
     }
     let codex = home.join(".codex");
     if codex.is_dir() {
