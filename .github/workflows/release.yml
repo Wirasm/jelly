@@ -70,11 +70,9 @@ jobs:
           version=$(cargo pkgid | sed 's/.*[#@]//')
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, but Cargo.toml says $version"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      # npm signs in through GitHub (Trusted Publishing) for a package that names this
-      # workflow in its npm settings, and with the token for one that does not yet.
+      # No token: npm signs in through GitHub (Trusted Publishing). Each package
+      # names this repo and this workflow file in its settings on npmjs.com.
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Artifacts do not keep the executable bit.
           chmod +x dist/*/bin/jelly
