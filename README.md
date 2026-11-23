@@ -62,11 +62,12 @@ Do not make a jelly for something a sentence answers.
 
 ## Set it up
 
-You do this, not the person. It needs Rust, and Chrome, Chromium, Edge or Brave
-for `look` and `try` (`JELLY_CHROME` names another binary).
+You do this, not the person. It needs Node 18 or newer, and Chrome, Chromium,
+Edge or Brave for `look` and `try` (`JELLY_CHROME` names another binary). From
+a checkout, `cargo install --path .` replaces the first line and needs Rust.
 
 ```bash
-cargo install --path .    # from this repo
+npm install -g jellyware  # the `jelly` command, a prebuilt binary
 jelly setup               # the skill, and what wakes each agent, for Claude Code, Codex and Pi
 jelly ls                  # starts the daemon: http://127.0.0.1:7878
 ```
