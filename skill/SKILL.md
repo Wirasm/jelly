@@ -197,8 +197,9 @@ your session when they press Send. Do not wake on every click: use `--every` onl
 jelly where each change matters at once. A view can draw its own button: mark it
 `data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
 `jelly.person.onUnsent(fn)`). A view sends by itself when an action is the
-decision, as the compare recipe does on a pick. Move jelly's button with
-`:root { --jelly-send-inset: auto auto 78px 10px; }`.
+decision, as the compare recipe does on a pick. jelly's button sits bottom left
+and moves up when it would lie on one of the view's buttons, links or fields.
+Place it yourself with `:root { --jelly-send-inset: auto auto 78px 10px; }`.
 
 **Know if anyone is looking.** `jelly look` has a `screen` line, and `ask` and
 `show` say when nobody has the jelly open. Then say so in the terminal and give
@@ -211,6 +212,22 @@ A question the person asks about a whole jelly arrives like a comment, marked
 `ask`, `do` and `shape` print `since seq:N`; pass it to `hear --wait
 --since` to catch anything after your change. `hear --wait` exits 2 on timeout. In a
 script, add `--json` to any command instead of parsing its text.
+
+**Put the decision where the code is.** When the jelly settled something about
+a pull request, post it there:
+
+```bash
+jelly pr plan --dry-run     # prints the comment and where it would go; posts nothing
+jelly pr plan               # posts it on the current branch's pull request
+jelly pr plan 42            # or on that one: a number, a URL or a branch
+```
+
+The comment lists each answered ask with the option picked, who picked it and
+their words, the asks still open, the comments with your replies, the view-only
+link if you shared one with `jelly share plan --link`, and the page as text.
+Read the dry run first: everyone with access to the pull request reads it.
+Running it again replaces your earlier comment. It goes through `gh` as the
+person, and has no screenshot.
 
 If several agents share the jelly page, set `JELLY_AS=<your name>` so each has
 its own inbox and its changes are attributed. `--mine` on `hear` or `waiting`

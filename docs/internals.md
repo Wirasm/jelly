@@ -172,6 +172,30 @@ run at a time per jelly. Its standard output, parsed as JSON, becomes the
 arguments of the verb, called as `feed`. How the last run went is kept in memory
 and shown by `jelly look`. An archived jelly's feed does not run.
 
+## Pull requests
+
+`jelly pr` runs in the CLI, not the daemon: `src/pr.rs` builds the comment from
+the jelly as `GET /api/jellies/{name}` returns it (asks, answers, comments),
+the view-only link from `GET /api/shares`, and the outline from the `look`
+route, and leaves the outline out, with a line on stderr, when the page does
+not render. It posts through the GitHub CLI; `JELLY_GH` names another binary.
+`gh pr view [PR] --json url,comments` finds the pull request and its comments,
+`gh pr comment URL --body-file -` adds one, and `gh api graphql` with
+`updateIssueComment` replaces one. `--dry-run` runs only the first.
+
+The comment's first line is `<!-- jelly project:name -->`. A comment that has
+it and was written by the GitHub user `gh` is logged in as is the one to
+replace, so a jelly has one comment per pull request and per user.
+
+What a person wrote (an answer's words, a comment, a reply, a name) goes into a
+code span, where GitHub reads no markdown or HTML and an `@name` notifies
+nobody. What the agent wrote (the about line, questions, option labels) is
+plain text with `<` and `&` escaped. A person is named by the name they set or
+by the part of their email before the `@`: the full address stays off GitHub.
+A person's own share link is never posted, because it lets its holder act as
+them. There is no screenshot: GitHub has no API for uploading an image to a
+comment.
+
 ## Pull
 
 `jelly pull` gets asset names and bytes from the selected daemon, regardless of

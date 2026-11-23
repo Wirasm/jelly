@@ -5,6 +5,7 @@ mod design;
 mod disk;
 mod doctor;
 mod feed;
+mod pr;
 mod recipes;
 mod relay;
 mod server;
@@ -140,7 +141,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
     if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
-        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Hear { wait: false, .. }) {
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Pr { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
     // A change prints the daemon's event as it is, or one line about it.
@@ -790,6 +791,31 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             std::fs::write(&out, &html).map_err(|e| format!("{}: {e}", out.display()))?;
             output(format_args!("{}  ({} KB, read-only, opens anywhere)\n", out.display(), html.len().div_ceil(1024)))?;
             Ok(())
+        }
+        Cmd::Pr { name, pull, dry_run } => {
+            let name = id(&name)?;
+            let jelly = store::Jelly::deserialize(get(&api(&format!("/{name}")))?).map_err(|e| e.to_string())?;
+            // Only the view-only link goes on a pull request: a person's own
+            // link lets whoever opens it act as them.
+            let shares = get(&format!("{}/api/shares", cli.url))?;
+            let link = shares.as_array().into_iter().flatten().find(|s| s["jelly"] == name.as_str()).and_then(|s| s["links"][""].as_str());
+            let look = ureq::get(&api(&format!("/{name}/look?width=1280&json=true"))).timeout(std::time::Duration::from_secs(60)).call()
+                .map_err(describe).and_then(|r| r.into_json::<Value>().map_err(|e| e.to_string()));
+            let outline = look.as_ref().ok().and_then(|seen| seen["outline"].as_str());
+            if outline.is_none() {
+                let why = look.as_ref().err().cloned().unwrap_or_else(|| format!("the page did not render; `jelly look {name}` says why"));
+                eprintln!("jelly: the comment has no outline of the page: {why}");
+            }
+            let body = pr::comment(&jelly, link, outline);
+            if dry_run {
+                output(format_args!("{body}"))?;
+            }
+            let done = pr::post(&body, pull.as_deref(), &pr::marker(&name), dry_run)?;
+            if dry_run {
+                eprintln!("jelly: {name}: {done}");
+                return Ok(());
+            }
+            output(format_args!("{name}: {done}\n"))
         }
         Cmd::Unshare { name, to, link, pin } => {
             let name = id(&name)?;
