@@ -178,13 +178,16 @@ jelly waiting               # asks that wait on them, and their comments, which 
 jelly reply plan c3 "Split it into two steps." --resolve   # done; without --resolve the thread stays open
 jelly hear --wait plan              # returns when they press Send in plan: they are done for now
 jelly hear --wait plan --every --since seq:42 --timeout 60 --json   # returns on the first change by anyone but you
+jelly hear --wake plan              # Codex: returns at once; their Send starts your next turn
 ```
 
 **Let them hand the turn back.** Once the person has done anything in a jelly,
 it shows a Send button with a count ("3 changes · Send"). They work through the
 jelly, press it once, and a waiting `jelly hear --wait` returns. Start that wait
 in the background before you end your turn and it wakes you; then run `jelly
-hear` for what they did. Do not wake on every click: use `--every` only for a
+hear` for what they did. In Codex nothing keeps running after your turn, so
+run `jelly hear --wake plan` and end your turn: the daemon queues a message to
+your session when they press Send. Do not wake on every click: use `--every` only for a
 jelly where each change matters at once. A view can draw its own button: mark it
 `data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
 `jelly.person.onUnsent(fn)`). A view sends by itself when an action is the

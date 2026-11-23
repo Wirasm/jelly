@@ -7,6 +7,7 @@ mod feed;
 mod recipes;
 mod relay;
 mod server;
+mod setup;
 mod store;
 mod startup;
 mod verbs;
@@ -126,7 +127,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. }) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. }) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Hear { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -136,7 +137,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
-    if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
+    if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
         | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
@@ -278,6 +279,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             report(ev)?;
             for line in added {
+                output(format_args!("{line}\n"))?;
+            }
+            Ok(())
+        }
+        Cmd::Setup { dry_run } => {
+            let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or("could not find your home directory")?;
+            for line in setup::run(Path::new(&home), dry_run)? {
                 output(format_args!("{line}\n"))?;
             }
             Ok(())
@@ -480,6 +488,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 return print(json!({"jelly": jelly, "round": round, "questions": questions, "since": since, "next": format!("jelly hear --wait {jelly} --since {since} --json")}));
             }
             output(format_args!("{}\n", ask_line(&jelly, round, questions, &since)))?;
+            Ok(())
+        }
+        Cmd::Hear { wait: false, wake: false, name: Some(_), .. } => Err("a name goes with --wait or --wake; `jelly hear` alone covers this project".into()),
+        Cmd::Hear { wake: true, name, .. } => {
+            let thread = std::env::var("CODEX_THREAD_ID").map_err(|_| "--wake needs an agent the daemon can wake, which is Codex today (CODEX_THREAD_ID is not set). Run `jelly hear --wait` in the background instead")?;
+            let name = name.map(|n| id(&n)).transpose()?;
+            send("POST", &format!("{}/api/wake", cli.url), json!({"jelly": name, "project": project(), "codex_thread": thread}))?;
+            let what = name.unwrap_or_else(|| "one of this project's jellies".into());
+            output(format_args!("When the person presses Send in {what}, the daemon queues a message to this Codex session, which starts your next turn. End your turn now.\n"))?;
             Ok(())
         }
         Cmd::Hear { wait: true, name, timeout, since, every, .. } => {

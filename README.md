@@ -66,18 +66,26 @@ You do this, not the person. It needs Rust, and Chrome, Chromium, Edge or Brave
 for `look` and `try` (`JELLY_CHROME` names another binary).
 
 ```bash
-cargo install --path .                      # from this repo
-ln -s "$PWD/skill" ~/.claude/skills/jelly   # every session then knows jelly
-jelly ls                                    # starts the daemon: http://127.0.0.1:7878
+cargo install --path .    # from this repo
+jelly setup               # the skill, and what wakes each agent, for Claude Code, Codex and Pi
+jelly ls                  # starts the daemon: http://127.0.0.1:7878
 ```
 
-On Windows, link the skill with `New-Item -ItemType Junction -Path
-"$HOME\.claude\skills\jelly" -Target "$PWD\skill"`.
+`jelly setup` writes for each agent it finds in your home folder, and says what
+it wrote. `--dry-run` only says it. Run it again after updating jelly.
 
-To hear the person without asking, add `jelly hear --hook` as a Claude Code
-`UserPromptSubmit` hook. It prints nothing when there is nothing new. Other
-agents: export a stable `JELLY_SESSION_ID` for the conversation, so the inbox
-knows what you have already read.
+| Agent | Skill | Hears the person |
+|---|---|---|
+| Claude Code | `~/.claude/skills/jelly` | A `UserPromptSubmit` hook, `jelly hear --hook`, reports what they did at the start of each turn |
+| Pi | `~/.pi/agent/skills/jelly` | An extension starts a turn when they press Send |
+| Codex | `~/.codex/skills/jelly` | The agent runs `jelly hear --wake NAME`; the daemon then queues a message to its session on Send |
+
+A skill folder that is a link is left alone, so a checkout stays in charge:
+`ln -s "$PWD/skill" ~/.claude/skills/jelly`. Codex runs commands in a sandbox
+that cannot reach the daemon; approve `jelly` commands to run outside it. Any
+other agent that runs shell commands can use jelly with the skill alone: export
+a stable `JELLY_SESSION_ID` for the conversation, so the inbox knows what you
+have already read.
 
 ## Use it
 
