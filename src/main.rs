@@ -757,13 +757,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let name = id(&name)?;
             if pin {
                 let hours = hours.unwrap_or(3);
-                let made = send("POST", &api(&format!("/{name}/share/pin")), json!({"hours": hours, "days": days.unwrap_or(30)}))?;
+                let made = send("POST", &api(&format!("/{name}/share/pin")), json!({"hours": hours, "days": days.unwrap_or(1)}))?;
                 let (code, url) = (made["pin"].as_str().ok_or("the daemon did not say the PIN")?, made["url"].as_str().unwrap_or(""));
                 let s = if hours == 1 { "" } else { "s" };
                 return output(format_args!("PIN {code} at {url}\n  for a room: each person opens that page and types the PIN with their email; you hear them as person:<email>. The PIN lets people join for {hours} hour{s} and locks after {} wrong tries. `jelly unshare {name} --pin` ends it; people already in stay.\n", made["tries"]));
             }
             if link || to.is_some() {
-                let days = days.unwrap_or(30);
+                let days = days.unwrap_or(1);
                 let made = send("POST", &api(&format!("/{name}/share")), json!({"to": to, "days": days}))?;
                 let url = made["url"].as_str().ok_or("the daemon did not say the link")?;
                 let s = if days == 1 { "" } else { "s" };
@@ -797,7 +797,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let jelly = store::Jelly::deserialize(get(&api(&format!("/{name}")))?).map_err(|e| e.to_string())?;
             // Only the view-only link goes on a pull request: a person's own
             // link lets whoever opens it act as them.
-            let shares = get(&format!("{}/api/shares", cli.url))?;
+            let shares = get(&format!("{}/api/shares?here=true", cli.url))?;
             let link = shares.as_array().into_iter().flatten().find(|s| s["jelly"] == name.as_str()).and_then(|s| s["links"][""].as_str());
             let look = ureq::get(&api(&format!("/{name}/look?width=1280&json=true"))).timeout(std::time::Duration::from_secs(60)).call()
                 .map_err(describe).and_then(|r| r.into_json::<Value>().map_err(|e| e.to_string()));

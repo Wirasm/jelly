@@ -239,10 +239,10 @@ pub(crate) async fn remove_asset(app: &Shared, live: &Live, file: &str) -> Resul
 
 /// What `jelly unshare` stops.
 /// Every shared jelly, for the jelly page: who holds a link, whether they
-/// opened it, and when the share ends. What the relay knows is asked for each
-/// time; when it cannot be reached, the people come from the local record and
-/// `people_from` says so.
-pub(crate) async fn list(app: &Shared) -> Result<Value, ApiError> {
+/// opened it, and when the share ends. With `here`, the relay is asked about
+/// each share; without it, or when the relay cannot be reached, the people
+/// come from the local record and `people_from` says so.
+pub(crate) async fn list(app: &Shared, here: bool) -> Result<Value, ApiError> {
     let lives: Vec<Arc<Live>> = app.shares.lock().expect("shares lock").values().cloned().collect();
     if lives.is_empty() { return Ok(json!([])); }
     let relay = home(app).relay()?;
@@ -253,9 +253,10 @@ pub(crate) async fn list(app: &Shared) -> Result<Value, ApiError> {
             (r.jelly.clone(), r.share.clone(), r.links.clone())
         };
         let (r, s) = (relay.clone(), share.clone());
-        let mut row = match blocking(move || r.people(&s)).await {
-            Ok(mut v) => { v["people_from"] = json!("relay"); v }
-            Err(_) => json!({"people_from": "record", "people": links.keys().map(|who| json!({"who": who, "can_act": !who.is_empty()})).collect::<Vec<_>>()}),
+        let asked = if here { blocking(move || r.people(&s)).await.ok() } else { None };
+        let mut row = match asked {
+            Some(mut v) => { v["people_from"] = json!("relay"); v }
+            None => json!({"people_from": "record", "people": links.keys().map(|who| json!({"who": who, "can_act": !who.is_empty()})).collect::<Vec<_>>()}),
         };
         row["jelly"] = json!(jelly);
         // The owner's own way in, when a link was minted here: links made with a PIN have none.
