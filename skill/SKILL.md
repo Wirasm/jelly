@@ -212,6 +212,22 @@ A question the person asks about a whole jelly arrives like a comment, marked
 --since` to catch anything after your change. `hear --wait` exits 2 on timeout. In a
 script, add `--json` to any command instead of parsing its text.
 
+**Put the decision where the code is.** When the jelly settled something about
+a pull request, post it there:
+
+```bash
+jelly pr plan --dry-run     # prints the comment and where it would go; posts nothing
+jelly pr plan               # posts it on the current branch's pull request
+jelly pr plan 42            # or on that one: a number, a URL or a branch
+```
+
+The comment lists each answered ask with the option picked, who picked it and
+their words, the asks still open, the comments with your replies, the view-only
+link if you shared one with `jelly share plan --link`, and the page as text.
+Read the dry run first: everyone with access to the pull request reads it.
+Running it again replaces your earlier comment. It goes through `gh` as the
+person, and has no screenshot.
+
 If several agents share the jelly page, set `JELLY_AS=<your name>` so each has
 its own inbox and its changes are attributed. `--mine` on `hear` or `waiting`
 shows only your jellies; plain `jelly hear` is where you hear the person act on

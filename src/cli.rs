@@ -420,6 +420,23 @@ pub enum Cmd {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=365))]
         days: Option<u64>,
     },
+    /// Put what people decided in a jelly on a pull request, as one comment:
+    /// each answered ask with the option picked and by whom, the asks still
+    /// open, the comments with their replies, the view-only share link if the
+    /// jelly has one, and the page as text. It is posted through the GitHub
+    /// CLI (`gh`), as the person `gh` is logged in as.
+    ///
+    /// Running it again replaces that comment instead of adding a second one.
+    /// The comment has no screenshot: `gh` cannot upload an image.
+    Pr {
+        name: String,
+        /// The pull request: a number, a URL or a branch. Default: the current branch's.
+        #[arg(value_name = "PR")]
+        pull: Option<String>,
+        /// Print the comment and where it would go, and post nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Stop sharing a jelly. `--to ana@example.com` stops only Ana's links
     /// (from `--to` or from joining with the PIN), and her open pages close;
     /// `--link` stops the view-only link; `--pin` ends the PIN, so nobody new

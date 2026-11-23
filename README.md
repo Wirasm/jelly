@@ -131,6 +131,7 @@ jelly do plan add '{"title":"Tea"}'      # run a verb, as a button in the view w
 jelly shape plan --view v2.html          # new view or verbs while it runs; state stays
 jelly undo plan                            # undo the last change to view, verbs or state
 jelly share plan --to ana@example.com      # a live link for Ana; you hear person:ana@example.com
+jelly pr plan                              # what they decided, as a comment on this branch's pull request
 ```
 
 Run `jelly` from the person's repo. A jelly belongs to the project you make it
