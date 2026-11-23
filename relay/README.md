@@ -132,6 +132,10 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   `look` work as before. It keeps working while your laptop sleeps; the daemon
   catches up when it reconnects.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.
+- Every page the relay serves (a link, `/pin`, a link that no longer works)
+  says "Made with jelly", linking to getjellyware.com. On a link it is a strip
+  under the view, in the relay's page: the view cannot remove or restyle it,
+  and it covers nothing in the view. Pages on your own daemon do not have it.
 
 `npm test` runs the relay locally and checks what it counts; `npm run check`
 typechecks it. Neither deploys anything.

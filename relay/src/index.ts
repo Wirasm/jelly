@@ -21,7 +21,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { engine, run, Refusal } from "./verbs";
-import { shell } from "./shell";
+import { shell, MADE, MADE_CSS } from "./shell";
 import { joinPage } from "./join";
 import * as counting from "./counts";
 
@@ -68,9 +68,9 @@ const HEADERS = {
 const text = (body: string, status = 200) => new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...HEADERS } });
 const notFound = () =>
   new Response(
-    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>jelly</title>
-<body style="font:16px -apple-system,sans-serif;display:grid;place-items:center;height:90vh;margin:0;background:#fff8f3;color:#2a1620">
-<p>This link has expired or was never shared.</p></body>`,
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>jelly</title><style>${MADE_CSS}</style>
+<body style="font:16px -apple-system,sans-serif;display:grid;place-items:center;height:90vh;margin:0;background:#fff8f3;color:#2a1620;text-align:center">
+<div><p>This link has expired or was never shared.</p>${MADE}</div></body>`,
     { status: 404, headers: { "Content-Type": "text/html; charset=utf-8", ...HEADERS } },
   );
 
