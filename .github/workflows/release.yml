@@ -1,19 +1,49 @@
-# Builds the jelly binary for every platform npm installs it on. A tag `v1.2.3`
-# (the version in Cargo.toml) also publishes the npm packages and a GitHub
-# release; a pull request that touches the release only builds.
+# Every merge to development that changes what ships is a release: the jelly
+# binary is built for every platform npm installs it on, the npm packages are
+# published, and a GitHub release with the tag `v1.2.3` is made. Nobody tags or
+# bumps a version by hand. A pull request that touches the release only builds.
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [development]
+    # What goes into the binary and the npm packages. The relay, the site and
+    # the docs are not released from here.
+    paths: ["src/**", "assets/**", "skill/**", "npm/**", "build.rs", "Cargo.toml", "Cargo.lock", ".github/workflows/release.yml"]
   pull_request:
     paths: [".github/workflows/release.yml", "npm/**"]
+
+# One release at a time, so two merges close together do not pick the same
+# version. A merge that arrives while one waits replaces it: it holds both.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  # The next version: one patch above the latest on npm. For a new minor or
+  # major, set it in Cargo.toml; it is used as long as it is ahead of npm.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: next
+        run: |
+          latest=$(npm view jellyware version)
+          patch=$(echo "$latest" | awk -F. '{ print $1 "." $2 "." $3 + 1 }')
+          ours=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          version=$(printf '%s\n%s\n' "$patch" "$ours" | sort -V | tail -1)
+          echo "npm has $latest, Cargo.toml says $ours: releasing $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -32,25 +62,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - name: The binary gets the release version
+        run: |
+          perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+          perl -0pi -e 's/(name = "jelly"\r?\nversion = )"[^"]*"/$1"$ENV{VERSION}"/' Cargo.lock
       - run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: The binary starts
+      - name: The binary starts and says the release version
         if: ${{ !matrix.cross }}
-        run: target/${{ matrix.target }}/release/jelly --version
+        run: |
+          said=$(target/${{ matrix.target }}/release/jelly --version)
+          [ "$said" = "jelly $VERSION" ] || { echo "the binary says '$said', not 'jelly $VERSION'"; exit 1; }
       - name: Write the npm package
         run: |
-          version=$(cargo pkgid | sed 's/.*[#@]//')
           binary=target/${{ matrix.target }}/release/jelly
           if [ -f "$binary.exe" ]; then binary="$binary.exe"; fi
-          node npm/pack.mjs platform "$version" ${{ matrix.target }} "$binary" dist
+          node npm/pack.mjs platform "$VERSION" ${{ matrix.target }} "$binary" dist
       - uses: actions/upload-artifact@v4
         with:
           name: npm-${{ matrix.target }}
           path: dist
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: github.event_name == 'push'
+    needs: [version, build]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     permissions:
       contents: write
       id-token: write
@@ -65,11 +102,6 @@ jobs:
           path: dist
           pattern: npm-*
           merge-multiple: true
-      - name: The tag is the version in Cargo.toml
-        run: |
-          version=$(cargo pkgid | sed 's/.*[#@]//')
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, but Cargo.toml says $version"; exit 1; }
-          echo "VERSION=$version" >> "$GITHUB_ENV"
       # No token: npm signs in through GitHub (Trusted Publishing). Each package
       # names this repo and this workflow file in its settings on npmjs.com.
       - name: Publish to npm
@@ -77,13 +109,18 @@ jobs:
           # Artifacts do not keep the executable bit.
           chmod +x dist/*/bin/jelly
           # The platform packages first: jellyware depends on them.
-          for dir in dist/jelly-*-*; do npm publish "./$dir" --access public --provenance; done
+          # A package already out at this version is left alone, so a release
+          # that stopped halfway can be run again.
           node npm/pack.mjs main "$VERSION" dist
-          npm publish ./dist/jellyware --access public --provenance
+          for dir in dist/jelly-*-* dist/jellyware; do
+            name=$(node -p "require('./$dir/package.json').name")
+            if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then echo "$name@$VERSION is already published"; continue; fi
+            npm publish "./$dir" --access public --provenance
+          done
       - name: GitHub release with the binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir release
           for dir in dist/jelly-*-*; do tar -czf "release/$(basename "$dir").tar.gz" -C "$dir/bin" .; done
-          gh release create "$GITHUB_REF_NAME" release/* --generate-notes
+          gh release create "v$VERSION" release/* --target "$GITHUB_SHA" --generate-notes
