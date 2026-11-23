@@ -23,8 +23,9 @@ pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
     let codex = home.join(".codex");
     if codex.is_dir() {
         out.push(skill("Codex", &codex.join("skills/jelly"), dry_run)?);
-        out.push("Codex        note   jelly must reach its daemon, which Codex's sandbox blocks: approve `jelly` commands to run outside it. \
-            To hand the turn to the person, Codex runs `jelly hear --wake NAME` and ends its turn".into());
+        out.push("Codex        note   Codex's sandbox blocks jelly from reaching its daemon. Let it through by adding to ~/.codex/config.toml: \
+            `[sandbox_workspace_write]` and under it `network_access = true`; files stay sandboxed. \
+            Or approve each `jelly` command as Codex asks. To hand the turn to the person, Codex runs `jelly hear --wake NAME` and ends its turn".into());
     }
     let pi = home.join(".pi/agent");
     if pi.is_dir() {
