@@ -14,6 +14,12 @@ export const CARD = `<meta property="og:site_name" content="jelly">
 <link rel="icon" href="${FAVICON}">
 <link rel="apple-touch-icon" href="https://getjellyware.com/apple-touch-icon.png">`;
 
+/** The mark every relay page carries: most people who open a link do not have jelly.
+ *  It is the relay page's own element, outside the view, so a view cannot remove or restyle it. */
+export const MADE = `<a class="made" href="https://getjellyware.com" target="_blank" rel="noopener">Made with jelly</a>`;
+export const MADE_CSS = `.made { font: 12px/1 -apple-system, system-ui, sans-serif; color: #7d606c; text-decoration: none; }
+  .made:hover, .made:focus-visible { text-decoration: underline; }`;
+
 /** The link page, titled with the jelly's about line so a pasted link previews as what it is. */
 export const shell = (about: string) => SHELL.replace("<title>jelly</title>", `<title>${esc(about ? `${about} · jelly` : "jelly")}</title>
 <meta property="og:title" content="${esc(about || "A jelly for you")}">
@@ -27,14 +33,23 @@ const SHELL = String.raw`<!doctype html>
 <title>jelly</title>
 <style>
   html, body { margin: 0; height: 100%; background: #fff8f3; }
-  iframe { border: 0; display: block; width: 100%; height: 100%; }
-  #note { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 1; max-width: calc(100% - 32px); box-sizing: border-box;
+  body { display: flex; flex-direction: column; }
+  iframe { border: 0; display: block; width: 100%; flex: 1; min-height: 0; }
+  /* A strip under the view, not over it: nothing the view or the runtime draws can end up beneath it. */
+  footer { flex: none; margin-top: auto; padding: 6px 12px; text-align: center; border-top: 1px solid #f0dfe5; background: #fff8f3; }
+  ${MADE_CSS}
+  @media (prefers-color-scheme: dark) {
+    footer { border-color: #2e2740; background: #14111c; }
+    .made { color: #a79dbb; }
+  }
+  #note { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 1; max-width: calc(100% - 32px); box-sizing: border-box;
     background: #2a1620; color: #fff8f3; font: 14px -apple-system, system-ui, sans-serif; padding: 9px 15px; border-radius: 999px; }
   #note[hidden] { display: none; }
   body.over #note { position: static; transform: none; margin: 40vh auto 0; width: max-content; }
 </style></head>
 <body><iframe id="view" title="jelly" referrerpolicy="no-referrer"
   sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"></iframe><div id="note" role="status" hidden></div>
+<footer>${MADE}</footer>
 <script>
 (() => {
   const frame = document.getElementById("view");

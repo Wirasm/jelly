@@ -1,6 +1,6 @@
 // The page at /pin: a person types the PIN they were given with their email,
 // and goes on to their own link (/j/...), the same kind `--to` mints.
-import { CARD, FAVICON } from "./shell";
+import { CARD, FAVICON, MADE, MADE_CSS } from "./shell";
 
 export const joinPage = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -25,6 +25,8 @@ ${CARD}
   button { width: 100%; font: inherit; font-weight: 600; color: #fff; background: #ff4f8b; border: 0; border-radius: 12px; padding: 13px; cursor: pointer; }
   button:disabled { opacity: .6; cursor: default; }
   #error { min-height: 1.45em; margin: 14px 0 0; color: #b3123f; }
+  footer { margin-top: 28px; text-align: center; }
+  ${MADE_CSS}
 </style></head>
 <body><main>
 <img alt="" src="${FAVICON}">
@@ -38,6 +40,7 @@ ${CARD}
   <button type="submit">Join</button>
   <p id="error" role="alert"></p>
 </form>
+<footer>${MADE}</footer>
 </main>
 <script>
 (() => {
