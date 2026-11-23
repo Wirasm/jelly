@@ -50,7 +50,9 @@ if (kind === "platform") {
   copyFileSync(join(here, "..", "LICENSE.md"), join(dir, "LICENSE.md"));
   write(dir, {
     name: "jellyware", version,
-    description: "Jellyware: small live apps that agents and people shape while they run",
+    description: "Show your user a live page instead of a wall of text: plans, choices, dashboards, prototypes. For Claude Code, Codex, Pi and any agent with a shell.",
+    keywords: ["agent", "ai-agent", "coding-agent", "claude-code", "codex", "agent-skill", "human-in-the-loop",
+      "generative-ui", "agent-ui", "live-preview", "dashboard", "prototype", "cli"],
     bin: { jelly: "bin/jelly.js" }, files: ["bin"], engines: { node: ">=18" },
     optionalDependencies: Object.fromEntries(Object.values(TARGETS).map((p) => [packageName(p), version])),
   });
