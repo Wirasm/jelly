@@ -3,6 +3,7 @@
 mod cli;
 mod design;
 mod disk;
+mod doctor;
 mod feed;
 mod recipes;
 mod relay;
@@ -10,6 +11,7 @@ mod server;
 mod setup;
 mod store;
 mod startup;
+mod update;
 mod verbs;
 
 use clap::{CommandFactory, FromArgMatches};
@@ -127,7 +129,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. } | Cmd::PlanApproved) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Doctor | Cmd::PlanApproved) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Hear { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -137,7 +139,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let api = |path: &str| format!("{}/api/jellies{path}", cli.url);
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
-    if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
+    if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
         | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
@@ -288,6 +290,60 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or("could not find your home directory")?;
             for line in setup::run(Path::new(&home), dry_run)? {
                 output(format_args!("{line}\n"))?;
+            }
+            Ok(())
+        }
+        Cmd::Update => {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let latest = update::latest()?;
+            let version = format!("{}/api/version", cli.url);
+            // None when no daemon runs there, or one from before it had a version.
+            let daemon = ureq::get(&version).call().ok().and_then(|r| r.into_json::<Value>().ok());
+            // Waits for the daemon to be up again, which its new start time shows.
+            let restart = |daemon: &Value| -> Result<(), String> {
+                send("POST", &format!("{}/api/restart", cli.url), json!({}))?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if get(&version).is_ok_and(|now| now["started_ms"] != daemon["started_ms"]) {
+                        return Ok(());
+                    }
+                }
+                Err(format!("the daemon at {} did not come back; run `jelly serve` for details", cli.url))
+            };
+            if !update::newer(&latest, update::VERSION) {
+                output(format_args!("jelly {} is up to date (latest release: {latest}).\n", update::VERSION))?;
+                if let Some(daemon) = daemon.filter(update::daemon_differs) {
+                    restart(&daemon)?;
+                    output(format_args!("Restarted the daemon at {}, which ran another build.\n", cli.url))?;
+                }
+                return Ok(());
+            }
+            if update::Install::of(&exe) == update::Install::Source {
+                let [pull, install] = update::source_commands();
+                return output(format_args!("jelly {latest} is out; this is {}, built from source. Update it with:\n  {pull}\n  {install}\nThen `jelly doctor` says what else is behind.\n", update::VERSION));
+            }
+            let setup = update::apply(&exe, &latest)?;
+            output(format_args!("{setup}\n"))?;
+            if let Some(daemon) = daemon {
+                restart(&daemon)?;
+                output(format_args!("Restarted the daemon at {}.\n", cli.url))?;
+            }
+            output(format_args!("jelly is now {latest}. Read the jelly skill again before you use jelly: commands and `window.jelly` may have changed.\n"))
+        }
+        Cmd::Doctor => {
+            let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or("could not find your home directory")?;
+            let checks = doctor::run(Path::new(&home), &cli.url);
+            if json {
+                print(serde_json::to_value(&checks).map_err(|e| e.to_string())?)?;
+            } else {
+                for check in &checks {
+                    output(format_args!("{}\n", check.line()))?;
+                }
+            }
+            let fixes = checks.iter().filter(|c| c.ok == Some(false)).count();
+            if fixes > 0 {
+                return Err(format!("{fixes} to fix").into());
             }
             Ok(())
         }
@@ -869,7 +925,17 @@ fn inbox(url: &str, project: &str, hook: bool, named: Option<String>, mine: Opti
         },
         parent_reader,
     );
-    deliver_inbox(url, project, hook, reader.map(|reader| store::InboxRequest { project: project.into(), reader, mine }), &mut std::io::stdout().lock())
+    // A Claude Code session also hears, in one line, that its skill is behind.
+    let session = match &reader {
+        Ok(store::InboxReader::Conversation { id }) if hook => Some(id.clone()),
+        _ => None,
+    };
+    deliver_inbox(url, project, hook, reader.map(|reader| store::InboxRequest { project: project.into(), reader, mine }), &mut std::io::stdout().lock())?;
+    let homes = std::env::home_dir().zip(default_home().ok());
+    if let Some(line) = session.zip(homes).and_then(|(session, (user, jelly))| update::hook_notice(url, &session, &user, &jelly, server::now_ms())) {
+        output(format_args!("{line}\n"))?;
+    }
+    Ok(())
 }
 
 /// The owner name `--mine` filters by. Without a name every agent is "agent",

@@ -86,13 +86,25 @@ pub enum Cmd {
     /// and Pi. Each gets the jelly skill; Claude Code also gets the hook that
     /// reports what the person did and the one that asks for a plan jelly when
     /// they approve a plan, and Pi the extension that starts a turn when they
-    /// press Send. Run it again after updating jelly. A skill folder that is a
+    /// press Send. `jelly update` runs it for you. A skill folder that is a
     /// link (your own checkout) is left alone.
     Setup {
         /// Print what would be written, and write nothing.
         #[arg(long)]
         dry_run: bool,
     },
+    /// Update jelly to the latest release. Installed with npm: installs it, runs
+    /// `setup` again so every agent's skill is the new one, and restarts the
+    /// daemon on the new build. Built from source: prints the commands to run.
+    /// Already the latest: says so, and restarts a daemon that still runs an
+    /// older build. Read the skill again afterwards.
+    Update,
+    /// Check this machine, one line per check: `ok`, `fix` with the command
+    /// that fixes it, or `--` for what could not be told. Checks jelly against
+    /// the latest release, the daemon's build, the browser for `look` and
+    /// `try`, and each agent's skill, hook and extension. Exit 1 when a line
+    /// says `fix`. --json prints [{ok, text, fix}].
+    Doctor,
     /// What Claude Code's hook runs when the person approves a plan: it tells
     /// the agent to show the plan as a jelly. `jelly setup` writes the hook.
     #[command(hide = true)]

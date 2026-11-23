@@ -39,6 +39,8 @@ thing: no aliases for commands, flags or runtime fields.
 - The daemon runs commands only from `feeds.json` in the home, which the CLI writes
   to disk (`jelly feed`). Never add an HTTP route that sets or changes a feed: the
   port has no authentication, so that route would let any page run a command.
+  `/api/update` is the one route that starts a command, and the request chooses
+  nothing about it: `npm install -g jellyware@latest`, then `jelly setup`.
 - A change by `feed` is not someone using the jelly: it leaves `updated_ms` and
   `archived` alone, so a fed jelly nobody opens still goes quiet.
 - `send` is the person handing the turn back. `jelly hear --wait` returns on it and

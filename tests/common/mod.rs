@@ -92,3 +92,20 @@ pub fn unassigned_listener() -> TcpListener {
         }
     }
 }
+
+/// A stand-in for the npm registry, for `JELLY_UPDATE_URL`: every request is
+/// answered with `version` as the latest release.
+pub fn registry(version: &str) -> String {
+    use std::io::Write;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/jellyware/latest", listener.local_addr().unwrap());
+    let body = format!("{{\"version\":\"{version}\"}}");
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    url
+}

@@ -28,13 +28,14 @@ mod feed;
 mod hear;
 mod look;
 mod share;
+mod update;
 mod wake;
 
 pub(crate) use ask::AskAnchor;
 use ask::*;
 use export::*;
 use hear::*;
-pub(crate) use look::ago;
+pub(crate) use look::{ago, now_ms};
 use look::*;
 
 /// jelly's own look, for every part that is jelly's and not the jellyware.
@@ -71,6 +72,8 @@ struct App {
     open: Mutex<std::collections::HashMap<u64, Open>>,
     /// How each jelly's feed last ran, by jelly. Memory only.
     feeds: Mutex<std::collections::HashMap<String, feed::FeedRun>>,
+    /// The latest release and the update the person started. Memory only.
+    update: Mutex<update::Status>,
 }
 type Shared = Arc<App>;
 
@@ -193,6 +196,11 @@ impl App {
 }
 
 /// `note` is printed after the `jelly on URL` line, which stays first for scripts.
+/// The browser `look` and `try` would drive, for `jelly doctor`.
+pub fn browser() -> Option<String> {
+    look::chrome()
+}
+
 pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option<String>) -> std::io::Result<()> {
     let mut store = store;
     if store.get(PAGE).is_err() {
@@ -207,10 +215,11 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
         store.shape(PAGE, Some(PAGE_VIEW.into()), Some(PAGE_VERBS.into()), None, "jelly").map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     let (tx, _) = broadcast::channel(1024);
-    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
+    let app: Shared = Arc::new(App { store: Mutex::new(store), events: tx, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default(), update: Mutex::default() });
     share::resume(&app);
     feed::start(app.clone());
     wake::start(&app);
+    update::start(&app);
 
     // Jellies nobody keeps or touched for a week are archived: hidden from the
     // jelly page, restorable, and back on their own as soon as anything changes them.
@@ -295,6 +304,9 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/asks/{id}/unask", post(unask))
         .route("/api/jellies/{name}/send", post(send))
         .route("/api/wake", post(wake::add))
+        .route("/api/version", get(update::version))
+        .route("/api/update", post(update::update))
+        .route("/api/restart", post(update::restart))
         .route("/api/jellies/{name}/working", post(working))
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
@@ -888,7 +900,7 @@ mod tests {
     fn app() -> (tempfile::TempDir, Shared) {
         let dir = tempfile::tempdir().unwrap();
         let (events, _) = broadcast::channel(32);
-        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
+        let app = Arc::new(App { store: Mutex::new(Store::open(dir.path()).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default(), update: Mutex::default() });
         (dir, app)
     }
 
@@ -1232,7 +1244,7 @@ mod tests {
         assert!(serde_json::from_value::<Screen>(json!({"text": "tokenless", "width":1280, "height":900, "version":1})).is_err());
         let dir = app.store.lock().unwrap().home().to_path_buf();
         let (events, _) = broadcast::channel(32);
-        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default() });
+        let restarted = Arc::new(App { store: Mutex::new(Store::open(&dir).unwrap()), events, screens: Mutex::default(), trials: Mutex::default(), probes: Mutex::default(), shares: Mutex::default(), sharing: Default::default(), open: Mutex::default(), feeds: Mutex::default(), update: Mutex::default() });
         let previous = owner(&app, "test:x").await;
         let current = owner(&restarted, "test:x").await;
         assert!(post(&restarted, snapshot(&previous, "OLD PAGE", 1)).await.is_err());

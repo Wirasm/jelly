@@ -19,6 +19,27 @@ then use `jelly --url URL ls`. On-demand startup applies only to the default
 local endpoint, including `http://localhost:7878` and equivalent URL spellings;
 other `--url` / `JELLY_URL` targets must already be running.
 
+## Updating
+
+`src/update.rs` holds what the daemon, `jelly update`, `jelly doctor` and
+`jelly hear --hook` share. The daemon asks `JELLY_UPDATE_URL` (default: npm's
+`jellyware/latest`; `off` never asks) at start and once a day, and answers
+`GET /api/version` with `{version, started_ms, latest, newer, install, commands,
+updating, failed}`. `install` is `npm` when the daemon's binary sits under
+`node_modules/@getjellyware/`, else `source`, and then `commands` are the two
+to run in the checkout. `JELLY_NPM` names another npm binary.
+`.cargo/config.toml` sets `JELLY_UPDATE_URL=off` for `cargo test` and `cargo
+run`, so tests never ask npm; `tests/update.rs` points it at a local stub.
+
+`POST /api/restart` replaces the daemon process with the binary now at its
+path, with the same arguments (Unix only; a `--temp` daemon comes back with a
+new home and port). `started_ms` changes with every start: `jelly update` waits
+for that, and the jelly page reloads on it. `POST /api/update` is the page's
+"Update now": the daemon runs the same install as `jelly update` and restarts,
+or keeps the reason in `failed`. `jelly hear --hook` remembers per session, in
+`hook-told.json` in the home, which jelly's skill the session read and when it
+was last checked.
+
 ## Output and closed pipes
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
