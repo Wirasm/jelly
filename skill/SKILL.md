@@ -197,8 +197,9 @@ your session when they press Send. Do not wake on every click: use `--every` onl
 jelly where each change matters at once. A view can draw its own button: mark it
 `data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
 `jelly.person.onUnsent(fn)`). A view sends by itself when an action is the
-decision, as the compare recipe does on a pick. Move jelly's button with
-`:root { --jelly-send-inset: auto auto 78px 10px; }`.
+decision, as the compare recipe does on a pick. jelly's button sits bottom left
+and moves up when it would lie on one of the view's buttons, links or fields.
+Place it yourself with `:root { --jelly-send-inset: auto auto 78px 10px; }`.
 
 **Know if anyone is looking.** `jelly look` has a `screen` line, and `ask` and
 `show` say when nobody has the jelly open. Then say so in the terminal and give
