@@ -1,6 +1,6 @@
 // The page at /pin: a person types the PIN they were given with their email,
 // and goes on to their own link (/j/...), the same kind `--to` mints.
-import { FAVICON } from "./shell";
+import { CARD, FAVICON } from "./shell";
 
 export const joinPage = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -9,7 +9,7 @@ export const joinPage = String.raw`<!doctype html>
 <title>Join a jelly</title>
 <meta property="og:title" content="Join a jelly">
 <meta property="og:description" content="Type the PIN you were given and your email.">
-<link rel="icon" href="${FAVICON}">
+${CARD}
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; background: #fff8f3; color: #2a1620; }
