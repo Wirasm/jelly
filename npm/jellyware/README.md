@@ -9,11 +9,14 @@ between options explains better than prose, or when you need the person to
 decide something.
 
 ```bash
-npm install -g jellyware    # the `jelly` command, no Rust needed
-jelly setup                 # writes the jelly skill for Claude Code, Codex and Pi
+npx jellyware setup
 ```
 
-After `jelly setup` the agent knows when and how to use jelly. Any other agent
+That installs the `jelly` command (a prebuilt binary, no Rust needed) and writes
+the jelly skill for Claude Code, Codex and Pi, whichever are on the machine.
+It is the same as `npm install -g jellyware`, then `jelly setup`.
+
+After it, the agent knows when and how to use jelly. Any other agent
 that runs shell commands can use the `jelly` command directly:
 
 ```bash

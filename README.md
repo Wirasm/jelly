@@ -67,10 +67,11 @@ Edge or Brave for `look` and `try` (`JELLY_CHROME` names another binary). From
 a checkout, `cargo install --path .` replaces the first line and needs Rust.
 
 ```bash
-npm install -g jellyware  # the `jelly` command, a prebuilt binary
-jelly setup               # the skill, and what wakes each agent, for Claude Code, Codex and Pi
+npx jellyware setup       # installs the `jelly` command, then the skill and what wakes each agent
 jelly ls                  # starts the daemon: http://127.0.0.1:7878
 ```
+
+`npx jellyware setup` is `npm install -g jellyware`, then `jelly setup`.
 
 `jelly setup` writes for each agent it finds in your home folder, and says what
 it wrote. `--dry-run` only says it. Run it again after updating jelly.
