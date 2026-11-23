@@ -56,6 +56,19 @@ pub fn token(len: usize) -> Result<String, String> {
     Ok(out)
 }
 
+/// The share id of a link (`https://host/j/<share id><secret>`), or of a bare
+/// share id: the 22 characters after `/j/`. It names the share on the relay
+/// and opens nothing, so it is safe to pass around.
+pub fn share_of(link: &str) -> Result<String, String> {
+    let token = link.split_once("/j/").map_or(link, |(_, t)| t);
+    let id: String = token.chars().take(22).collect();
+    if id.len() == 22 && id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Ok(id)
+    } else {
+        Err(format!("{link} is not a share link (https://<relay>/j/<44 characters>) or a share id (22 characters)"))
+    }
+}
+
 pub struct Home(pub PathBuf);
 
 impl Home {
@@ -157,11 +170,15 @@ impl Relay {
         self.json(self.at("DELETE", share, &format!("/assets/{}", encode(file))), None).map(drop)
     }
 
-    /// Lets the holder of `secret` in for `days`; returns when the share expires (ms).
-    pub fn mint(&self, share: &str, secret: &str, who: &str, days: u64) -> Result<u64, Fail> {
+    /// Lets the holder of `secret` in for `days`; returns when the share
+    /// expires (`expires_at`, ms) and where the relay serves its pages.
+    pub fn mint(&self, share: &str, secret: &str, who: &str, days: u64) -> Result<Value, Fail> {
         let body = serde_json::json!({"secret": secret, "who": who, "can_act": !who.is_empty(), "days": days});
         let resp = self.json(self.at("POST", share, "/people"), Some(&body))?;
-        resp["expires_at"].as_u64().ok_or_else(|| Fail::Other(format!("{}: unexpected answer {resp}", self.url)))
+        if resp["expires_at"].as_u64().is_none() {
+            return Err(Fail::Other(format!("{}: unexpected answer {resp}", self.url)));
+        }
+        Ok(resp)
     }
 
     /// A new PIN for the share, working `hours`; its previous PIN stops. The
@@ -203,19 +220,33 @@ impl Relay {
         self.json(self.at("DELETE", share, &format!("?since={seq}")), None)
     }
 
+    /// Takes a share down by its id, whether or not this home made it: its
+    /// storage is deleted, every link stops and open pages close.
+    pub fn takedown(&self, share: &str) -> Result<(), Fail> {
+        self.at("DELETE", share, "").call().map_err(|e| self.fail(e))?;
+        Ok(())
+    }
+
     /// The daemon's own WebSocket to the share, catching up from `seq`.
     pub fn socket(&self, share: &str, seq: u64) -> String {
         format!("{}/api/live/{share}/ws?since={seq}", self.url.replacen("http", "ws", 1))
     }
 
-    pub fn link(&self, share: &str, secret: &str) -> String {
-        format!("{}/j/{share}{secret}", self.url)
+    /// Where this relay serves the pages people open: the `share_origin` in
+    /// its answer when it has one set (SHARE_ORIGIN), else its own URL.
+    pub fn pages<'a>(&'a self, answer: &'a Value) -> &'a str {
+        answer["share_origin"].as_str().unwrap_or(&self.url)
     }
+}
 
-    /// Where people type a PIN.
-    pub fn join_page(&self) -> String {
-        format!("{}/pin", self.url)
-    }
+/// A person's link, on the origin from `Relay::pages`.
+pub fn link(pages: &str, share: &str, secret: &str) -> String {
+    format!("{pages}/j/{share}{secret}")
+}
+
+/// Where people type a PIN.
+pub fn join_page(pages: &str) -> String {
+    format!("{pages}/pin")
 }
 
 #[cfg(test)]
@@ -228,5 +259,15 @@ mod tests {
         assert_eq!(a.len(), 22);
         assert!(a.chars().all(|c| c.is_ascii_alphanumeric()));
         assert_ne!(a, token(22).unwrap());
+    }
+
+    #[test]
+    fn a_share_id_comes_from_a_link_or_stands_alone() {
+        let (id, secret) = ("a1".repeat(11), "s".repeat(22));
+        assert_eq!(share_of(&format!("https://pages.example/j/{id}{secret}")).unwrap(), id);
+        assert_eq!(share_of(&format!("https://pages.example/j/{id}{secret}/")).unwrap(), id);
+        assert_eq!(share_of(&id).unwrap(), id);
+        assert!(share_of("https://pages.example/pin").is_err());
+        assert!(share_of("plan").is_err());
     }
 }

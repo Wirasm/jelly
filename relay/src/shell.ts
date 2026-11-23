@@ -20,8 +20,10 @@ export const MADE = `<a class="made" href="https://getjellyware.com" target="_bl
 export const MADE_CSS = `.made { font: 12px/1 -apple-system, system-ui, sans-serif; color: #7d606c; text-decoration: none; }
   .made:hover, .made:focus-visible { text-decoration: underline; }`;
 
-/** The link page, titled with the jelly's about line so a pasted link previews as what it is. */
-export const shell = (about: string) => SHELL.replace("<title>jelly</title>", `<title>${esc(about ? `${about} · jelly` : "jelly")}</title>
+/** The link page, titled with the jelly's about line so a pasted link previews as what it is.
+ *  `report` is where a person reports this share; without it the page has no Report link. */
+export const shell = (about: string, report?: string) => SHELL.replace("</footer>", report
+  ? `<a class="made" href="${esc(report)}" target="_blank" rel="noopener">Report</a></footer>` : "</footer>").replace("<title>jelly</title>", `<title>${esc(about ? `${about} · jelly` : "jelly")}</title>
 <meta property="og:title" content="${esc(about || "A jelly for you")}">
 <meta property="og:description" content="A live page shared with you. Open it to use it: tap, answer, comment.">
 ${CARD}`);
@@ -36,7 +38,7 @@ const SHELL = String.raw`<!doctype html>
   body { display: flex; flex-direction: column; }
   iframe { border: 0; display: block; width: 100%; flex: 1; min-height: 0; }
   /* A strip under the view, not over it: nothing the view or the runtime draws can end up beneath it. */
-  footer { flex: none; margin-top: auto; padding: 6px 12px; text-align: center; border-top: 1px solid #f0dfe5; background: #fff8f3; }
+  footer { flex: none; margin-top: auto; padding: 6px 12px; display: flex; justify-content: center; gap: 18px; border-top: 1px solid #f0dfe5; background: #fff8f3; }
   ${MADE_CSS}
   @media (prefers-color-scheme: dark) {
     footer { border-color: #2e2740; background: #14111c; }

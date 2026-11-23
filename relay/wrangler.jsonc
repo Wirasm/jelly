@@ -11,4 +11,6 @@
   "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "Live" }, { "name": "PINS", "class_name": "Pins" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Live"] }, { "tag": "v2", "new_sqlite_classes": ["Pins"] }]
   // RELAY_SECRET is a secret: `npx wrangler secret put RELAY_SECRET`. Only its holder can publish.
+  // SHARE_ORIGIN (serve shared pages from another domain) and REPORT_URL (a Report link)
+  // are optional and set the same way: see README.md.
 }

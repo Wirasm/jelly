@@ -154,7 +154,9 @@ background, so they match the page they sit on.
 daemon asks the relay (`GET /api/live/<share>/people`) who holds a link, when
 each last opened one (`opened_ms`, set when a link's page connects) and how many
 of their pages are open now (`here`). If the relay does not answer, the people
-come from the local record and `people_from` is `record`. The jelly page shows
+come from the local record and `people_from` is `record`. Links are made on
+the relay's `share_origin` when its answer has one (the relay's `SHARE_ORIGIN`),
+else on the relay's own URL. The jelly page shows
 this under "N shared" in its top bar and stops a link or a whole share with the
 same routes `jelly unshare` uses.
 

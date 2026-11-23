@@ -33,6 +33,7 @@ jelly share quiz --pin                  # a PIN for a room on a call (below)
 jelly unshare quiz --pin                # the PIN stops; people already in stay
 jelly unshare plan --to bo@example.com  # Bo's links stop; his open pages close
 jelly unshare plan                      # every link stops; the final state is at home
+jelly takedown <link or share id>       # a reported share, by its link: gone from the relay (below)
 ```
 
 Shares last 30 days (`--days 1..365`). jelly sends no email: pass the link on.
@@ -58,6 +59,87 @@ PIN ends, until the share does.
   every guess passes the throttle before any lookup.
 - The email is whatever the person types; the PIN proves only that they were
   told it. Anyone with the PIN can join under any email, someone else's too.
+
+## Shared pages on their own domain
+
+A view is HTML written by whoever shared the jelly. The relay shows it in a
+sandboxed iframe, so it cannot read the link, the socket or anything stored
+for the relay's host. But the address bar shows the relay's host, and the view
+can draw anything, a fake login form included: it may submit forms and open
+windows. Browsers' phishing lists flag what a page shows, by host and often by
+the whole registered domain. So one bad view on `app.example.com` can get
+`example.com` flagged, with the site, the docs and everything else on it.
+Assets (`/a/<share id>/assets/<file>`) are files from the same person, served
+from the same host.
+
+Today that person is you: a relay has one publish secret, so only your daemon
+can put a view on it. Once other people's jellies are on your relay, serve the
+pages from a domain that holds nothing else. Use a separate registered domain,
+not a subdomain of the one you care about.
+
+1. Add the domain to the same Cloudflare account as the relay (Add a domain,
+   then point its nameservers at Cloudflare).
+2. Add it to the Worker: Workers → jelly-relay → Settings → Domains & Routes →
+   Add → Custom domain. Cloudflare makes the DNS record and the certificate.
+   Keep the domain the daemon publishes to; the Worker now answers on both.
+3. Tell the relay, in `relay/`. It is stored on the Worker like the publish
+   secret, so no domain name is in this repo and a later deploy keeps it:
+
+   ```bash
+   echo https://pages.example | npx wrangler secret put SHARE_ORIGIN
+   ```
+
+From then on:
+
+- `jelly share plan --to ana@example.com` and `--link` print
+  `https://pages.example/j/<44 characters>`, and `--pin` prints
+  `https://pages.example/pin`. Nothing changes in `jelly relay` or
+  `relay.json`: the daemon still publishes to the first domain, and the relay
+  tells it where links live (`share_origin` in its answers).
+- `/j/...`, `/pin` and `/a/...` are served on `pages.example` only. On any
+  other host of the relay they answer 308 to the same path there, so links
+  sent before the change still open. A page that was open during the change
+  needs a reload.
+- `/api/...` works on either host, with the publish secret as before.
+
+Without `SHARE_ORIGIN` nothing changes: pages are served on the relay's own
+host. To go back, `npx wrangler secret delete SHARE_ORIGIN`.
+
+## Reports and takedown
+
+Give people a way to report a page, in `relay/`:
+
+```bash
+echo 'mailto:abuse@example.com?subject=Report%20share%20' | npx wrangler secret put REPORT_URL
+```
+
+Every link page then has a quiet "Report" link beside "Made with jelly", in
+the relay's own strip under the view. The relay adds the share id to the end
+of `REPORT_URL`, so end it where the id belongs: a mail subject as above, or
+`https://example.com/report?share=`. The share id is the first 22 characters
+after `/j/`. It names the share and opens nothing, so a report never carries a
+working link. Without `REPORT_URL` there is no Report link. `/pin` has none:
+it shows nothing a sharer wrote.
+
+To take a share down, with the link or the share id from the report:
+
+```bash
+jelly takedown https://pages.example/j/<44 characters>
+jelly takedown <share id>
+```
+
+It needs only `relay.json` (the relay's URL and publish secret), not the jelly
+and not a running daemon, so it works for a share another machine made. It
+calls `DELETE /api/live/<share id>`, the route `jelly unshare NAME` uses. The
+relay deletes the share: every link and asset answers 404 at once, open pages
+close with "This jelly is no longer shared", and its PIN stops. The daemon
+that shared it hears that the share ended and keeps the jelly as a local one.
+The share stays down: its id is random and nothing can publish to it again
+without the publish secret.
+
+What is not here: blocking the person who shared it from sharing again. A
+relay has one publish secret, so there is nobody to block but you. That
+belongs with per-person publishing, before a relay hosts strangers.
 
 ## What the relay counts
 
@@ -153,7 +235,8 @@ typechecks it. Neither deploys anything.
   jelly only through `postMessage`, so it cannot read the link, the socket or
   another jelly. Pages send no referrer, are marked `noindex` and are not cached;
   `robots.txt` disallows everything.
-- A revoked link stops at once, and its open pages close.
+- A revoked link stops at once, and its open pages close. A share that was
+  unshared or taken down is deleted from the relay, and its id never works again.
 - Anyone with a link can read everything in that jelly's state.
 
 ## Not on a share
