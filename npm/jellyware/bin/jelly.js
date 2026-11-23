@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Starts the jelly binary that npm installed for this platform. The binary is
-// in its own package (jellyware-darwin-arm64 and so on), picked by npm from
+// in its own package (@getjellyware/jelly-darwin-arm64 and so on), picked by npm from
 // this package's optionalDependencies.
 const { spawn } = require("node:child_process");
 
-const name = `jellyware-${process.platform}-${process.arch}`;
+const name = `@getjellyware/jelly-${process.platform}-${process.arch}`;
 let binary;
 try {
   binary = require.resolve(`${name}/bin/jelly${process.platform === "win32" ? ".exe" : ""}`);
