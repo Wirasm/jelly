@@ -84,9 +84,10 @@ pub enum Cmd {
     },
     /// Set jelly up for the coding agents on this machine: Claude Code, Codex
     /// and Pi. Each gets the jelly skill; Claude Code also gets the hook that
-    /// reports what the person did, and Pi the extension that starts a turn when
-    /// they press Send. `jelly update` runs it for you. A skill folder that
-    /// is a link (your own checkout) is left alone.
+    /// reports what the person did and the one that asks for a plan jelly when
+    /// they approve a plan, and Pi the extension that starts a turn when they
+    /// press Send. `jelly update` runs it for you. A skill folder that is a
+    /// link (your own checkout) is left alone.
     Setup {
         /// Print what would be written, and write nothing.
         #[arg(long)]
@@ -104,6 +105,10 @@ pub enum Cmd {
     /// `try`, and each agent's skill, hook and extension. Exit 1 when a line
     /// says `fix`. --json prints [{ok, text, fix}].
     Doctor,
+    /// What Claude Code's hook runs when the person approves a plan: it tells
+    /// the agent to show the plan as a jelly. `jelly setup` writes the hook.
+    #[command(hide = true)]
+    PlanApproved,
     /// List the built-in recipes: starting points for jellies that are easy to
     /// get wrong. With a NAME, print its RECIPE.md; with --out, write its files.
     Recipes {

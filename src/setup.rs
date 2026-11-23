@@ -10,7 +10,21 @@ const SKILL: &str = include_str!("../skill/SKILL.md");
 const PI_EXTENSION: &str = include_str!("../assets/pi-extension.ts");
 /// Runs at the start of every Claude Code turn; prints nothing when nothing is new.
 const HOOK: &str = "jelly hear --hook";
+/// Runs when the person approves a plan in Claude Code's plan mode.
+const PLAN_HOOK: &str = "jelly plan-approved";
 
+/// What `jelly plan-approved` prints: Claude Code hands `additionalContext` to
+/// the agent with the approval. Whether the plan is worth a jelly is the agent's call.
+pub fn plan_approved() -> Value {
+    json!({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+        "The person approved your plan. Before you change anything, show it to them as a plan jelly, so they can \
+         follow the work and steer it: run `jelly recipes plan` and do what it says. \
+         Skip this only for a plan of three steps or fewer."}})
+}
+
+const CLAUDE_NOTE: &str = "Claude Code  note   Claude Code asks the person before each `jelly` command. To stop that, add \
+    \"Bash(jelly:*)\" to permissions.allow in ~/.claude/settings.json. It is not added for you: \
+    `jelly feed` runs any command, so the rule lets the agent run commands without asking";
 const CODEX_NOTE: &str = "Codex        note   Codex's sandbox blocks jelly from reaching its daemon. Let it through by adding to ~/.codex/config.toml: \
     `[sandbox_workspace_write]` and under it `network_access = true`; files stay sandboxed. \
     Or approve each `jelly` command as Codex asks. To hand the turn to the person, Codex runs `jelly hear --wake NAME` and ends its turn";
@@ -18,7 +32,7 @@ const CODEX_NOTE: &str = "Codex        note   Codex's sandbox blocks jelly from 
 /// One thing jelly keeps in an agent's folder.
 pub struct Item {
     pub agent: &'static str,
-    /// "skill", "hook" or "wake".
+    /// "skill", "hook", "plan" or "wake".
     pub what: &'static str,
     pub path: PathBuf,
     kind: Kind,
@@ -27,8 +41,8 @@ pub struct Item {
 enum Kind {
     /// The skill folder: SKILL.md and the recipes it points at.
     Skill,
-    /// `jelly hear --hook` among Claude Code's UserPromptSubmit hooks.
-    Hook,
+    /// A command among Claude Code's hooks for `event`, for the tool `matcher` names.
+    Hook { event: &'static str, matcher: Option<&'static str>, command: &'static str },
     /// One file with this text.
     File(&'static str),
 }
@@ -50,7 +64,9 @@ pub fn items(home: &Path) -> Vec<Item> {
     let claude = home.join(".claude");
     if claude.is_dir() {
         items.push(item("Claude Code", "skill", claude.join("skills/jelly"), Kind::Skill));
-        items.push(item("Claude Code", "hook", claude.join("settings.json"), Kind::Hook));
+        let settings = claude.join("settings.json");
+        items.push(item("Claude Code", "hook", settings.clone(), Kind::Hook { event: "UserPromptSubmit", matcher: None, command: HOOK }));
+        items.push(item("Claude Code", "plan", settings, Kind::Hook { event: "PostToolUse", matcher: Some("ExitPlanMode"), command: PLAN_HOOK }));
     }
     let codex = home.join(".codex");
     if codex.is_dir() {
@@ -76,8 +92,10 @@ pub fn run(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for item in &items {
         out.push(item.write(dry_run)?);
-        if item.agent == "Codex" {
-            out.push(CODEX_NOTE.into());
+        match (item.agent, item.what) {
+            ("Claude Code", "plan") => out.push(CLAUDE_NOTE.into()),
+            ("Codex", _) => out.push(CODEX_NOTE.into()),
+            _ => {}
         }
     }
     Ok(out)
@@ -100,8 +118,8 @@ impl Item {
             Kind::Skill if skill_files().all(|(file, bytes)| same(&self.path.join(file), bytes)) => State::Current,
             Kind::File(text) if same(&self.path, text.as_bytes()) => State::Current,
             Kind::Skill | Kind::File(_) => State::Stale,
-            Kind::Hook if fs::read_to_string(&self.path).is_ok_and(|text| text.contains(HOOK)) => State::Current,
-            Kind::Hook => State::Missing,
+            Kind::Hook { command, .. } if fs::read_to_string(&self.path).is_ok_and(|text| text.contains(command)) => State::Current,
+            Kind::Hook { .. } => State::Missing,
         }
     }
 
@@ -110,8 +128,8 @@ impl Item {
     }
 
     fn write(&self, dry_run: bool) -> Result<String, String> {
-        if let Kind::Hook = self.kind {
-            return self.write_hook(dry_run);
+        if let Kind::Hook { event, matcher, command } = self.kind {
+            return self.write_hook(event, matcher, command, dry_run);
         }
         // A link is the person's own arrangement (a checkout of jelly), so it stays.
         if let Ok(target) = fs::read_link(&self.path) {
@@ -133,7 +151,7 @@ impl Item {
                     }
                 }
                 Kind::File(text) => write(&self.path, text.as_bytes())?,
-                Kind::Hook => unreachable!("the hook is written above"),
+                Kind::Hook { .. } => unreachable!("the hook is written above"),
             }
         }
         Ok(self.line(match (dry_run, existed) {
@@ -144,27 +162,31 @@ impl Item {
         }))
     }
 
-    /// Adds `jelly hear --hook` to Claude Code's UserPromptSubmit hooks, unless a
-    /// hook there already runs it.
-    fn write_hook(&self, dry_run: bool) -> Result<String, String> {
+    /// Adds `command` to Claude Code's hooks for `event`, unless a hook there
+    /// already runs it.
+    fn write_hook(&self, event: &str, matcher: Option<&str>, command: &str, dry_run: bool) -> Result<String, String> {
         let path = &self.path;
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
             Err(e) => return Err(format!("could not read {}: {e}", path.display())),
         };
-        if text.contains(HOOK) {
+        if text.contains(command) {
             return Ok(self.line("already there"));
         }
         let Ok(mut settings) = serde_json::from_str::<Value>(&text) else {
             return Ok(self.line("left alone: it is not valid JSON"));
         };
         let hooks = settings.as_object_mut().map(|s| s.entry("hooks").or_insert_with(|| json!({})));
-        let prompt = hooks.and_then(Value::as_object_mut).map(|h| h.entry("UserPromptSubmit").or_insert_with(|| json!([])));
-        let Some(list) = prompt.and_then(Value::as_array_mut) else {
+        let listed = hooks.and_then(Value::as_object_mut).map(|h| h.entry(event).or_insert_with(|| json!([])));
+        let Some(list) = listed.and_then(Value::as_array_mut) else {
             return Ok(self.line("left alone: its hooks are not in the usual shape"));
         };
-        list.push(json!({"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}));
+        let mut entry = json!({"hooks": [{"type": "command", "command": command, "timeout": 3}]});
+        if let Some(matcher) = matcher {
+            entry["matcher"] = json!(matcher);
+        }
+        list.push(entry);
         if !dry_run {
             let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
             fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -204,11 +226,13 @@ mod tests {
         let settings: Value = serde_json::from_str(&fs::read_to_string(at(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["model"], "x");
         assert_eq!(settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], HOOK);
+        assert_eq!(settings["hooks"]["PostToolUse"][0], json!({"matcher": "ExitPlanMode", "hooks": [{"type": "command", "command": PLAN_HOOK, "timeout": 3}]}));
 
         // A second run changes nothing it should not.
         let again = run(home.path(), false).unwrap().join("\n");
         assert!(again.contains("already there") && again.contains("updated"), "{again}");
         let after: Value = serde_json::from_str(&fs::read_to_string(at(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(after["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
+        assert_eq!(after["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
     }
 }

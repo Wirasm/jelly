@@ -67,12 +67,13 @@ Edge or Brave for `look` and `try` (`JELLY_CHROME` names another binary). From
 a checkout, `cargo install --path .` replaces the first line and needs Rust.
 
 ```bash
-npm install -g jellyware  # the `jelly` command, a prebuilt binary
-jelly setup               # the skill, and what wakes each agent, for Claude Code, Codex and Pi
+npx jellyware setup       # installs the `jelly` command, then the skill and what wakes each agent
 jelly ls                  # starts the daemon: http://127.0.0.1:7878
 jelly doctor              # what is missing or behind, each line with the command that fixes it
 jelly update              # later: the latest release, every agent's skill again, the daemon restarted
 ```
+
+`npx jellyware setup` is `npm install -g jellyware`, then `jelly setup`.
 
 `jelly setup` writes for each agent it finds in your home folder, and says what
 it wrote. `--dry-run` only says it.
@@ -91,6 +92,10 @@ have changed.
 | Claude Code | `~/.claude/skills/jelly` | A `UserPromptSubmit` hook, `jelly hear --hook`, reports what they did at the start of each turn |
 | Pi | `~/.pi/agent/skills/jelly` | An extension starts a turn when they press Send |
 | Codex | `~/.codex/skills/jelly` | The agent runs `jelly hear --wake NAME`; the daemon then queues a message to its session on Send |
+
+Claude Code gets a second hook, `jelly plan-approved`, on `ExitPlanMode`: when
+the person approves a plan of more than three steps, the agent is told to show
+it as a plan jelly before it starts, so a jelly appears without anyone asking.
 
 A skill folder that is a link is left alone, so a checkout stays in charge:
 `ln -s "$PWD/skill" ~/.claude/skills/jelly`. Codex runs commands in a sandbox

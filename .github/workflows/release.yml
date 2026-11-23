@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - uses: actions/download-artifact@v4
         with:
@@ -70,6 +70,8 @@ jobs:
           version=$(cargo pkgid | sed 's/.*[#@]//')
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, but Cargo.toml says $version"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
+      # npm signs in through GitHub (Trusted Publishing) for a package that names this
+      # workflow in its npm settings, and with the token for one that does not yet.
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

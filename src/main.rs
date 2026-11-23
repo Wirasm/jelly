@@ -129,7 +129,7 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 }
 
 fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), String>) -> Result<(), CommandError> {
-    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Doctor) && startup::is_default_endpoint(&cli.url) {
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Relay { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Doctor | Cmd::PlanApproved) && startup::is_default_endpoint(&cli.url) {
         cli.url = startup::DEFAULT_URL.into();
         let quiet = matches!(cli.cmd, Cmd::Hear { hook: true, .. });
         if let Err(e) = start(&cli.url, quiet) {
@@ -285,6 +285,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             }
             Ok(())
         }
+        Cmd::PlanApproved => output(format_args!("{}", setup::plan_approved())),
         Cmd::Setup { dry_run } => {
             let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or("could not find your home directory")?;
             for line in setup::run(Path::new(&home), dry_run)? {

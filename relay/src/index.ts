@@ -15,11 +15,15 @@
 // One Pins object per relay maps PINs to shares. It stores only
 // HMAC(RELAY_SECRET, PIN), throttles wrong tries per IP, and locks PINs after a
 // few wrong tries.
+//
+// The relay counts its own use (counts.ts): shares, opens and people per share,
+// by day. GET /api/counts returns them to the holder of RELAY_SECRET.
 
 import { DurableObject } from "cloudflare:workers";
 import { engine, run, Refusal } from "./verbs";
 import { shell } from "./shell";
 import { joinPage } from "./join";
+import * as counting from "./counts";
 
 interface Env {
   LIVE: DurableObjectNamespace<Live>;
@@ -91,10 +95,12 @@ function token(len: number): string {
   return Array.from({ length: len }, () => abc[below(62)]).join("");
 }
 
+const bearer = (req: Request) => req.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
+
 // Constant-time compare of the bearer secret.
 async function authorized(req: Request, env: Env): Promise<boolean> {
   if (!env.RELAY_SECRET) return false;
-  const given = req.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
+  const given = bearer(req);
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([given, env.RELAY_SECRET].map((s) => crypto.subtle.digest("SHA-256", enc.encode(s))));
   return crypto.subtle.timingSafeEqual(a, b);
@@ -172,6 +178,14 @@ export class Live extends DurableObject<Env> {
 
   private seat(ws: WebSocket): Seat {
     return ws.deserializeAttachment() as Seat;
+  }
+
+  /** How many people are connected now, for the counts. Someone with two pages
+   *  open is one person; the view-only link has no names, so each page is one.
+   *  The owner's daemon is not a person. */
+  private people(): number {
+    const seats = this.ctx.getWebSockets().map((ws) => this.seat(ws)).filter((s) => !s.owner);
+    return new Set(seats.filter((s) => s.who).map((s) => s.who)).size + seats.filter((s) => !s.who).length;
   }
 
   private since(seq: number) {
@@ -343,7 +357,7 @@ export class Live extends DurableObject<Env> {
     if (kind === "assets") return this.doc ? this.asset(decodeURIComponent(rest)) : notFound();
     const [secret, ws] = rest.split("/");
     const hash = await sha256(secret);
-    const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number }>("SELECT who, can_act FROM people WHERE hash = ?", hash).toArray()[0];
+    const row = this.doc && this.ctx.storage.sql.exec<{ who: string; can_act: number; opened_ms: number | null }>("SELECT who, can_act, opened_ms FROM people WHERE hash = ?", hash).toArray()[0];
     if (ws !== "ws") return row ? new Response(shell(this.doc?.about ?? ""), { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "frame-ancestors 'none'", ...HEADERS } }) : notFound();
     if (req.headers.get("Upgrade") !== "websocket") return text("expected a WebSocket\n", 426);
     const [client, server] = Object.values(new WebSocketPair());
@@ -358,6 +372,9 @@ export class Live extends DurableObject<Env> {
     const seat: Seat = { owner: false, who: row.who, can_act: row.can_act === 1 };
     this.ctx.acceptWebSocket(server, [`p:${row.who}`]);
     server.serializeAttachment(seat);
+    // Counted beside the open, not before it: a link works whether or not the count lands.
+    const first = !row.opened_ms || counting.today(row.opened_ms) !== counting.today();
+    this.ctx.waitUntil(this.env.PINS.getByName("pins").opened(this.share, this.people(), first));
     const me = { by: seat.can_act ? `person:${row.who}` : "", who: row.who, can_act: seat.can_act };
     server.send(JSON.stringify({ type: "hello", doc: this.part(this.doc, "all", false), runtime: this.get("runtime"), me, assets: `/a/${this.share}/` }));
     return new Response(null, { status: 101, webSocket: client });
@@ -404,6 +421,8 @@ export class Live extends DurableObject<Env> {
           CREATE TABLE IF NOT EXISTS people (hash TEXT PRIMARY KEY, who TEXT NOT NULL, can_act INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS assets (file TEXT NOT NULL, part INTEGER NOT NULL, type TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY (file, part));`);
         this.columns();
+        // A republish of a share that is already here is not a new share.
+        if (!this.doc) this.ctx.waitUntil(sha256(`sharer:${bearer(req)}`).then((sharer) => this.env.PINS.getByName("pins").shared(sharer)));
         this.doc = doc;
         this.share = share;
         this.put("doc", JSON.stringify(doc));
@@ -488,13 +507,19 @@ export class Live extends DurableObject<Env> {
 }
 
 /** Every live PIN on this relay, and the wrong tries against them. One object,
- *  so every guess passes the same throttle before any lookup. */
+ *  so every guess passes the same throttle before any lookup. As the relay's
+ *  one object it also holds what the relay counts (counts.ts). */
 export class Pins extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pins (hash TEXT PRIMARY KEY, share TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS misses (ip TEXT NOT NULL, at_ms INTEGER NOT NULL);`);
+    counting.tables(ctx.storage.sql);
   }
+
+  async shared(sharer: string) { counting.shared(this.ctx.storage.sql, sharer); }
+  async opened(share: string, people: number, first: boolean) { counting.opened(this.ctx.storage.sql, share, people, first); }
+  async counts() { return counting.counts(this.ctx.storage.sql); }
 
   /** A plain hash of a 6-digit PIN is reversed in a moment, so it is keyed with the relay's secret. */
   private async hash(pin: string): Promise<string> {
@@ -591,6 +616,11 @@ export default {
 
     const asset = path.match(ASSET);
     if (asset && req.method === "GET") return live(asset[1], `assets/${asset[2]}`);
+
+    if (path === "/api/counts" && req.method === "GET") {
+      if (!(await authorized(req, env))) return text("unauthorized\n", 401);
+      return Response.json(await env.PINS.getByName("pins").counts(), { headers: HEADERS });
+    }
 
     const owner = path.match(OWNER);
     if (owner) {
