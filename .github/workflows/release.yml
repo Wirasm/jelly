@@ -73,8 +73,6 @@ jobs:
       # No token: npm signs in through GitHub (Trusted Publishing). Each package
       # names this repo and this workflow file in its settings on npmjs.com.
       - name: Publish to npm
-        env:
-          NPM_CONFIG_LOGLEVEL: verbose
         run: |
           # Artifacts do not keep the executable bit.
           chmod +x dist/*/bin/jelly
