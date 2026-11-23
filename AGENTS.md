@@ -65,3 +65,12 @@ cargo clippy
 For a manual run, use a throwaway daemon so your real jellies are untouched:
 `jelly serve --temp` picks a free port and a fresh home, prints `jelly on URL` first,
 and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.
+
+## Release
+
+A merge to `development` that changes what ships (`src`, `assets`, `skill`,
+`npm`, the Cargo files) is a release: `.github/workflows/release.yml` builds
+every platform, publishes to npm and makes the GitHub release. The version is
+one patch above the latest on npm, so do not bump it or tag anything. For a new
+minor or major, set `version` in `Cargo.toml`. The relay is not part of it:
+`relay/README.md`.
