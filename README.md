@@ -82,8 +82,15 @@ it wrote. `--dry-run` only says it. Run it again after updating jelly.
 
 A skill folder that is a link is left alone, so a checkout stays in charge:
 `ln -s "$PWD/skill" ~/.claude/skills/jelly`. Codex runs commands in a sandbox
-that cannot reach the daemon; approve `jelly` commands to run outside it. Any
-other agent that runs shell commands can use jelly with the skill alone: export
+that cannot reach the daemon. Let jelly through with two lines in
+`~/.codex/config.toml`, which leave the file limits in place:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+Without them, Codex asks you to approve each `jelly` command. Any other agent that runs shell commands can use jelly with the skill alone: export
 a stable `JELLY_SESSION_ID` for the conversation, so the inbox knows what you
 have already read.
 
