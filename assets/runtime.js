@@ -1170,13 +1170,26 @@
     e.stopPropagation();
     setMode(false);
   }, true);
+  // On the jelly page, a key the jelly does not use goes up to the page, which
+  // decides whether it is one of its shortcuts. The jelly keeps a key typed into a
+  // field or a comment, Enter on a button or link, a key with Ctrl, Alt or Cmd, and
+  // a key the view called preventDefault() on (checked a tick later, since a view's
+  // own listener on window runs after this one). Esc first closes an open comment.
   addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    // Esc inside a jelly closes the comment mode first, then reaches the jelly page.
-    const inPop = e.target.closest?.(".jf-pop");
-    if (embedded && !commenting && !inPop && !pop?.isConnected) parent.postMessage({ type: "jelly:escape", name: boot.name }, location.origin);
-    setMode(false);
+    if (e.key === "Escape") {
+      setMode(false);
+      if (pop?.isConnected) { pop.remove(); pop = null; return; }
+    }
+    if (!embedded || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || pop?.isConnected) return;
+    if (e.target.closest?.(".jf-pop, input, textarea, select") || e.target.isContentEditable) return;
+    if (e.key === "Enter" && e.target.closest?.("button, a[href], summary")) return;
+    setTimeout(() => { if (!e.defaultPrevented) parent.postMessage({ type: "jelly:key", name: boot.name, key: e.key }, location.origin); });
   });
+  // A click or Tab into a jelly never reaches the page, so the jelly tells it, and
+  // the page selects it. A click into a jelly that already has focus fires no focus.
+  const focused = () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); };
+  addEventListener("focus", focused);
+  addEventListener("pointerdown", focused);
   addEventListener("mouseover", (e) => {
     if (!(commenting || e.altKey) || isOurs(e.target)) return;
     hovered?.classList.remove("jf-hover");

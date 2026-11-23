@@ -639,6 +639,14 @@
   }
   const frameOf = (name) => (full ? $("full").querySelector("iframe") : entries.get(name)?.querySelector("iframe"));
   const buttonOf = (name) => (full ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
+  // A message counts only from a frame of the jelly it names: one in its place in the
+  // stream (a reload swaps in a second for a moment) or, while it is open, the full view.
+  const framesOf = (name) => [...(entries.get(name)?.querySelectorAll("iframe") || []), ...(full === name ? $("full").querySelectorAll("iframe") : [])];
+  const sentBy = (e, name) => framesOf(name).some((f) => f.contentWindow === e.source);
+  // Each frame reports its own comment mode, so the button is the sender's: comment mode
+  // begun in the stream and ended behind the full view turns the stream's button off.
+  const buttonFor = (e, name) => ([...$("full").querySelectorAll("iframe")].some((f) => f.contentWindow === e.source)
+    ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
   function toggleComment(name) {
     const f = frameOf(name), b = buttonOf(name);
     if (!f || !b) return;
@@ -650,9 +658,12 @@
   addEventListener("message", (e) => {
     if (e.origin !== location.origin) return;
     const d = e.data;
-    if (d?.type === "jelly:commenting") { const b = buttonOf(d.name); if (b) setCommenting(b, d.on); }
+    if (d?.type === "jelly:commenting" && sentBy(e, d.name)) { const b = buttonFor(e, d.name); if (b) setCommenting(b, d.on); }
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
-    if (d?.type === "jelly:escape" && full) closeFull();
+    // A click or Tab into a jelly never reaches this page, so the jelly says so.
+    if (d?.type === "jelly:focus" && sentBy(e, d.name) && !full) select(d.name);
+    // Keys typed in a jelly that it did not use: the page's shortcuts, as if typed here.
+    if (d?.type === "jelly:key" && sentBy(e, d.name)) shortcut(String(d.key));
     if (d?.type === "jelly:reload") {
       const f = [...document.querySelectorAll("iframe[data-jelly-swap]")].find((f) => f.contentWindow === e.source);
       if (f) swap(f.swapFor || f);
@@ -852,20 +863,28 @@
     if (s.scrollTop < 200) $("newpill").hidden = true;
   });
 
-  addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && ask) return closeAsk();
-    if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "Escape" && dockOpen) return setDock(false);
-    if (e.key === "a") return setDock(!dockOpen);
-    if (e.key === "Escape" && full) return closeFull();
-    if (e.key === "c") return toggleComment(full || sel);
-    if (full) return;
+  // The page's shortcuts, for keys typed on the page and keys a jelly passes up.
+  // Returns true when the key did something. Letters ignore Caps Lock.
+  function shortcut(key) {
+    if (key.length === 1) key = key.toLowerCase();
+    if (key === "Escape" && ask) return closeAsk(), true;
+    if (key === "Escape" && dockOpen) return setDock(false), true;
+    if (key === "a") return setDock(!dockOpen), true;
+    if (key === "Escape" && full) return closeFull(), true;
+    if (key === "c") return toggleComment(full || sel), true;
+    if (full) return false;
     const names = [...entries.keys()].sort((a, b) => byName(b).created_ms - byName(a).created_ms);
     const i = names.indexOf(sel);
-    if (e.key === "j" || e.key === "ArrowDown") { select(names[Math.min(names.length - 1, i + 1)], true); e.preventDefault(); }
-    if (e.key === "k" || e.key === "ArrowUp") { select(names[Math.max(0, i - 1)], true); e.preventDefault(); }
-    if (e.key === "Enter" && sel) openFull(sel);
-    if (e.key === "p") $("app").classList.toggle("nokept");
+    if (key === "j" || key === "ArrowDown") return select(names[Math.min(names.length - 1, i + 1)], true), true;
+    if (key === "k" || key === "ArrowUp") return select(names[Math.max(0, i - 1)], true), true;
+    if (key === "Enter" && sel) return openFull(sel), true;
+    if (key === "p") return $("app").classList.toggle("nokept"), true;
+    return false;
+  }
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && ask) return closeAsk();
+    if (e.target.closest("input, textarea, select") || e.target.isContentEditable || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (shortcut(e.key) && e.key.startsWith("Arrow")) e.preventDefault();
   });
 
   // ---- live -----------------------------------------------------------------

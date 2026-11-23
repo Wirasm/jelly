@@ -101,6 +101,11 @@ control sits there, move it with
 `:root { --jelly-comment-inset: auto 10px 78px auto; }` (CSS `inset` order; set
 it on `:root`, not on `body`).
 
+On the jelly page, keys typed in a jelly also drive the page: `j`, `k`, the
+arrows, Enter, `a`, `c`, `p` and Esc. Keys typed into a field stay in the view,
+and so does Enter on a button or link. A view that uses one of these keys itself
+keeps it by calling `preventDefault()` in its `keydown` listener.
+
 ## Look before you show
 
 ```bash
