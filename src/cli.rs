@@ -415,7 +415,7 @@ pub enum Cmd {
         /// People already in keep their links.
         #[arg(long, requires = "pin", value_parser = clap::value_parser!(u64).range(1..=24))]
         hours: Option<u64>,
-        /// Days until the share stops working (default 30, at most 365). A share
+        /// Days until the share stops working (default 1, at most 365). A share
         /// lasts as long as its longest link.
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=365))]
         days: Option<u64>,

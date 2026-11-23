@@ -150,11 +150,14 @@ background, so they match the page they sit on.
 
 ## Shares on the jelly page
 
-`GET /api/shares` lists every shared jelly with its people. For each share the
-daemon asks the relay (`GET /api/live/<share>/people`) who holds a link, when
-each last opened one (`opened_ms`, set when a link's page connects) and how many
-of their pages are open now (`here`). If the relay does not answer, the people
-come from the local record and `people_from` is `record`. Links are made on
+`GET /api/shares` lists every shared jelly with its people from the daemon's
+own record (`people_from` is `record`), which is what the jelly page asks for
+every 20 seconds. With `?here=true`, which the page sends only while its Shared
+panel is open, the daemon asks the relay for each share
+(`GET /api/live/<share>/people`) who holds a link, when each last opened one
+(`opened_ms`, set when a link's page connects), how many of their pages are
+open now (`here`) and when the share ends. If the relay does not answer, the
+people come from the record. Links are made on
 the relay's `share_origin` when its answer has one (the relay's `SHARE_ORIGIN`),
 else on the relay's own URL. The jelly page shows
 this under "N shared" in its top bar and stops a link or a whole share with the

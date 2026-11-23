@@ -988,7 +988,9 @@
       </div>`).join("");
   }
   async function loadShares() {
-    try { shares = await (await fetch("/api/shares")).json(); } catch { return; }
+    // Who opened a link and who is here now is asked of the relay, and only
+    // while the panel that shows it is open: an idle page costs the relay nothing.
+    try { shares = await (await fetch(sharepop ? "/api/shares?here=true" : "/api/shares")).json(); } catch { return; }
     if (!Array.isArray(shares)) shares = [];
     if (PROJECT) shares = shares.filter((s) => s.jelly.startsWith(PROJECT + ":"));
     drawShares();
@@ -1024,7 +1026,7 @@
   };
   addEventListener("click", () => closeShares());
   addEventListener("keydown", (e) => { if (e.key === "Escape" && sharepop) closeShares(); });
-  // Who is here changes without any event reaching this page, so ask again now and then.
+  // What is shared, and who is here, change without any event reaching this page, so ask again now and then.
   setInterval(loadShares, 20000);
   loadShares();
   // ---- a newer jelly ---------------------------------------------------------

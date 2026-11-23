@@ -36,7 +36,7 @@ jelly unshare plan                      # every link stops; the final state is a
 jelly takedown <link or share id>       # a reported share, by its link: gone from the relay (below)
 ```
 
-Shares last 30 days (`--days 1..365`). jelly sends no email: pass the link on.
+Shares last a day (`--days 1..365`); sharing again makes it last longer. jelly sends no email: pass the link on.
 
 ## PIN rooms
 

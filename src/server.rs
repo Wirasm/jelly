@@ -803,9 +803,17 @@ struct UnshareQ {
     to: Option<String>,
 }
 
-/// Every shared jelly with its people, for the jelly page.
-async fn shares(State(app): State<Shared>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(share::list(&app).await?))
+#[derive(Deserialize, Default)]
+struct SharesQ {
+    #[serde(default)]
+    here: bool,
+}
+
+/// Every shared jelly with its people, for the jelly page. `?here=true` asks
+/// the relay who opened a link and who is there now; without it the answer
+/// comes from this daemon alone, so asking often costs the relay nothing.
+async fn shares(State(app): State<Shared>, Query(q): Query<SharesQ>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(share::list(&app, q.here).await?))
 }
 
 async fn unshare_live(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<UnshareQ>) -> Result<Json<Value>, ApiError> {
