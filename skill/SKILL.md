@@ -105,7 +105,9 @@ On the jelly page, keys typed in a jelly also drive the page: `j`, `k`, the
 arrows, Enter, `a`, `c`, `p` and Esc. Keys typed into a field stay in the view,
 and so does Enter on a button or link. On a share link the person can act on,
 `c` toggles comment mode. A view that uses one of these keys itself keeps it by
-calling `preventDefault()` in its `keydown` listener.
+calling `preventDefault()` in its `keydown` listener, only when it used the key:
+an Esc that closed the view's own panel stays in the view, and the next Esc,
+with nothing left to close, closes the full view.
 
 ## Look before you show
 

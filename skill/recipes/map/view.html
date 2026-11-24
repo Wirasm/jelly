@@ -424,7 +424,9 @@ document.addEventListener("keydown", (e) => {
   if (e.target.closest?.(".jf-ask, .jf-pop")) return;
   if (tr && !sel && e.key === "ArrowRight") { stop(); go(tr.i + 1); }
   if (tr && !sel && e.key === "ArrowLeft") { stop(); go(tr.i - 1); }
-  if (e.key === "Escape") { if (sel) sel = null; else if (tr) { tr = null; stop(); } flagging = null; render(jelly.state); }
+  // Esc closes the open box, then the trace. preventDefault() keeps that Esc here,
+  // so the jelly page closes its full view only on an Esc with nothing left to close.
+  if (e.key === "Escape" && (sel || tr)) { e.preventDefault(); if (sel) sel = null; else { tr = null; stop(); } flagging = null; render(jelly.state); }
 });
 // The wires follow the boxes: when the map reflows, or a question card opens under a row.
 new ResizeObserver(() => paint(S())).observe($("map"));
