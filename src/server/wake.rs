@@ -75,12 +75,26 @@ pub(super) fn start(app: &Shared) {
 
 async fn queue(thread: &str, jelly: &str) -> Result<(), String> {
     // JELLY_CODEX names another binary, as JELLY_CHROME does for the browser.
-    let codex = std::env::var("JELLY_CODEX").unwrap_or_else(|_| "codex".into());
+    // On Windows the native Codex is codex.exe, which a bare name finds, and
+    // the npm one is codex.cmd, which it does not: try one, then the other.
+    let named = std::env::var("JELLY_CODEX").ok();
+    let tries = match named {
+        Some(codex) => vec![codex],
+        None if cfg!(windows) => vec!["codex".into(), "codex.cmd".into()],
+        None => vec!["codex".into()],
+    };
     let message = format!("The person pressed Send on {jelly}: they are done there and hand the turn back. Run `jelly hear` for what they did.");
-    let child = tokio::process::Command::new(&codex).args(["queue", "--thread", thread, "--message", &message])
-        .stdin(std::process::Stdio::null()).kill_on_drop(true).output();
-    let out = tokio::time::timeout(LIMIT, child).await
-        .map_err(|_| format!("`{codex} queue` ran longer than {} s", LIMIT.as_secs()))?
-        .map_err(|e| format!("could not run {codex}: {e}"))?;
+    let mut tries = tries.iter().peekable();
+    let out = loop {
+        let codex = tries.next().expect("one name to try");
+        let child = tokio::process::Command::new(codex).args(["queue", "--thread", thread, "--message", &message])
+            .stdin(std::process::Stdio::null()).kill_on_drop(true).output();
+        match tokio::time::timeout(LIMIT, child).await {
+            Err(_) => return Err(format!("`{codex} queue` ran longer than {} s", LIMIT.as_secs())),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound && tries.peek().is_some() => continue,
+            Ok(Err(e)) => return Err(format!("could not run {codex}: {e}")),
+            Ok(Ok(out)) => break out,
+        }
+    };
     if out.status.success() { Ok(()) } else { Err(look::clip(String::from_utf8_lossy(&out.stderr).trim(), 300)) }
 }
