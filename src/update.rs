@@ -73,7 +73,9 @@ pub fn source_commands() -> [String; 2] {
 /// the new binary write every agent's skill again. Returns what `setup` said.
 pub fn apply(exe: &Path, latest: &str) -> Result<String, String> {
     // JELLY_NPM names another binary, as JELLY_CHROME does for the browser.
-    let npm = std::env::var("JELLY_NPM").unwrap_or_else(|_| "npm".into());
+    // Windows has npm only as npm.cmd, and `Command` looks for a bare name as
+    // name.exe alone.
+    let npm = std::env::var("JELLY_NPM").unwrap_or_else(|_| if cfg!(windows) { "npm.cmd" } else { "npm" }.into());
     let run = |command: &mut Command| command.stdin(Stdio::null()).output();
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
     let installed = run(Command::new(&npm).args(["install", "-g", "jellyware@latest"])).map_err(|e| format!("could not run {npm}: {e}"))?;
