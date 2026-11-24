@@ -51,6 +51,13 @@ fn only_this_machine_can_use_the_daemon() {
     assert!(call(Some("https://evil.example"), &addr).contains("403"));
     assert!(call(Some("null"), &addr).contains("403"));
     assert!(ws("https://evil.example").contains("403"));
+    // Another site's `<img>` sends no Origin, but the browser names it cross-site.
+    // It must not start a render or save a file through look (#148).
+    let fetched = |path: &str, site: &str| raw(&addr, &format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nSec-Fetch-Site: {site}\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nConnection: close\r\n\r\n")).0;
+    for site in ["cross-site", "same-site"] {
+        assert!(fetched("/api/jellies/t:c/look?save=img", site).contains("403"), "{site}");
+    }
+    assert!(!home.path().join("renders").exists());
     // A rebound DNS name reaches 127.0.0.1 with a foreign Host.
     assert!(call(None, "evil.example").contains("403"));
     // A crafted name is refused, not written into the page.
@@ -70,6 +77,10 @@ fn only_this_machine_can_use_the_daemon() {
     assert!(ws(&format!("http://{addr}")).contains("101"));
     let localhost = addr.replace("127.0.0.1", "localhost");
     assert!(call(Some(&format!("http://{localhost}")), &localhost).contains("200"));
+    // jelly's own pages fetch same-origin, and an address typed or opened from a terminal is none.
+    for site in ["same-origin", "none"] {
+        assert!(fetched("/api/jellies/t:c/state", site).contains("200"), "{site}");
+    }
     // Pages may only be framed by the daemon's own pages.
     let view = ureq::get(&format!("{url}/j/t:c/")).call().unwrap();
     assert_eq!(view.header("content-security-policy"), Some("frame-ancestors 'self'"));
