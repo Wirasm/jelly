@@ -95,9 +95,12 @@
     clearTimeout(failT);
     failT = setTimeout(() => failEl.remove(), 12000);
   }
-  addEventListener("error", (e) => { if (e.error || e.message) showFailure(e.error?.message || e.message); });
+  // Chrome reports a ResizeObserver that changed the layout it watches as an
+  // error with no Error behind it. Nothing failed, so it is neither shown nor noted.
+  const harmless = (e) => !e.error && /^ResizeObserver loop/.test(e.message || "");
+  addEventListener("error", (e) => { if ((e.error || e.message) && !harmless(e)) showFailure(e.error?.message || e.message); });
   addEventListener("unhandledrejection", (e) => showFailure(e.reason?.message || e.reason));
-  addEventListener("error", (e) => noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
+  addEventListener("error", (e) => harmless(e) || noteError(e.error?.stack?.split("\n").slice(0, 2).join(" ") || e.message || (e.target?.src || e.target?.href ? `could not load ${e.target.src || e.target.href}` : "")), true);
   addEventListener("unhandledrejection", (e) => noteError(`unhandled rejection: ${e.reason?.message || e.reason}`));
   const consoleError = console.error.bind(console);
   console.error = (...a) => { noteError(a.map((x) => x?.stack || x?.message || String(x)).join(" ")); consoleError(...a); };
