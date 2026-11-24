@@ -23,8 +23,10 @@ permissions:
   contents: read
 
 jobs:
-  # The next version: one patch above the latest on npm. For a new minor or
-  # major, set it in Cargo.toml; it is used as long as it is ahead of npm.
+  # The next version: one patch above the latest release tag. Tags, not npm:
+  # npm can say the old version for minutes after a publish, and the next
+  # release would pick the same number. For a new minor or major, set it in
+  # Cargo.toml; it is used as long as it is ahead of the latest tag.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -33,11 +35,11 @@ jobs:
       - uses: actions/checkout@v4
       - id: next
         run: |
-          latest=$(npm view jellyware version)
+          latest=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/v##' | sort -V | tail -1)
           patch=$(echo "$latest" | awk -F. '{ print $1 "." $2 "." $3 + 1 }')
           ours=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           version=$(printf '%s\n%s\n' "$patch" "$ours" | sort -V | tail -1)
-          echo "npm has $latest, Cargo.toml says $ours: releasing $version"
+          echo "the latest release is $latest, Cargo.toml says $ours: releasing $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
