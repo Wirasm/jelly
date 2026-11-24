@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release this build is, or follows: see `version` in build.rs.
+pub const VERSION: &str = env!("JELLY_VERSION");
 const REGISTRY: &str = "https://registry.npmjs.org/jellyware/latest";
 
 /// The newest released version, from npm. `JELLY_UPDATE_URL` names another
@@ -21,16 +22,18 @@ pub fn latest() -> Result<String, String> {
         return Err("the check for a newer jelly is off (JELLY_UPDATE_URL=off)".into());
     }
     let failed = |e: String| format!("could not ask {url} for the latest jelly: {e}");
-    let release: Release = ureq::get(&url).set("User-Agent", concat!("jelly/", env!("CARGO_PKG_VERSION")))
+    let release: Release = ureq::get(&url).set("User-Agent", concat!("jelly/", env!("JELLY_VERSION")))
         .timeout(Duration::from_secs(10)).call().map_err(|e| failed(e.to_string()))?
         .into_json().map_err(|e| failed(e.to_string()))?;
     Ok(release.version)
 }
 
 /// Whether `latest` is a later release than `current`. A version that is not
-/// three numbers (a pre-release) is never an update.
+/// three numbers (a pre-release) is never an update. What follows a `+` is left
+/// out: a build three commits past 0.1.4 (0.1.4+3) counts as 0.1.4.
 pub fn newer(latest: &str, current: &str) -> bool {
     let parts = |v: &str| -> Option<Vec<u64>> {
+        let v = v.split('+').next().unwrap_or(v);
         let parts: Vec<u64> = v.split('.').map(|n| n.parse().ok()).collect::<Option<_>>()?;
         (parts.len() == 3).then_some(parts)
     };
@@ -152,7 +155,9 @@ mod tests {
     fn only_a_later_release_is_an_update() {
         assert!(newer("0.1.10", "0.1.9"));
         assert!(newer("1.0.0", "0.9.9"));
-        for (latest, current) in [("0.1.1", "0.1.1"), ("0.1.0", "0.1.1"), ("0.2.0-beta.1", "0.1.1"), ("", "0.1.1")] {
+        // A build from a checkout, commits past a release, is behind only the next one.
+        assert!(newer("0.1.5", "0.1.4+3"));
+        for (latest, current) in [("0.1.1", "0.1.1"), ("0.1.0", "0.1.1"), ("0.2.0-beta.1", "0.1.1"), ("", "0.1.1"), ("0.1.4", "0.1.4+3")] {
             assert!(!newer(latest, current), "{latest} over {current}");
         }
     }

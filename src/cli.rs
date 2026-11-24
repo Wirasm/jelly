@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "jelly", version, about = "Small live apps that agents and people shape while they run")]
+#[command(name = "jelly", version = crate::update::VERSION, about = "Small live apps that agents and people shape while they run")]
 pub struct Cli {
     /// Daemon address for client commands.
     #[arg(long, env = "JELLY_URL", default_value = startup::DEFAULT_URL, global = true)]

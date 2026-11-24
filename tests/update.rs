@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+// What the binary reports (build.rs).
+const VERSION: &str = env!("JELLY_VERSION");
 
 fn script(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
