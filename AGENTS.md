@@ -68,9 +68,11 @@ and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.
 
 ## Release
 
-A merge to `development` that changes what ships (`src`, `assets`, `skill`,
-`npm`, the Cargo files) is a release: `.github/workflows/release.yml` builds
-every platform, publishes to npm and makes the GitHub release. The version is
-one patch above the latest on npm, so do not bump it or tag anything. For a new
-minor or major, set `version` in `Cargo.toml`. The relay is not part of it:
-`relay/README.md`.
+Nobody releases by hand. Every merge to `development` that changes what ships
+(`src`, `assets`, `skill`, `npm`, `build.rs`, the Cargo files) is published to
+npm and GitHub by `.github/workflows/release.yml`, one patch above the latest
+release, and tagged `vX.Y.Z`. Do not bump the version or push a tag. The
+version a binary reports comes from that tag, not from `Cargo.toml`: a build
+from a checkout says `0.1.4` at the release commit and `0.1.4+3` three commits
+later. For a new minor or major, set `version` in `Cargo.toml`; the next
+release uses it. The relay is deployed separately: `relay/README.md`.
