@@ -1171,19 +1171,26 @@
     setMode(false);
   }, true);
   // On the jelly page, a key the jelly does not use goes up to the page, which
-  // decides whether it is one of its shortcuts. The jelly keeps a key typed into a
-  // field or a comment, Enter on a button or link, a key with Ctrl, Alt or Cmd, and
-  // a key the view called preventDefault() on (checked a tick later, since a view's
-  // own listener on window runs after this one). Esc first closes an open comment.
+  // decides whether it is one of its shortcuts. On a share link with a Comment
+  // button (the person can act), `c` toggles comment mode here instead. The jelly
+  // keeps a key typed into a field or a comment, Enter on a button or link, a key
+  // with Ctrl, Alt or Cmd, and a key the view called preventDefault() on (checked
+  // a tick later, since a view's own listener on window runs after this one).
+  // Esc first closes an open comment.
   addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       setMode(false);
       if (pop?.isConnected) { pop.remove(); pop = null; return; }
     }
-    if (!embedded || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || pop?.isConnected) return;
+    const comment = share && btn.isConnected && (e.key === "c" || e.key === "C");
+    if (!(embedded || comment) || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || pop?.isConnected) return;
     if (e.target.closest?.(".jf-pop, input, textarea, select") || e.target.isContentEditable) return;
     if (e.key === "Enter" && e.target.closest?.("button, a[href], summary")) return;
-    setTimeout(() => { if (!e.defaultPrevented) parent.postMessage({ type: "jelly:key", name: boot.name, key: e.key }, location.origin); });
+    setTimeout(() => {
+      if (e.defaultPrevented) return;
+      if (embedded) parent.postMessage({ type: "jelly:key", name: boot.name, key: e.key }, location.origin);
+      else setMode(!commenting);
+    });
   });
   // A click or Tab into a jelly never reaches the page, so the jelly tells it, and
   // the page selects it. A click into a jelly that already has focus fires no focus.
