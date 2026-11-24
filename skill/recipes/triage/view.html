@@ -381,7 +381,8 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.target.nextElementSibling.click(); }
     return;
   }
-  if (e.key === "Escape" && sel) { sel = null; redraw(); }
+  // preventDefault() keeps this Esc in the view: the jelly page's full view stays open.
+  if (e.key === "Escape" && sel) { e.preventDefault(); sel = null; redraw(); }
 });
 let wide = innerWidth < 720;
 addEventListener("resize", () => { if ((innerWidth < 720) !== wide) { wide = innerWidth < 720; redraw(); } });
