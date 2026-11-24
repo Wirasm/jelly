@@ -607,7 +607,14 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
-        Ok(Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, at_ms: None, #[cfg(test)] log_failure: None })
+        let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, at_ms: None, #[cfg(test)] log_failure: None };
+        // Without the log, numbering would restart below what readers have
+        // already committed, and they would never hear the new events (#69).
+        store.seq = store.inbox_cursors()?.iter().filter_map(|c| match c.position {
+            InboxPosition::After { seq } => Some(seq),
+            InboxPosition::Recent { .. } => None,
+        }).fold(store.seq, u64::max);
+        Ok(store)
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Jelly> {
@@ -1879,6 +1886,23 @@ mod tests {
         assert!(next.seq > unread.seq + 1);
         assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [next.seq]);
         assert!(consume_inbox(&mut s, "p", reader).unwrap().is_empty());
+    }
+
+    /// A restart without the log must not number new events at or below a
+    /// committed cursor, or the reader never hears them (#69).
+    #[test]
+    fn a_restart_without_the_log_numbers_events_past_committed_cursors() {
+        let (dir, mut s) = store();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let reader = InboxReader::Named { name: "r".into() };
+        consume_inbox(&mut s, "p", reader.clone()).unwrap();
+        let heard = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        assert_eq!(consume_inbox(&mut s, "p", reader.clone()).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [heard.seq]);
+        fs::remove_file(s.events_path()).unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let next = s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        assert!(next.seq > heard.seq);
+        assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().iter().map(|e| e.seq).collect::<Vec<_>>(), [next.seq]);
     }
 
     #[test]

@@ -319,11 +319,16 @@ fn router(app: Shared) -> Router {
 /// `Host` must be a loopback address, which stops DNS rebinding. A browser's
 /// `Origin`, when it sends one (every WebSocket and cross-site request does), must
 /// be the daemon itself, so another site cannot read events or call verbs. The CLI
-/// sends no `Origin` and passes. Pages may be framed only by the daemon's own pages.
+/// sends no `Origin` and passes. Another site's `<img>` sends no `Origin` either,
+/// but the browser marks it `Sec-Fetch-Site: cross-site` (or `same-site`), so it
+/// cannot start a render or write a file through a GET such as look (#148). The
+/// daemon's own pages are `same-origin`, an address opened from outside a browser
+/// is `none`, and the CLI sends no `Sec-Fetch-Site`. Pages may be framed only by
+/// the daemon's own pages.
 async fn local_only(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let allowed = {
         let text = |name| req.headers().get(name).and_then(|v: &axum::http::HeaderValue| v.to_str().ok());
-        same_local_origin(text(header::HOST), text(header::ORIGIN))
+        same_local_origin(text(header::HOST), text(header::ORIGIN)) && !matches!(text(header::HeaderName::from_static("sec-fetch-site")), Some("cross-site" | "same-site"))
     };
     if !allowed {
         return (StatusCode::FORBIDDEN, "jelly accepts requests from this machine only").into_response();
