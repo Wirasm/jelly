@@ -99,7 +99,9 @@ a non-consuming timestamp query returning an array.
 The daemon refuses startup if an existing event log cannot be read, contains
 malformed events or is nonempty and missing its final newline. This prevents
 reusing positions already passed by inbox readers or corrupting the final record
-on the next append.
+on the next append. A daemon that starts without the log numbers new events
+after the highest position committed in `inbox-readers.json`, so readers still
+hear them; it refuses startup if that file cannot be read.
 
 `~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
 to 1 MiB of your older events, so the inbox and `jelly look` still have them. A trim
