@@ -1,20 +1,20 @@
-# Every merge to development that changes what ships is a release: the jelly
-# binary is built for every platform npm installs it on, the npm packages are
-# published, and a GitHub release with the tag `v1.2.3` is made. Nobody tags or
+# Once a night, what was merged to development since the last release is
+# released: the jelly binary is built for every platform npm installs it on, the
+# npm packages are published, and a GitHub release with the tag `v1.2.3` is
+# made. A night with nothing new to ship does nothing. "Run workflow" on the
+# Actions page does the same at once, for a fix that cannot wait. Nobody tags or
 # bumps a version by hand. A pull request that touches the release only builds.
 name: release
 
 on:
-  push:
-    branches: [development]
-    # What goes into the binary and the npm packages. The relay, the site and
-    # the docs are not released from here.
-    paths: ["src/**", "assets/**", "skill/**", "npm/**", "build.rs", "Cargo.toml", "Cargo.lock", ".github/workflows/release.yml"]
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC, on development
+  workflow_dispatch:
   pull_request:
     paths: [".github/workflows/release.yml", "npm/**"]
 
-# One release at a time, so two merges close together do not pick the same
-# version. A merge that arrives while one waits replaces it: it holds both.
+# One release at a time, so a night's run and a pressed button do not pick the
+# same version.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -31,11 +31,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.next.outputs.version }}
+      ships: ${{ steps.next.outputs.ships }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the latest release's commit, to compare with
       - id: next
         run: |
           latest=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/v##' | sort -V | tail -1)
+          # What goes into the binary and the npm packages. The relay, the site
+          # and the docs are not released from here.
+          if git diff --quiet "v$latest" HEAD -- src assets skill npm build.rs Cargo.toml Cargo.lock; then
+            echo "nothing that ships has changed since v$latest"
+            echo "ships=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ships=true" >> "$GITHUB_OUTPUT"
+          fi
           patch=$(echo "$latest" | awk -F. '{ print $1 "." $2 "." $3 + 1 }')
           ours=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           version=$(printf '%s\n%s\n' "$patch" "$ours" | sort -V | tail -1)
@@ -43,6 +54,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
+    # A pull request always builds, to prove the release still works.
+    if: github.event_name == 'pull_request' || needs.version.outputs.ships == 'true'
     needs: version
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -83,7 +96,7 @@ jobs:
           path: dist
 
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request' && needs.version.outputs.ships == 'true'
     needs: [version, build]
     runs-on: ubuntu-latest
     env:

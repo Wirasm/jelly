@@ -68,10 +68,13 @@ and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.
 
 ## Release
 
-Nobody releases by hand. Every merge to `development` that changes what ships
-(`src`, `assets`, `skill`, `npm`, `build.rs`, the Cargo files) is published to
-npm and GitHub by `.github/workflows/release.yml`, one patch above the latest
-release, and tagged `vX.Y.Z`. Do not bump the version or push a tag. The
+Nobody tags or bumps a version by hand. Once a night,
+`.github/workflows/release.yml` publishes what was merged to `development`
+since the last release to npm and GitHub, one patch above the latest release,
+and tags it `vX.Y.Z`. A night where nothing that ships changed (`src`, `assets`,
+`skill`, `npm`, `build.rs`, the Cargo files) releases nothing. A merged fix is
+therefore not out until the next night; when it cannot wait, run the workflow
+now: `gh workflow run release.yml --ref development`. Do not push a tag. The
 version a binary reports comes from that tag, not from `Cargo.toml`: a build
 from a checkout says `0.1.4` at the release commit and `0.1.4+3` three commits
 later. For a new minor or major, set `version` in `Cargo.toml`; the next
