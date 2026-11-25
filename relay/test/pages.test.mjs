@@ -85,3 +85,11 @@ test("with SHARE_ORIGIN set, pages are served there only and the daemon is told 
   assert.ok(!link.body.includes(LINK));
   assert.equal((await onPages("/pin")).status, 200);
 });
+
+test("the PIN page refuses an example address, which would make everyone who typed it one person", async () => {
+  const join = (email) => fetch(new URL("/pin", url), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: "123456", email }) });
+  assert.equal((await join("ana@example.com")).status, 400);
+  assert.equal((await join("Ana@Mail.Example.org")).status, 400);
+  // A real address gets as far as the PIN, which does not work here.
+  assert.equal((await join("ana@notexample.com")).status, 403);
+});

@@ -36,7 +36,7 @@ ${CARD}
   <label for="pin">PIN</label>
   <input id="pin" name="pin" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" placeholder="000000" required autofocus>
   <label for="email">Email</label>
-  <input id="email" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="ana@example.com" required>
+  <input id="email" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="your email" required>
   <button type="submit">Join</button>
   <p id="error" role="alert"></p>
 </form>

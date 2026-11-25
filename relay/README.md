@@ -59,6 +59,9 @@ PIN ends, until the share does.
   every guess passes the throttle before any lookup.
 - The email is whatever the person types; the PIN proves only that they were
   told it. Anyone with the PIN can join under any email, someone else's too.
+  The join page refuses only addresses at `example.com`, `example.net` and
+  `example.org`, so people who type an example do not all become one person.
+  `--to` still accepts them.
 
 ## Shared pages on their own domain
 

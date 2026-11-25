@@ -590,6 +590,9 @@ export class Pins extends DurableObject<Env> {
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Reserved for examples (RFC 2606): never a person. Everyone who typed one
+// would become the same person in the share.
+const EXAMPLE = /@(.+\.)?example\.(com|net|org)$/;
 
 /** POST /pin: a PIN and an email in, that person's own link out. */
 async function enter(req: Request, env: Env): Promise<Response> {
@@ -601,7 +604,8 @@ async function enter(req: Request, env: Env): Promise<Response> {
   const email = String(body.email ?? "").trim().toLowerCase();
   // Checked before the PIN is looked up, so these answers say nothing about it.
   if (!/^\d{6}$/.test(pin)) return no("A PIN is 6 digits.", 400);
-  if (email.length > 254 || !EMAIL.test(email)) return no("Type your email, like ana@example.com.", 400);
+  if (email.length > 254 || !EMAIL.test(email)) return no("Type your email address.", 400);
+  if (EXAMPLE.test(email)) return no("That is an example address. Type your own email.", 400);
   const wrong = () => no("That PIN does not work. Check it with whoever gave it to you.", 403);
   const found = await env.PINS.getByName("pins").open(pin, req.headers.get("CF-Connecting-IP") ?? "unknown");
   if ("wait" in found) return no(`Too many wrong PINs from here. Try again in ${found.wait} minute${found.wait === 1 ? "" : "s"}.`, 429);
