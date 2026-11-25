@@ -1150,6 +1150,8 @@ mod tests {
     #[tokio::test]
     async fn see_png_reports_only_a_screenshot_the_browser_made() {
         use std::os::unix::fs::PermissionsExt;
+        // The daemon writes the png from what the browser sends over DevTools, so
+        // a browser that quits, even with success, made none.
         for (exit, old_png) in [(3, false), (3, true), (0, false)] {
             let (dir, app) = app();
             create_page(&app, "PAGE", false).await;
@@ -1173,13 +1175,8 @@ mod tests {
                     }
                 }).await.unwrap();
             let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
-            let png_line = format!("png      {}", png.display());
-            if exit == 0 {
-                assert!(out.contains(&png_line), "{out}");
-            } else {
-                assert!(!out.contains("png      "), "old_png={old_png}: {out}");
-                assert!(out.contains("No screenshot: the browser failed (exit status: 3)"), "{out}");
-            }
+            assert!(!out.contains("png      "), "old_png={old_png}: {out}");
+            assert!(out.contains(&format!("No screenshot: the browser failed (exit status: {exit})")), "{out}");
         }
     }
 

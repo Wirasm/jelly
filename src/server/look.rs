@@ -146,7 +146,7 @@ pub(super) async fn run_browser(bin: &str, port: u16, name: &str, trial: Option<
 }
 
 /// Runs headless Chrome on `url` in a window of this size, light or dark. With
-/// `png`, writes a screenshot of the window there; otherwise dumps the DOM.
+/// `png`, writes a screenshot of the window there; either way the page posts its snapshot.
 /// Every jelly daemon on the machine shares a few browser slots. Without a cap,
 /// several agents (or the test suite) starting light and dark renders at once
 /// starve each other until renders hit their time limit. Each slot is a lock
@@ -193,23 +193,156 @@ pub(super) async fn run_browser_at(bin: &str, url: &str, width: u32, height: u32
     } else {
         cmd.arg(format!("--window-size={width},{height}"));
     }
-    cmd.arg("--virtual-time-budget=2500")
+    // Port 0: Chrome picks a free port and writes it to the profile.
+    cmd.args(["--remote-debugging-port=0", "about:blank"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    match png {
-        Some(p) => { cmd.arg(format!("--screenshot={}", p.display())); }
-        None => { cmd.arg("--dump-dom"); }
-    }
-    let run = cmd.arg(url).status();
-    let result = tokio::time::timeout(limit, run).await;
+    let result = match cmd.spawn() {
+        Ok(mut child) => {
+            let result = tokio::time::timeout(limit, drive(&mut child, &profile, url, png)).await
+                .unwrap_or_else(|_| Err(format!("the browser took longer than {} s", limit.as_secs())));
+            let _ = child.kill().await;
+            result
+        }
+        Err(e) => Err(format!("could not run the browser: {e}")),
+    };
     // Best effort: a leftover folder in the temp dir harms nothing.
     let _ = tokio::fs::remove_dir_all(&profile).await;
-    match result {
-        Ok(Ok(status)) if status.success() => Ok(()),
-        Ok(Ok(status)) => Err(format!("the browser failed ({status})")),
-        Ok(Err(e)) => Err(format!("could not run the browser: {e}")),
-        Err(_) => Err(format!("the browser took longer than {} s", limit.as_secs())),
+    result
+}
+
+/// Virtual time a render gives the page: its timers run this far ahead, and
+/// the render ends when they have.
+const BUDGET_MS: u64 = 2500;
+/// How long, in real time, a render waits for the page's network to go quiet.
+/// A page that keeps a connection open (an EventSource, a streaming fetch, an
+/// app in an iframe that does either) never goes quiet.
+const NETWORK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+/// A page that never goes quiet gets its virtual time in steps this long, one
+/// per as much real time, so its requests still get answers in between.
+const STEP_MS: u64 = 500;
+
+/// Loads `url` in the browser over the DevTools protocol, runs the page's clock
+/// for `BUDGET_MS`, and with `png` writes a screenshot there.
+///
+/// The clock is Chrome's virtual time, as `--virtual-time-budget` uses: it
+/// stops while requests are pending, so the page gets its data before its
+/// timers run out. A request that never ends would stop it for good, so after
+/// `NETWORK_WAIT` the clock runs at about real speed whatever the network does.
+async fn drive(child: &mut tokio::process::Child, profile: &std::path::Path, url: &str, png: Option<&std::path::Path>) -> Result<(), String> {
+    // The file holds the port, then the browser's socket path.
+    let socket = loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("the browser failed ({status})"));
+        }
+        if let Some((port, path)) = tokio::fs::read_to_string(profile.join("DevToolsActivePort")).await.ok().as_deref().and_then(|s| s.split_once('\n')) {
+            if !path.trim().is_empty() { break format!("ws://127.0.0.1:{port}{}", path.trim()); }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    let mut cdp = Devtools::connect(&socket).await?;
+    let targets = cdp.call("Target.getTargets", json!({})).await?;
+    let page = targets["targetInfos"].as_array().into_iter().flatten().find(|t| t["type"] == "page")
+        .and_then(|t| t["targetId"].as_str()).ok_or("the browser opened no page")?.to_string();
+    let attached = cdp.call("Target.attachToTarget", json!({ "targetId": page, "flatten": true })).await?;
+    cdp.session = attached["sessionId"].as_str().map(String::from);
+    // What `--virtual-time-budget` does (Chrome's headless_command.js): load
+    // the page, then give it the budget.
+    cdp.call("Page.enable", json!({})).await?;
+    let nav = cdp.call("Page.navigate", json!({ "url": url })).await?;
+    if let Some(e) = nav["errorText"].as_str().filter(|e| !e.is_empty()) {
+        return Err(format!("the browser could not load the page: {e}"));
+    }
+    // A frame that streams forever never finishes loading; go on without it.
+    if let Ok(loaded) = tokio::time::timeout(NETWORK_WAIT, cdp.event("Page.loadEventFired")).await { loaded?; }
+    cdp.call("Emulation.setVirtualTimePolicy", json!({ "policy": "pauseIfNetworkFetchesPending", "budget": BUDGET_MS, "maxVirtualTimeTaskStarvationCount": 9999 })).await?;
+    if tokio::time::timeout(NETWORK_WAIT, cdp.event(BUDGET_SPENT)).await.is_err() {
+        // A connection is still open. Run the clock in steps at about real
+        // speed, so the page's own requests still get answers between steps.
+        let mut left = BUDGET_MS;
+        while left > 0 {
+            let step = STEP_MS.min(left);
+            cdp.call("Emulation.setVirtualTimePolicy", json!({ "policy": "advance", "budget": step })).await?;
+            cdp.event(BUDGET_SPENT).await?;
+            tokio::time::sleep(std::time::Duration::from_millis(step)).await;
+            left -= step;
+        }
+    }
+    if let Some(p) = png {
+        use base64::Engine as _;
+        // A spent budget stops the clock, and a stopped page may not paint the
+        // frame a screenshot waits for.
+        cdp.call("Emulation.setVirtualTimePolicy", json!({ "policy": "advance" })).await?;
+        let shot = cdp.call("Page.captureScreenshot", json!({ "format": "png" })).await?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(shot["data"].as_str().unwrap_or_default())
+            .map_err(|e| format!("unreadable screenshot from the browser: {e}"))?;
+        tokio::fs::write(p, bytes).await.map_err(|e| format!("could not write {}: {e}", p.display()))?;
+    }
+    Ok(())
+}
+
+const BUDGET_SPENT: &str = "Emulation.virtualTimeBudgetExpired";
+
+/// One connection to a browser's DevTools socket, attached to one page once `session` is set.
+struct Devtools {
+    ws: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    id: u64,
+    session: Option<String>,
+    /// Events that came while waiting for an answer, by method.
+    events: Vec<String>,
+}
+
+impl Devtools {
+    async fn connect(socket: &str) -> Result<Self, String> {
+        // A full-page screenshot comes back as one message of several megabytes.
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_message_size(None).max_frame_size(None);
+        let (ws, _) = tokio_tungstenite::connect_async_with_config(socket, Some(config), false).await
+            .map_err(|e| format!("could not reach the browser: {e}"))?;
+        Ok(Devtools { ws, id: 0, session: None, events: Vec::new() })
+    }
+
+    /// Sends one command and waits for its answer.
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        use futures_util::SinkExt;
+        self.id += 1;
+        let mut msg = json!({ "id": self.id, "method": method, "params": params });
+        if let Some(s) = &self.session { msg["sessionId"] = json!(s); }
+        self.ws.send(tokio_tungstenite::tungstenite::Message::text(msg.to_string())).await.map_err(|e| format!("lost the browser: {e}"))?;
+        loop {
+            let m = self.next().await?;
+            if m["id"] == self.id {
+                if let Some(e) = m.get("error") { return Err(format!("the browser refused {method}: {}", e["message"])); }
+                return Ok(m["result"].clone());
+            }
+            if let Some(event) = m["method"].as_str() { self.events.push(event.into()); }
+        }
+    }
+
+    /// Waits for the event `method`, or takes it if it already came.
+    async fn event(&mut self, method: &str) -> Result<(), String> {
+        if let Some(i) = self.events.iter().position(|e| e == method) {
+            self.events.remove(i);
+            return Ok(());
+        }
+        while self.next().await?["method"] != method {}
+        Ok(())
+    }
+
+    /// The next message from the browser: an answer or an event.
+    async fn next(&mut self) -> Result<Value, String> {
+        use tokio_tungstenite::tungstenite::Message;
+        loop {
+            match self.ws.next().await {
+                Some(Ok(Message::Text(t))) => {
+                    let m: Value = serde_json::from_str(t.as_str()).map_err(|e| format!("unreadable message from the browser: {e}"))?;
+                    return Ok(m);
+                }
+                Some(Ok(_)) => {}
+                Some(Err(e)) => return Err(format!("lost the browser: {e}")),
+                None => return Err("the browser closed".into()),
+            }
+        }
     }
 }
 
