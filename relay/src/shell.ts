@@ -3,6 +3,8 @@
 // cannot read this page, its URL (the link) or the socket, and reaches the
 // jelly only through postMessage, which this page turns into the few things a
 // link may do. The view runs the daemon's own runtime.js, sent by the daemon.
+// In a PIN's room, the strip under the view lists the room's jellies: a tap
+// gets this person their own link on that one (POST /room) and opens it.
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 export const FAVICON = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="#ff4f8b"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><circle cx="16" cy="24" r="1.9" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.9" fill="#3b0a1e"/></svg>`);
 
@@ -38,11 +40,18 @@ const SHELL = String.raw`<!doctype html>
   body { display: flex; flex-direction: column; }
   iframe { border: 0; display: block; width: 100%; flex: 1; min-height: 0; }
   /* A strip under the view, not over it: nothing the view or the runtime draws can end up beneath it. */
-  footer { flex: none; margin-top: auto; padding: 6px 12px; display: flex; justify-content: center; gap: 18px; border-top: 1px solid #f0dfe5; background: #fff8f3; }
+  footer { flex: none; margin-top: auto; padding: 6px 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; border-top: 1px solid #f0dfe5; background: #fff8f3; }
   ${MADE_CSS}
+  #room { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; font: 12px/1 -apple-system, system-ui, sans-serif; color: #7d606c; }
+  #room[hidden] { display: none; }
+  #room button, #room b { font: inherit; font-weight: 600; max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: 1px solid #e5cfd6; border-radius: 999px; padding: 5px 10px; background: #fff; color: #2a1620; cursor: pointer; }
+  #room b { background: #2a1620; border-color: #2a1620; color: #fff8f3; cursor: default; }
   @media (prefers-color-scheme: dark) {
     footer { border-color: #2e2740; background: #14111c; }
-    .made { color: #a79dbb; }
+    .made, #room { color: #a79dbb; }
+    #room button { background: #1d1828; border-color: #3a3150; color: #e9e3f5; }
+    #room b { background: #e9e3f5; border-color: #e9e3f5; color: #14111c; }
   }
   #note { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 1; max-width: calc(100% - 32px); box-sizing: border-box;
     background: #2a1620; color: #fff8f3; font: 14px -apple-system, system-ui, sans-serif; padding: 9px 15px; border-radius: 999px; }
@@ -51,12 +60,13 @@ const SHELL = String.raw`<!doctype html>
 </style></head>
 <body><iframe id="view" title="jelly" referrerpolicy="no-referrer"
   sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"></iframe><div id="note" role="status" hidden></div>
-<footer>${MADE}</footer>
+<footer><nav id="room" aria-label="Jellies in this room" hidden></nav>${MADE}</footer>
 <script>
 (() => {
   const frame = document.getElementById("view");
   const note = document.getElementById("note");
-  let doc, me, runtime, assets, viewRev, ws, n = 0, noteT;
+  const nav = document.getElementById("room");
+  let doc, me, runtime, assets, viewRev, ws, n = 0, noteT, share, room = [];
   const pending = new Map();
   const post = (m) => frame.contentWindow && frame.contentWindow.postMessage(m, "*");
   const say = (text, stay) => {
@@ -74,8 +84,34 @@ const SHELL = String.raw`<!doctype html>
     const i = doc.view.search(/<head>/i);
     frame.srcdoc = i < 0 ? '<!doctype html><meta charset="utf-8">' + head + doc.view : doc.view.slice(0, i + 6) + head + doc.view.slice(i + 6);
   }
+  // The room's jellies, this one marked. A jelly added while the page is open is said once.
+  function showRoom(next, added) {
+    const fresh = next.filter((j) => j.share !== share && !room.some((r) => r.share === j.share));
+    if (added && fresh.length) say(fresh.map((j) => j.label).join(", ") + " is open in this room: tap it below.");
+    room = next;
+    nav.hidden = room.length < 2;
+    nav.replaceChildren("In this room", ...room.map((j) => {
+      const el = document.createElement(j.share === share ? "b" : "button");
+      el.textContent = el.title = j.label;
+      if (j.share === share) el.setAttribute("aria-current", "page");
+      else el.onclick = () => go(j);
+      return el;
+    }));
+  }
+  async function go(j) {
+    try {
+      const r = await fetch("/room", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: location.pathname.split("/")[2], to: j.share }) });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok && body.link) return location.assign(body.link);
+      say(body.error || "That did not work. Try again.");
+    } catch {
+      say("Could not reach the jelly. Check your connection and try again.");
+    }
+  }
   function over(text) {
     frame.remove();
+    nav.hidden = true;
     document.body.className = "over";
     say(text, true);
   }
@@ -86,13 +122,16 @@ const SHELL = String.raw`<!doctype html>
       if (m.data === "pong") return;
       const msg = JSON.parse(m.data);
       if (msg.type === "hello") {
-        ({ doc, me, runtime, assets } = msg);
+        ({ doc, me, runtime, assets, share } = msg);
         boot();
+        showRoom(msg.room, false);
       } else if (msg.type === "reply") {
         const id = pending.get(msg.ref);
         pending.delete(msg.ref);
         if (!msg.ok && !me.can_act) say("This link is view only.");
         post({ jelly: "reply", id, ok: msg.ok, value: msg.value, error: msg.error });
+      } else if (msg.type === "room") {
+        showRoom(msg.room, true);
       } else if (msg.type === "events") {
         Object.assign(doc, msg.doc);
         if (doc.view_rev !== viewRev) return boot();

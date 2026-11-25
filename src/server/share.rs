@@ -182,9 +182,12 @@ pub(crate) async fn share(app: &Shared, name: &str, who: &str, days: u64) -> Res
     Ok(json!({"jelly": name, "url": relay::link(relay.pages(&made), &record.share, &secret), "who": who, "expires_at": made["expires_at"]}))
 }
 
-/// Makes a new PIN for a room, sharing the jelly first if it is not shared yet.
-/// People type it at the relay's join page with their email and get their own
-/// link, so they act as `person:<email>` exactly as with `--to`.
+/// Puts the jelly in the room of the relay's PIN, sharing it first if it is not
+/// shared yet. With no PIN live the relay makes one; with one live, `pin` is
+/// null and the jelly joins its room. People type the PIN at the relay's join
+/// page with their email and get their own link, so they act as
+/// `person:<email>` exactly as with `--to`; people already in the room open
+/// the jelly from their page without it. `room` names the room's jellies.
 pub(crate) async fn pin(app: &Shared, name: &str, hours: u64, days: u64) -> Result<Value, ApiError> {
     let relay = home(app).relay()?;
     let _one = app.sharing.lock().await;
@@ -192,7 +195,8 @@ pub(crate) async fn pin(app: &Shared, name: &str, hours: u64, days: u64) -> Resu
     let share = live.record.lock().await.share.clone();
     let r = relay.clone();
     let made = blocking(move || r.pin(&share, hours, days)).await.map_err(api)?;
-    Ok(json!({"jelly": name, "pin": made["pin"], "url": relay::join_page(relay.pages(&made)), "expires_at": made["expires_at"], "tries": made["tries"]}))
+    let room: Vec<&Value> = made["room"].as_array().into_iter().flatten().map(|j| &j["name"]).collect();
+    Ok(json!({"jelly": name, "pin": made["pin"], "url": relay::join_page(relay.pages(&made)), "expires_at": made["expires_at"], "tries": made["tries"], "room": room}))
 }
 
 async fn live_or_publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, ApiError> {
@@ -290,7 +294,8 @@ pub(crate) enum Stop<'a> {
     /// Every link of this person's ("" is the view-only link), whether minted
     /// here or made by joining with the PIN, which the relay alone knows about.
     Link(&'a str),
-    /// The PIN: nobody new can join, and everyone in stays.
+    /// The PIN of the jelly's room, for every jelly in it: nobody new can
+    /// join, and everyone in keeps their links.
     Pin,
 }
 
