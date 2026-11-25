@@ -10,17 +10,19 @@
 // view-only link), so its storage never holds a working link. Only the holder of
 // RELAY_SECRET, the owner's daemon, can publish, shape, mint or revoke links.
 //
-// A PIN room: the owner makes a 6-digit PIN for a share, and anyone who types
-// it at /pin with their email gets their own link, like one minted with `--to`.
-// One Pins object per relay maps PINs to shares. It stores only
-// HMAC(RELAY_SECRET, PIN), throttles wrong tries per IP, and locks PINs after a
-// few wrong tries.
+// A PIN room: the owner makes a 6-digit PIN, and anyone who types it at /pin
+// with their email gets their own link, like one minted with `--to`. The owner
+// can put more jellies in the room while the PIN works; each link page in the
+// room lists them, and a person moves to another with their own link (POST
+// /room), never typing the PIN again. One Pins object per relay holds the one
+// live PIN and its room. It stores only HMAC(RELAY_SECRET, PIN), throttles
+// wrong tries per IP, and locks the PIN after a few wrong tries.
 //
 // The relay counts its own use (counts.ts): shares, opens and people per share,
 // by day. GET /api/counts returns them to the holder of RELAY_SECRET.
 //
 // A view is HTML someone else wrote, shown under this relay's host. With
-// SHARE_ORIGIN set, the pages people open (/j, /pin, /a) are served only from
+// SHARE_ORIGIN set, the pages people open (/j, /pin, /room, /a) are served only from
 // that origin, so a bad page cannot get the host the daemon publishes to
 // flagged. REPORT_URL puts a Report link on every link page, and
 // DELETE /api/live/<share id> takes a share down for good.
@@ -50,6 +52,8 @@ interface Ask { id: string; seen?: boolean; title: string; options?: { id: strin
 interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[]; unsent?: number }
 interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; quiet?: true; version: number; view_rev: number }
 type Op = { op: string; by?: string; [k: string]: any };
+/** A jelly in the PIN's room: its share, its name, and what its button says on a link page. */
+interface InRoom { share: string; name: string; label: string }
 /** Who a socket belongs to: the owner's daemon, or a link. */
 interface Seat { owner: boolean; who: string; can_act: boolean }
 
@@ -325,7 +329,7 @@ export class Live extends DurableObject<Env> {
   /** Ends the share: everyone's socket closes and the storage is gone. */
   private async end(code: number, reason: string) {
     for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
-    await this.env.PINS.getByName("pins").drop(this.share);
+    await this.env.PINS.getByName("pins").leave(this.share);
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     this.doc = undefined;
@@ -361,9 +365,29 @@ export class Live extends DurableObject<Env> {
     return secret;
   }
 
-  /** The PIN locked: an event, so the owner hears it in the inbox. */
+  /** Who holds this link, when it may act; null for a view-only link or one that does not work. */
+  async who(secret: string): Promise<string | null> {
+    const hash = await sha256(secret);
+    if (!this.doc) return null;
+    const row = this.ctx.storage.sql.exec<{ who: string; can_act: number }>("SELECT who, can_act FROM people WHERE hash = ?", hash).toArray()[0];
+    return row?.can_act ? row.who : null;
+  }
+
+  /** The PIN's room as it is now (empty when it ended), kept for pages that
+   *  connect later and sent to the pages open now that may act. */
+  async room(room: InRoom[], until: number) {
+    if (!this.doc) return;
+    this.put("room", JSON.stringify({ room, until }));
+    for (const ws of this.ctx.getWebSockets()) {
+      const seat = this.seat(ws);
+      if (!seat.owner && seat.can_act) try { ws.send(JSON.stringify({ type: "room", room })); } catch { /* closing */ }
+    }
+  }
+
+  /** The PIN locked: an event, so the owner hears it in the inbox. The room is over. */
   async locked(tries: number) {
     try { await this.change({ op: "lock", tries }, "relay"); } catch { /* unshared meanwhile */ }
+    await this.room([], 0);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -393,7 +417,9 @@ export class Live extends DurableObject<Env> {
     const first = !row.opened_ms || counting.today(row.opened_ms) !== counting.today();
     this.ctx.waitUntil(this.env.PINS.getByName("pins").opened(this.share, this.people(), first));
     const me = { by: seat.can_act ? `person:${row.who}` : "", who: row.who, can_act: seat.can_act };
-    server.send(JSON.stringify({ type: "hello", doc: this.part(this.doc, "all", false), runtime: this.get("runtime"), me, assets: `/a/${this.share}/` }));
+    const kept: { room: InRoom[]; until: number } | undefined = JSON.parse(this.get("room") ?? "null") ?? undefined;
+    const room = seat.can_act && kept && kept.until > Date.now() ? kept.room : [];
+    server.send(JSON.stringify({ type: "hello", doc: this.part(this.doc, "all", false), runtime: this.get("runtime"), me, assets: `/a/${this.share}/`, share: this.share, room }));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -480,11 +506,12 @@ export class Live extends DurableObject<Env> {
       if (path === "pin" && req.method === "POST") {
         const p = await json<{ hours: number; days: number }>();
         const share_expires_at = await this.extend(p.days);
-        const made = await this.env.PINS.getByName("pins").make(share, Math.min(Math.max(p.hours, 1), MAX_HOURS));
+        const jelly = { share, name: this.doc.name, label: this.doc.about || this.doc.name.split(":").pop()! };
+        const made = await this.env.PINS.getByName("pins").add(jelly, Math.min(Math.max(p.hours, 1), MAX_HOURS));
         return Response.json({ ...made, tries: PIN_TRIES, share_expires_at, share_origin: shareOrigin(this.env) });
       }
       if (path === "pin" && req.method === "DELETE") {
-        if (!(await this.env.PINS.getByName("pins").drop(share))) throw new Refusal(`${this.doc.name} has no PIN`);
+        if (!(await this.env.PINS.getByName("pins").end(share))) throw new Refusal(`${this.doc.name} is not in a PIN's room`);
         return new Response(null, { status: 204 });
       }
       if (path === "op" && req.method === "POST") {
@@ -523,13 +550,17 @@ export class Live extends DurableObject<Env> {
   }
 }
 
-/** Every live PIN on this relay, and the wrong tries against them. One object,
- *  so every guess passes the same throttle before any lookup. As the relay's
- *  one object it also holds what the relay counts (counts.ts). */
+/** The relay's PIN and its room, and the wrong tries against it. One object,
+ *  so every guess passes the same throttle before any lookup. A relay has one
+ *  publish secret, so one sharer, and at most one PIN live: the meeting's. As
+ *  the relay's one object it also holds what the relay counts (counts.ts). */
 export class Pins extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pins (hash TEXT PRIMARY KEY, share TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
+    // `pins` held one PIN per share, before a PIN opened a room.
+    ctx.storage.sql.exec(`DROP TABLE IF EXISTS pins;
+      CREATE TABLE IF NOT EXISTS pin (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS room (share TEXT PRIMARY KEY, name TEXT NOT NULL, label TEXT NOT NULL, at_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS misses (ip TEXT NOT NULL, at_ms INTEGER NOT NULL);`);
     counting.tables(ctx.storage.sql);
   }
@@ -545,49 +576,94 @@ export class Pins extends DurableObject<Env> {
     return hex(await crypto.subtle.sign("HMAC", key, enc.encode(pin)));
   }
 
-  private prune(now: number) {
-    this.ctx.storage.sql.exec("DELETE FROM pins WHERE expires_at <= ?", now);
-    this.ctx.storage.sql.exec("DELETE FROM misses WHERE at_ms <= ?", now - IP_WINDOW);
-  }
-
-  /** A new PIN for `share`; its previous one stops. */
-  async make(share: string, hours: number): Promise<{ pin: string; expires_at: number }> {
+  /** The live PIN, if any. A room lasts as long as its PIN. */
+  private live(now = Date.now()): { hash: string; expires_at: number } | undefined {
     const sql = this.ctx.storage.sql;
-    for (;;) {
-      const pin = String(below(1_000_000)).padStart(6, "0");
-      const hash = await this.hash(pin);
-      const now = Date.now();
-      this.prune(now);
-      if (sql.exec("SELECT 1 FROM pins WHERE hash = ?", hash).toArray().length) continue;
-      const expires_at = now + hours * 3_600_000;
-      sql.exec("DELETE FROM pins WHERE share = ?", share);
-      sql.exec("INSERT INTO pins (hash, share, expires_at, misses) VALUES (?, ?, ?, 0)", hash, share, expires_at);
-      return { pin, expires_at };
+    sql.exec("DELETE FROM misses WHERE at_ms <= ?", now - IP_WINDOW);
+    if (sql.exec("DELETE FROM pin WHERE expires_at <= ?", now).rowsWritten) sql.exec("DELETE FROM room");
+    return sql.exec<{ hash: string; expires_at: number }>("SELECT hash, expires_at FROM pin").toArray()[0];
+  }
+
+  /** The room's jellies, the one added last at the end. */
+  private room(): InRoom[] {
+    return this.ctx.storage.sql.exec<{ share: string; name: string; label: string }>("SELECT share, name, label FROM room ORDER BY at_ms").toArray().map((r) => ({ ...r }));
+  }
+
+  /** Ends the PIN and its room; returns the shares that were in it. */
+  private close(): string[] {
+    const shares = this.room().map((r) => r.share);
+    this.ctx.storage.sql.exec("DELETE FROM pin");
+    this.ctx.storage.sql.exec("DELETE FROM room");
+    return shares;
+  }
+
+  /** Tells each jelly in `shares` what the room is now. */
+  private async tell(shares: string[], room: InRoom[], until: number) {
+    await Promise.all(shares.map((s) => this.env.LIVE.getByName(s).room(room, until)));
+  }
+
+  /** Puts a jelly in the room, making a new PIN when none is live. `pin` is
+   *  null when the room was open already: only its HMAC is kept, and the owner
+   *  gave the PIN out when it was made. People can join at least `hours` more. */
+  async add(jelly: InRoom, hours: number): Promise<{ pin: string | null; expires_at: number; room: InRoom[] }> {
+    const sql = this.ctx.storage.sql;
+    const now = Date.now();
+    const live = this.live(now);
+    let pin: string | null = null;
+    let expires_at = now + hours * 3_600_000;
+    if (live) {
+      expires_at = Math.max(live.expires_at, expires_at);
+      sql.exec("UPDATE pin SET expires_at = ?", expires_at);
+    } else {
+      pin = String(below(1_000_000)).padStart(6, "0");
+      sql.exec("INSERT INTO pin (hash, expires_at, misses) VALUES (?, ?, 0)", await this.hash(pin), expires_at);
     }
+    // Added again, it is the newest: where people who type the PIN now land.
+    sql.exec("INSERT INTO room (share, name, label, at_ms) VALUES (?, ?, ?, ?) ON CONFLICT(share) DO UPDATE SET name = excluded.name, label = excluded.label, at_ms = excluded.at_ms",
+      jelly.share, jelly.name, jelly.label, now);
+    const room = this.room();
+    await this.tell(room.map((r) => r.share), room, expires_at);
+    return { pin, expires_at, room };
   }
 
-  /** Ends `share`'s PIN; false when it had none. */
-  async drop(share: string): Promise<boolean> {
-    this.prune(Date.now());
-    return this.ctx.storage.sql.exec("DELETE FROM pins WHERE share = ?", share).rowsWritten > 0;
+  /** Ends the PIN of the room `share` is in, for every jelly in it; false when it is in none. */
+  async end(share: string): Promise<boolean> {
+    if (!this.live() || !this.room().some((r) => r.share === share)) return false;
+    await this.tell(this.close(), [], 0);
+    return true;
   }
 
-  /** The share a PIN opens. A wrong PIN counts against the IP and against every
-   *  live PIN, since a guess is a guess at all of them; a PIN that reaches
-   *  PIN_TRIES is gone. Expired, ended and locked PINs are all just wrong. */
+  /** `share` is no longer shared: it leaves the room, and an empty room's PIN ends. */
+  async leave(share: string) {
+    const live = this.live();
+    if (!live || !this.ctx.storage.sql.exec("DELETE FROM room WHERE share = ?", share).rowsWritten) return;
+    const room = this.room();
+    if (!room.length) return void this.close();
+    await this.tell(room.map((r) => r.share), room, live.expires_at);
+  }
+
+  /** Whether both shares are in the live room. */
+  async together(a: string, b: string): Promise<boolean> {
+    const shares = this.live() ? this.room().map((r) => r.share) : [];
+    return shares.includes(a) && shares.includes(b);
+  }
+
+  /** The share the PIN opens: the jelly added to the room last. A wrong PIN
+   *  counts against the IP and against the PIN, which locks at PIN_TRIES.
+   *  Expired, ended and locked PINs are all just wrong. */
   async open(pin: string, ip: string): Promise<{ share: string } | { wait: number } | { wrong: true }> {
     const hash = await this.hash(pin);
     const sql = this.ctx.storage.sql;
     const now = Date.now();
-    this.prune(now);
+    const live = this.live(now);
     const tried = sql.exec<{ n: number; first: number | null }>("SELECT COUNT(*) AS n, MIN(at_ms) AS first FROM misses WHERE ip = ?", ip).one();
     if (tried.n >= IP_TRIES) return { wait: Math.max(1, Math.ceil((tried.first! + IP_WINDOW - now) / 60_000)) };
-    const row = sql.exec<{ share: string }>("SELECT share FROM pins WHERE hash = ?", hash).toArray()[0];
-    if (row) return { share: row.share };
+    const room = this.room();
+    if (live?.hash === hash && room.length) return { share: room[room.length - 1].share };
     sql.exec("INSERT INTO misses (ip, at_ms) VALUES (?, ?)", ip, now);
-    sql.exec("UPDATE pins SET misses = misses + 1");
-    const locked = sql.exec<{ share: string }>("DELETE FROM pins WHERE misses >= ? RETURNING share", PIN_TRIES).toArray();
-    for (const { share } of locked) await this.env.LIVE.getByName(share).locked(PIN_TRIES);
+    if (live && sql.exec<{ misses: number }>("UPDATE pin SET misses = misses + 1 RETURNING misses").one().misses >= PIN_TRIES) {
+      for (const share of this.close()) await this.env.LIVE.getByName(share).locked(PIN_TRIES);
+    }
     return { wrong: true };
   }
 }
@@ -617,6 +693,25 @@ async function enter(req: Request, env: Env): Promise<Response> {
   return secret ? Response.json({ link: `/j/${found.share}${secret}` }, { headers: HEADERS }) : wrong();
 }
 
+const FROM = new RegExp(`^(${SHARE})([A-Za-z0-9]{22})$`);
+
+/** POST /room: a person in the PIN's room moves to another of its jellies.
+ *  Their link on one jelly in the room is their way in: they get their own
+ *  link on the other, for the same email, without the PIN. */
+async function follow(req: Request, env: Env): Promise<Response> {
+  const no = (error: string, status: number) => Response.json({ error }, { status, headers: HEADERS });
+  if (!req.headers.get("Content-Type")?.startsWith("application/json")) return no("expected JSON", 415);
+  const body: { from?: unknown; to?: unknown } = await req.json<object>().catch(() => ({}));
+  const [, from, secret] = String(body.from ?? "").match(FROM) ?? [];
+  const to = String(body.to ?? "");
+  if (!from || !new RegExp(`^${SHARE}$`).test(to)) return no("expected a link and a share", 400);
+  if (!(await env.PINS.getByName("pins").together(from, to))) return no("That jelly is no longer in this room.", 403);
+  const who = await env.LIVE.getByName(from).who(secret);
+  if (!who) return no("This link cannot move to another jelly.", 403);
+  const made = await env.LIVE.getByName(to).join(who);
+  return made ? Response.json({ link: `/j/${to}${made}` }, { headers: HEADERS }) : no("That jelly is no longer shared.", 403);
+}
+
 const JOIN_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
 
 export default {
@@ -630,7 +725,7 @@ export default {
     // What people open lives on the share origin only. A link made before it
     // was set still arrives here, and goes on to the same path there.
     const pages = shareOrigin(env);
-    if (pages && new URL(pages).host !== url.host && (path === "/pin" || LINK.test(path) || ASSET.test(path))) {
+    if (pages && new URL(pages).host !== url.host && (path === "/pin" || path === "/room" || LINK.test(path) || ASSET.test(path))) {
       return new Response(null, { status: 308, headers: { Location: pages + path + url.search, ...HEADERS } });
     }
 
@@ -638,6 +733,7 @@ export default {
       return new Response(joinPage, { headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": JOIN_CSP, ...HEADERS } });
     }
     if (path === "/pin" && req.method === "POST") return enter(req, env);
+    if (path === "/room" && req.method === "POST") return follow(req, env);
 
     const link = path.match(LINK);
     if (link && req.method === "GET") return live(link[1], `link/${link[2]}${link[3] ?? ""}`);

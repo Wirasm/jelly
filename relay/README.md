@@ -29,8 +29,9 @@ again with that URL and set the new secret.
 jelly share plan --to ana@example.com   # Ana's link; again prints the same one
 jelly share plan --to bo@example.com    # Bo gets his own
 jelly share plan --link                 # view only: anyone with it watches, nobody acts
-jelly share quiz --pin                  # a PIN for a room on a call (below)
-jelly unshare quiz --pin                # the PIN stops; people already in stay
+jelly share board --pin                 # a PIN for a room on a call (below)
+jelly share quiz --pin                  # the quiz joins the same room: same PIN
+jelly unshare quiz --pin                # the PIN stops for the whole room; people already in stay
 jelly unshare plan --to bo@example.com  # Bo's links stop; his open pages close
 jelly unshare plan                      # every link stops; the final state is at home
 jelly takedown <link or share id>       # a reported share, by its link: gone from the relay (below)
@@ -48,11 +49,27 @@ own link, exactly as if you had run `--to` with their email: you hear them as
 email on another device is the same person. Their link keeps working after the
 PIN ends, until the share does.
 
-- A PIN lets people join for 3 hours (`--hours 1..24`). `--pin` again makes a
-  new PIN and the old one stops.
-- 10 wrong PINs, from anyone, lock every PIN live on the relay: a wrong guess
-  is a guess at all of them. That bounds a guesser's chance at 10 in a million
-  per PIN. You hear the lock in `jelly hear`; run `--pin` again for a new one.
+One PIN covers a meeting. `jelly share race --pin` while the PIN works puts
+the race in the same room and prints no new PIN. Everyone in the room sees
+the race listed under their jelly, in the relay's strip, and opens it with
+one tap: the relay gives them their own link on it, for the same email, with
+no PIN to type (`POST /room`, with the link they are on as proof). Someone
+who types the PIN now lands on the jelly added last; `--pin` again on an
+older jelly makes it the one they land on.
+
+- A relay has one PIN live at a time, since it has one sharer. To start a room
+  for other people, end this one first (`jelly unshare NAME --pin`, any jelly
+  in it); the next `--pin` makes a new PIN.
+- A PIN lets people join for 3 hours (`--hours 1..24`). Adding a jelly keeps
+  it open at least `--hours` from then. The room ends with its PIN: after
+  that nobody new joins and nobody moves to another jelly, but every link
+  made keeps working until its share ends.
+- Anyone whose link on a jelly in the room can act moves around the room,
+  including people you gave a link with `--to`. A view-only link cannot.
+- An unshared jelly leaves the room; when the last one leaves, the PIN ends.
+- 10 wrong PINs, from anyone, lock the PIN and end its room. That bounds a
+  guesser's chance at 10 in a million. You hear the lock in `jelly hear` on
+  each jelly in the room; run `--pin` again for a new one.
 - One IP gets 5 wrong tries per 10 minutes. That is fewer than 10, so one
   person or script cannot lock a room alone. Right PINs never count.
 - Expired, ended and locked PINs all answer the same "does not work", and
@@ -99,7 +116,7 @@ From then on:
   `https://pages.example/pin`. Nothing changes in `jelly relay` or
   `relay.json`: the daemon still publishes to the first domain, and the relay
   tells it where links live (`share_origin` in its answers).
-- `/j/...`, `/pin` and `/a/...` are served on `pages.example` only. On any
+- `/j/...`, `/pin`, `/room` and `/a/...` are served on `pages.example` only. On any
   other host of the relay they answer 308 to the same path there, so links
   sent before the change still open. A page that was open during the change
   needs a reload.
@@ -233,7 +250,8 @@ typechecks it. Neither deploys anything.
   secret, since a plain hash of 6 digits is reversed in a moment.
 - Only the holder of the publish secret (in `$JELLY_HOME/relay.json`) can
   publish, shape, mint or revoke. Links can call verbs, answer and comment,
-  nothing else; view-only links can do none of that.
+  and in a PIN's room get their holder a link on another jelly in it, nothing
+  else; view-only links can do none of that.
 - The view runs in a sandboxed iframe with an opaque origin and reaches the
   jelly only through `postMessage`, so it cannot read the link, the socket or
   another jelly. Pages send no referrer, are marked `noindex` and are not cached;
