@@ -210,11 +210,6 @@ impl Relay {
         self.json(self.at("POST", share, "/op"), Some(op))
     }
 
-    /// Every event after `seq`, with the jelly as it is now.
-    pub fn since(&self, share: &str, seq: u64) -> Result<Value, Fail> {
-        self.json(self.at("GET", share, &format!("/events?since={seq}")), None)
-    }
-
     /// Ends the share; returns the events after `seq` it had not sent yet.
     pub fn end(&self, share: &str, seq: u64) -> Result<Value, Fail> {
         self.json(self.at("DELETE", share, &format!("?since={seq}")), None)
