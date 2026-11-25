@@ -227,6 +227,23 @@ reloads. After upgrading the daemon, reload older open pages and update tokenles
 snapshot callers before they can contribute snapshots again. This is an internal
 daemon/runtime protocol, not authentication.
 
+## Agent renders
+
+`look`, `try` and an ask's anchor check run headless Chrome and drive it over
+the DevTools protocol (`run_browser_at` and `drive` in `src/server/look.rs`).
+Each render loads the page, waits for its `load` event, then gives it 2.5 s of
+virtual time, as `--virtual-time-budget` did: the clock stops while requests are
+pending, so data the page fetches arrives before its timers run out. The page's
+runtime posts its snapshot in that time, and with `png` the daemon takes the
+screenshot after it.
+
+A page that keeps a connection open (an EventSource, a streaming fetch, an app
+in an iframe that does either) stops the clock for good, and a frame that
+streams forever never fires `load`. So a render waits at most 3 s of real time
+for `load` and 3 s for the budget. If the budget is not spent by then, it runs
+the 2.5 s in 500 ms steps at about real speed, so the page's own requests still
+get answers between steps, and then takes what is on screen.
+
 ## Upgrading a home
 
 jelly keeps no compatibility paths: a daemon reads only the current shape of a
