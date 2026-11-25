@@ -48,7 +48,7 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 interface Comment { id: string; anchor: Json; text: string; by: string; at_ms: number; resolved: boolean; replies: { text: string; by: string; at_ms: number }[] }
 interface Ask { id: string; seen?: boolean; title: string; options?: { id: string }[]; group?: string | null; answer?: Json; unasked?: Json; [k: string]: Json | undefined }
 interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[]; unsent?: number }
-interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; version: number; view_rev: number }
+interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; quiet?: true; version: number; view_rev: number }
 type Op = { op: string; by?: string; [k: string]: any };
 /** Who a socket belongs to: the owner's daemon, or a link. */
 interface Seat { owner: boolean; who: string; can_act: boolean }
@@ -288,12 +288,15 @@ export class Live extends DurableObject<Env> {
     }
     if (bump) d.version++;
     // What people did since they last pressed Send, as the daemon counts it.
+    // A quiet verb call (`jelly.do(verb, args, { quiet: true })`) does not count.
+    const quiet = op.op === "do" && op.quiet === true;
     if (op.op === "send") d.unsent = 0;
-    else if (by.startsWith("person") && PERSON_OPS.includes(op.op)) d.unsent = (d.unsent ?? 0) + 1;
+    else if (by.startsWith("person") && PERSON_OPS.includes(op.op) && !quiet) d.unsent = (d.unsent ?? 0) + 1;
     const ev: Ev = { seq: ++this.seq, at_ms: now, kind: op.op, by, version: d.version, view_rev: d.view_rev };
     if (verb !== undefined) ev.verb = verb;
     if (args !== undefined) ev.args = args;
     if (source !== undefined) ev.source = source;
+    if (quiet) ev.quiet = true;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("INSERT INTO events (seq, ev) VALUES (?, ?)", ev.seq, JSON.stringify(ev));
       this.put("doc", JSON.stringify(d));

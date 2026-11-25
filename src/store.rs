@@ -359,6 +359,10 @@ pub struct Event {
     /// For a person's verb call: the element they used, `{"selector", "text"}`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<Value>,
+    /// A person's verb call the view made with `{ quiet: true }`. It does not
+    /// count toward Send (`unsent`).
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub quiet: bool,
     pub version: u64,
     pub view_rev: u64,
     /// Sent to live listeners, never written to the log.
@@ -379,6 +383,8 @@ pub struct Mirrored {
     pub args: Option<Value>,
     #[serde(default)]
     pub source: Option<Value>,
+    #[serde(default)]
+    pub quiet: bool,
     pub version: u64,
     pub view_rev: u64,
 }
@@ -539,6 +545,8 @@ pub struct Store {
     trims: u64,
     /// The element behind the verb call being committed; taken by the next event.
     source: Option<Value>,
+    /// Whether the verb call being committed is quiet; taken by the next record.
+    quiet: bool,
     /// When a mirrored change happened on the relay; taken by the next event.
     at_ms: Option<u64>,
     #[cfg(test)]
@@ -607,7 +615,7 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
-        let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, at_ms: None, #[cfg(test)] log_failure: None };
+        let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, quiet: false, at_ms: None, #[cfg(test)] log_failure: None };
         // Without the log, numbering would restart below what readers have
         // already committed, and they would never hear the new events (#69).
         store.seq = store.inbox_cursors()?.iter().filter_map(|c| match c.position {
@@ -671,11 +679,12 @@ impl Store {
     }
 
     pub fn do_verb(&mut self, name: &str, verb: &str, args: Value, by: &str) -> Result<Event, Error> {
-        self.do_verb_from(name, verb, args, by, None)
+        self.do_verb_from(name, verb, args, by, None, false)
     }
 
-    /// A verb call that also records the element the person used.
-    pub fn do_verb_from(&mut self, name: &str, verb: &str, args: Value, by: &str, source: Option<Value>) -> Result<Event, Error> {
+    /// A verb call that also records the element the person used, and whether
+    /// the view made it quiet (then it does not count toward Send).
+    pub fn do_verb_from(&mut self, name: &str, verb: &str, args: Value, by: &str, source: Option<Value>, quiet: bool) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
         let next = verbs::run(&entry.jelly.verbs, verb, &entry.jelly.state, &args, by, now_ms()).map_err(Error::Invalid)?;
@@ -685,6 +694,7 @@ impl Store {
         entry.jelly.state = next;
         push_step(entry, step);
         self.source = source;
+        self.quiet = quiet;
         self.commit(name, EventKind::Do, by, Some(verb.into()), Some(args), changed, previous_entry)
     }
 
@@ -1122,6 +1132,7 @@ impl Store {
             (false, _) => {}
         }
         self.source = ev.source.clone();
+        self.quiet = ev.quiet;
         self.at_ms = Some(ev.at_ms);
         self.record(name, ev.kind, &ev.by, ev.verb.clone(), ev.args.clone(), changed, previous_entry)
     }
@@ -1163,6 +1174,7 @@ impl Store {
         changed: Vec<String>,
         previous: Option<Entry>,
     ) -> Result<Event, Error> {
+        let quiet = std::mem::take(&mut self.quiet);
         let entry = self.jellies.get_mut(name).expect("caller checked");
         // A feed keeps data fresh; it does not count as someone using the jelly,
         // so a fed jelly nobody opens still goes quiet and is archived.
@@ -1172,7 +1184,7 @@ impl Store {
         }
         if kind == EventKind::Send {
             entry.jelly.unsent = 0;
-        } else if is_person(by) && kind.is_for_agent() {
+        } else if is_person(by) && kind.is_for_agent() && !quiet {
             entry.jelly.unsent += 1;
         }
         if kind != EventKind::Archive && !fed {
@@ -1185,6 +1197,7 @@ impl Store {
             return Err(Error::Invalid(format!("could not save {name}: {error}")));
         }
         let mut ev = self.event(&jelly, kind, by, verb, args, changed);
+        ev.quiet = quiet;
         if let Err(error) = self.log(&ev) {
             let bytes = previous.as_ref().map(|entry| serde_json::to_vec(entry).expect("a jelly serializes"));
             self.restore_entry(name, previous);
@@ -1218,6 +1231,7 @@ impl Store {
             args,
             changed,
             source: self.source.take(),
+            quiet: false,
             version: j.version,
             view_rev: j.view_rev,
             state: None,
@@ -2441,7 +2455,7 @@ mod tests {
     fn verb_calls_remember_their_source_and_seq_survives_restart() {
         let (dir, mut s) = store();
         s.make("j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
-        let ev = s.do_verb_from("j", "label", json!({"id": "a", "value": "x"}), "person", Some(json!({"selector": "#pick-b"}))).unwrap();
+        let ev = s.do_verb_from("j", "label", json!({"id": "a", "value": "x"}), "person", Some(json!({"selector": "#pick-b"})), false).unwrap();
         assert_eq!(ev.source.unwrap()["selector"], "#pick-b");
         let seq = s.do_verb("j", "label", json!({"id": "a", "value": "y"}), "agent").unwrap().seq;
         drop(s);
@@ -2524,6 +2538,25 @@ mod tests {
         // v2 only ever existed on the relay, so it cannot be rebuilt here.
         assert!(s.at_version("p:j", 2).is_err());
         assert_eq!(s.at_version("p:j", 3).unwrap().state, json!({"labels": {"a": 1, "b": 2}}));
+    }
+
+    /// A game page reports positions many times a second; those calls are not
+    /// changes for the agent, so the view marks them quiet and Send skips them.
+    #[test]
+    fn quiet_verb_calls_do_not_count_toward_send() {
+        let (_d, mut s) = store();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let quiet = s.do_verb_from("p:j", "label", json!({"id": "a", "value": 1}), "person", None, true).unwrap();
+        s.do_verb_from("p:j", "label", json!({"id": "b", "value": 2}), "person", None, false).unwrap();
+        assert!(quiet.quiet);
+        assert_eq!(s.get("p:j").unwrap().unsent, 1);
+        // The same from a share: the relay marks the event, the daemon follows it.
+        let mirrored: Mirrored = serde_json::from_value(json!({"seq": 1, "at_ms": now_ms(), "kind": "do", "by": "person:bo", "verb": "label", "args": {"id": "c"}, "quiet": true, "version": 4, "view_rev": 1})).unwrap();
+        assert!(s.mirror("p:j", &mirrored, None).unwrap().quiet);
+        assert_eq!(s.get("p:j").unwrap().unsent, 1);
+        // The next change is not quiet just because the one before it was.
+        assert!(!s.comment("p:j", json!(null), "hi", "person").unwrap().quiet);
+        assert_eq!(s.get("p:j").unwrap().unsent, 2);
     }
 
     #[test]
