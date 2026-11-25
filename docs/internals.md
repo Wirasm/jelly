@@ -94,6 +94,10 @@ read responses do not consume events. Ambiguous output, failed acknowledgements
 or client crashes may replay events. GET `/api/inbox?project=...&since=...` remains
 a non-consuming timestamp query returning an array.
 
+Both routes return every event. The CLI folds what it prints (`inbox_lines` in
+`main.rs`): the calls of one verb by one person on one jelly become one line,
+at the last call, with the count and that call's args (`Event::heard`).
+
 ## Event log
 
 The daemon refuses startup if an existing event log cannot be read, contains

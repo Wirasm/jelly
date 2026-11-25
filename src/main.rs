@@ -1022,12 +1022,37 @@ fn write_inbox(output: &mut impl Write, project: &str, hook: bool, batch: &store
     } else {
         let scope = if project.is_empty() { String::new() } else { format!(" (project {project})") };
         writeln!(output, "The person acted on your jellies{scope} since you last checked:")?;
-        for item in &batch.events {
-            writeln!(output, "- {}: {}", item.event.jelly, item.text)?;
+        for line in inbox_lines(&batch.events) {
+            writeln!(output, "- {line}")?;
         }
         writeln!(output, "Details: `jelly state NAME`, `jelly waiting`. Answer on a comment with `jelly reply`.")?;
     }
     output.flush()
+}
+
+/// One line per inbox item, except that the calls of one verb by one person
+/// on one jelly read as one line, where the last of them happened, with how
+/// many there were and the last args. A view that calls a verb several times
+/// a second (a game's `pos`) would otherwise print thousands of lines.
+fn inbox_lines(items: &[store::InboxItem]) -> Vec<String> {
+    fn call(item: &store::InboxItem) -> Option<(&str, &str, Option<&str>)> {
+        let e = &item.event;
+        (e.kind == store::EventKind::Do).then_some((e.jelly.as_str(), e.by.as_str(), e.verb.as_deref()))
+    }
+    let mut calls = std::collections::HashMap::<_, usize>::new();
+    for key in items.iter().filter_map(call) {
+        *calls.entry(key).or_default() += 1;
+    }
+    // Walking back from the newest, the first call of a key is its last.
+    let mut lines: Vec<String> = items.iter().rev().filter_map(|item| {
+        let text = match call(item) {
+            None => item.text.clone(),
+            Some(key) => item.event.heard(calls.remove(&key)?),
+        };
+        Some(format!("{}: {text}", item.event.jelly))
+    }).collect();
+    lines.reverse();
+    lines
 }
 
 /// The project from `--project`, else the git repo's folder name, made into a
@@ -1381,6 +1406,32 @@ mod tests {
         let ev: crate::store::Event = serde_json::from_value(json!({"seq": 9, "at_ms": 1, "jelly": "p:x", "kind": "answer", "by": "person", "version": 4, "view_rev": 1,
             "args": {"id": "a1", "title": "Which order?", "option": "b", "text": "keep it"}, "state": {"big": "state"}})).unwrap();
         assert_eq!(wait_line(&ev), "p:x v4: person answered a1 \"Which order?\" → b: \"keep it\"");
+    }
+
+    #[test]
+    fn inbox_folds_repeated_calls_into_one_line_at_the_last() {
+        let mut seq = 0;
+        let mut item = |jelly: &str, by: &str, kind: &str, verb: Option<&str>, args: serde_json::Value| {
+            seq += 1;
+            crate::store::InboxItem::from(serde_json::from_value::<crate::store::Event>(json!({"seq": seq, "at_ms": seq, "jelly": jelly, "kind": kind,
+                "verb": verb, "by": by, "version": seq, "view_rev": 1, "args": args, "source": {"text": "HOLD TO GAS"}})).unwrap())
+        };
+        let events = vec![
+            item("p:race", "person:billy", "do", Some("pos"), json!({"progress": 0.1})),
+            item("p:race", "person:ana", "do", Some("pos"), json!({"progress": 0.2})),
+            item("p:race", "person:billy", "do", Some("pos"), json!({"progress": 0.3})),
+            item("p:race", "person:billy", "comment", None, json!({"text": "fun"})),
+            item("p:race", "person:billy", "do", Some("honk"), json!({})),
+            item("p:other", "person:billy", "do", Some("pos"), json!({"progress": 0.9})),
+            item("p:race", "person:billy", "do", Some("pos"), json!({"progress": 0.4})),
+        ];
+        assert_eq!(super::inbox_lines(&events), [
+            r#"p:race: ana pos {"progress":0.2} (via "HOLD TO GAS")"#,
+            r#"p:race: billy commented on the whole jelly, not one part: fun"#,
+            r#"p:race: billy honk {} (via "HOLD TO GAS")"#,
+            r#"p:other: billy pos {"progress":0.9} (via "HOLD TO GAS")"#,
+            r#"p:race: billy pos ×3, last {"progress":0.4} (via "HOLD TO GAS")"#,
+        ]);
     }
 
     #[test]

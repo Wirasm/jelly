@@ -470,7 +470,8 @@ pub enum Cmd {
     },
     /// What the person did in this project's jellies since you last listened.
     /// With --hook, starts silently and prints nothing when there is nothing new,
-    /// so it can run at the start of every agent turn.
+    /// so it can run at the start of every agent turn. Many calls of one verb
+    /// by one person on one jelly print as one line: `pos ×212, last {...}`.
     ///
     /// `--wait` blocks instead, until the person presses Send in NAME (or in any
     /// jelly): they worked through it and hand the turn back. Then run `jelly

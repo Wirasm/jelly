@@ -195,6 +195,12 @@ jelly hear --wait plan --every --since seq:42 --timeout 60 --json   # returns on
 jelly hear --wake plan              # Codex: returns at once; their Send starts your next turn
 ```
 
+`jelly hear` prints one line per thing the person did, except that many calls
+of one verb by one person on one jelly show as one line, where the last call
+falls: `ana pos ×212, last {"progress":0.84}`. A game or a slider can call a
+verb several times a second. To follow each call as it happens, stream
+`jelly events NAME`.
+
 **Let them hand the turn back.** Once the person has done anything in a jelly,
 it shows a Send button with a count ("3 changes · Send"). They work through the
 jelly, press it once, and a waiting `jelly hear --wait` returns. Start that wait
