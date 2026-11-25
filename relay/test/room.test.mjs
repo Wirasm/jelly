@@ -65,7 +65,7 @@ test("jellies shared with --pin while a PIN works share it, and people move betw
 
   const first = await pin(board);
   assert.match(first.pin, /^\d{6}$/);
-  const ana = await join(first.pin, "ana@example.com");
+  const ana = await join(first.pin, "ana@mail.test");
   assert.ok(ana.startsWith(board));
   const page = await open(ana);
   assert.deepEqual(names(page.hello.room), ["t:board"]);
@@ -85,11 +85,11 @@ test("jellies shared with --pin while a PIN works share it, and people move betw
   const token = (await moved.json()).link.slice(3);
   assert.ok(token.startsWith(quiz));
   const there = await open(token);
-  assert.equal(there.hello.me.who, "ana@example.com");
+  assert.equal(there.hello.me.who, "ana@mail.test");
   assert.deepEqual(names(there.hello.room), ["t:board", "t:quiz"]);
 
   // Someone typing the PIN now lands on the jelly added last.
-  assert.ok((await join(first.pin, "bo@example.com")).startsWith(quiz));
+  assert.ok((await join(first.pin, "bo@mail.test")).startsWith(quiz));
   for (const ws of [page.ws, there.ws]) ws.close();
   assert.equal((await unpin(quiz)).status, 204);
 });
@@ -101,7 +101,7 @@ test("only a link that may act moves, and only inside a live room", async () => 
   await fetch(at(`/api/live/${a}/people`), { method: "POST", headers: auth, body: JSON.stringify({ secret: watch, who: "", can_act: false, days: 1 }) });
   const { pin: code } = await pin(a);
   await pin(b);
-  const ana = await join(code, "ana@example.com");
+  const ana = await join(code, "ana@mail.test");
 
   assert.equal((await post("/room", { from: a + watch, to: b })).status, 403, "the view-only link");
   assert.equal((await post("/room", { from: a + "x".repeat(22), to: b })).status, 403, "a link that does not work");
@@ -112,7 +112,7 @@ test("only a link that may act moves, and only inside a live room", async () => 
   assert.equal((await unpin(b)).status, 204);
   assert.deepEqual((await page.next()).room, []);
   assert.equal((await post("/room", { from: ana, to: b })).status, 403);
-  assert.equal(await join(code, "bo@example.com"), "That PIN does not work. Check it with whoever gave it to you.");
+  assert.equal(await join(code, "bo@mail.test"), "That PIN does not work. Check it with whoever gave it to you.");
   assert.equal((await unpin(a)).status, 400, "nothing left to end");
   page.ws.close();
 });
@@ -124,7 +124,7 @@ test("an unshared jelly leaves the room, and the last one out ends the PIN", asy
   const { pin: code } = await pin(a);
   await pin(b);
   assert.equal((await fetch(at(`/api/live/${b}`), { method: "DELETE", headers: auth })).status, 200);
-  assert.ok((await join(code, "ana@example.com")).startsWith(a));
+  assert.ok((await join(code, "ana@mail.test")).startsWith(a));
   assert.equal((await fetch(at(`/api/live/${a}`), { method: "DELETE", headers: auth })).status, 200);
   // A new --pin makes a new room rather than joining the ended one.
   const c = id(8);
@@ -141,8 +141,8 @@ test("ten wrong PINs lock the room's PIN, and every jelly in it hears so", async
   await pin(b);
   const wrong = String((Number(code) + 1) % 1_000_000).padStart(6, "0");
   // One IP gets 5 tries per window, so the lock takes two.
-  for (let i = 0; i < 10; i++) await join(wrong, "eve@example.com", `10.0.1.${i % 2}`);
-  assert.equal(await join(code, "ana@example.com", "10.0.2.1"), "That PIN does not work. Check it with whoever gave it to you.");
+  for (let i = 0; i < 10; i++) await join(wrong, "eve@mail.test", `10.0.1.${i % 2}`);
+  assert.equal(await join(code, "ana@mail.test", "10.0.2.1"), "That PIN does not work. Check it with whoever gave it to you.");
   for (const share of [a, b]) {
     const { events } = await (await fetch(at(`/api/live/${share}?since=0`), { method: "DELETE", headers: auth })).json();
     assert.deepEqual(events.filter((e) => e.kind === "lock").map((e) => e.args), [{ tries: 10 }], share);
