@@ -311,11 +311,7 @@ pub struct InboxItem {
 
 impl From<Event> for InboxItem {
     fn from(event: Event) -> Self {
-        let text = match viewer(&event.by) {
-            Some(name) => format!("{name} {}", event.describe()),
-            None => event.describe(),
-        };
-        Self { event, text }
+        Self { text: event.heard(1), event }
     }
 }
 
@@ -463,13 +459,28 @@ impl Event {
 
     /// One line on what happened, for agents: the inbox and `jelly look` both use it.
     pub fn describe(&self) -> String {
+        self.describe_times(1)
+    }
+
+    /// The inbox's line: `describe`, after the name of a person who gave one.
+    /// For a call, `times` above one says the line stands for that many calls
+    /// of its verb and shows the last one's args: `pos ×212, last {"progress":0.84}`.
+    pub fn heard(&self, times: usize) -> String {
+        match viewer(&self.by) {
+            Some(name) => format!("{name} {}", self.describe_times(times)),
+            None => self.describe_times(times),
+        }
+    }
+
+    fn describe_times(&self, times: usize) -> String {
         let a = self.args.clone().unwrap_or(Value::Null);
         let s = |v: &Value| v.as_str().unwrap_or("").to_string();
         let clip = |t: String| if t.chars().count() > 200 { format!("{}…", t.chars().take(200).collect::<String>()) } else { t };
         match self.kind {
             EventKind::Do => {
                 let via = self.source.as_ref().and_then(|x| x["text"].as_str()).filter(|t| !t.is_empty()).map(|t| format!(" (via {t:?})")).unwrap_or_default();
-                format!("{} {}{via}", self.verb.as_deref().unwrap_or("?"), clip(a.to_string()))
+                let times = if times > 1 { format!("×{times}, last ") } else { String::new() };
+                format!("{} {times}{}{via}", self.verb.as_deref().unwrap_or("?"), clip(a.to_string()))
             }
             EventKind::Answer => {
                 let pick = a["option"].as_str().map(|o| format!(" → {o}")).unwrap_or_default();
