@@ -292,8 +292,9 @@ jelly share plan                 # one read-only HTML file, state and assets bak
 jelly share plan --to ana@example.com   # a live link for Ana: she uses it from her phone, you hear person:ana@example.com
 jelly share plan --link          # a live view-only link: anyone watches, nobody acts
 jelly share quiz --pin           # a room on a call: a 6-digit PIN and a join page; people type it with their email
+jelly share race --pin           # while that PIN works: race joins the same room, no new PIN; people in it open race with one tap
 jelly share plan --to ana@example.com --days 7   # links work for a day unless you say more; sharing again makes it last longer
-jelly unshare quiz --pin         # nobody new joins; people already in stay
+jelly unshare quiz --pin         # ends the PIN for its whole room; people already in stay; the next --pin makes a new one
 jelly unshare plan --to ana@example.com # only Ana's links stop (PIN joiners too); `jelly unshare plan` stops them all
 jelly takedown <link>            # a reported share on your relay, by its link or share id: deleted there, every link stops
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css

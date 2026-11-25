@@ -496,7 +496,7 @@ impl Event {
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
-            EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join; people already in stay. `jelly share {} --pin` makes a new one",
+            EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join and its room is over; people already in keep their links. `jelly share {} --pin` makes a new one",
                 a["tries"], self.jelly),
         }
     }
@@ -2533,7 +2533,7 @@ mod tests {
         let ev: Mirrored = serde_json::from_value(json!({"seq": 1, "at_ms": now_ms(), "kind": "lock", "by": "relay", "args": {"tries": 10}, "version": 1, "view_rev": 1})).unwrap();
         s.mirror("p:j", &ev, None).unwrap();
         let heard: Vec<String> = consume_inbox(&mut s, "p", InboxReader::Named { name: "r".into() }).unwrap().into_iter().map(|e| InboxItem::from(e).text).collect();
-        assert_eq!(heard, ["the PIN locked after 10 wrong tries, so nobody new can join; people already in stay. `jelly share p:j --pin` makes a new one"]);
+        assert_eq!(heard, ["the PIN locked after 10 wrong tries, so nobody new can join and its room is over; people already in keep their links. `jelly share p:j --pin` makes a new one"]);
     }
 
     #[test]

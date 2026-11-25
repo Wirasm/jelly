@@ -181,14 +181,16 @@ impl Relay {
         Ok(resp)
     }
 
-    /// A new PIN for the share, working `hours`; its previous PIN stops. The
-    /// share lasts at least `days`. Returns the PIN, when it expires (ms) and
-    /// how many wrong tries lock it.
+    /// Puts the share in the room of the relay's PIN, making a new PIN when
+    /// none is live; people can join at least `hours` more. The share lasts at
+    /// least `days`. Returns the PIN (null when the room was open already),
+    /// when it expires (ms), how many wrong tries lock it, and the room.
     pub fn pin(&self, share: &str, hours: u64, days: u64) -> Result<Value, Fail> {
         self.json(self.at("POST", share, "/pin"), Some(&serde_json::json!({"hours": hours, "days": days})))
     }
 
-    /// Ends the share's PIN; people who joined with it keep their links.
+    /// Ends the PIN of the share's room, for every jelly in it; people who
+    /// joined keep their links.
     pub fn unpin(&self, share: &str) -> Result<(), Fail> {
         self.json(self.at("DELETE", share, "/pin"), None).map(drop)
     }

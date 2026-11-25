@@ -758,9 +758,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if pin {
                 let hours = hours.unwrap_or(3);
                 let made = send("POST", &api(&format!("/{name}/share/pin")), json!({"hours": hours, "days": days.unwrap_or(1)}))?;
-                let (code, url) = (made["pin"].as_str().ok_or("the daemon did not say the PIN")?, made["url"].as_str().unwrap_or(""));
+                let url = made["url"].as_str().unwrap_or("");
+                let Some(code) = made["pin"].as_str() else {
+                    let others: Vec<&str> = made["room"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|n| *n != name).collect();
+                    let left = made["expires_at"].as_u64().unwrap_or(0).saturating_sub(server::now_ms()) / 60_000;
+                    let with = if others.is_empty() { String::new() } else { format!(", with {}", others.join(", ")) };
+                    return output(format_args!("{name} is in the room of the PIN you gave out{with}, at {url}\n  people in the room see {name} under their jelly and open it with one tap; people who type the PIN now land on it. The PIN lets people join for {}h{:02}m more. `jelly unshare {name} --pin` ends it for the whole room; then --pin makes a new one.\n", left / 60, left % 60));
+                };
                 let s = if hours == 1 { "" } else { "s" };
-                return output(format_args!("PIN {code} at {url}\n  for a room: each person opens that page and types the PIN with their email; you hear them as person:<email>. The PIN lets people join for {hours} hour{s} and locks after {} wrong tries. `jelly unshare {name} --pin` ends it; people already in stay.\n", made["tries"]));
+                return output(format_args!("PIN {code} at {url}\n  for a room: each person opens that page and types the PIN with their email; you hear them as person:<email>. The PIN lets people join for {hours} hour{s} and locks after {} wrong tries. `--pin` on another jelly while it works puts that jelly in the same room, with no new PIN. `jelly unshare {name} --pin` ends it; people already in stay.\n", made["tries"]));
             }
             if link || to.is_some() {
                 let days = days.unwrap_or(1);
@@ -821,7 +827,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let name = id(&name)?;
             if pin {
                 send("DELETE", &api(&format!("/{name}/share/pin")), Value::Null)?;
-                return output(format_args!("the PIN for {name} no longer works; people who joined with it stay\n"));
+                return output(format_args!("the PIN of {name}'s room no longer works, for any jelly in it; people who joined keep their links\n"));
             }
             let q = match (&to, link) {
                 (Some(who), _) => format!("?to={}", encode(who)),

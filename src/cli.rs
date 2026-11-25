@@ -390,8 +390,12 @@ pub enum Cmd {
     /// join page. Each person opens the page and types the PIN with their email,
     /// and gets their own link, as with `--to`: you hear them as
     /// person:<email>, and `jelly unshare NAME --to <email>` stops them. The PIN
-    /// works a few hours (`--hours`) and locks after a few wrong tries; running
-    /// `--pin` again makes a new one and the old one stops.
+    /// works a few hours (`--hours`) and locks after a few wrong tries.
+    /// One PIN covers a meeting: `--pin` on another jelly while it works puts
+    /// that jelly in the same room, with no new PIN. People already in see it
+    /// under their jelly and open it with one tap; people who type the PIN now
+    /// land on it. To start a room for other people, end this one first
+    /// (`jelly unshare NAME --pin`).
     ///
     /// While a jelly is shared, the relay holds the live copy: it keeps working
     /// while this machine sleeps, and your changes (call, set, shape, ask,
@@ -412,7 +416,8 @@ pub enum Cmd {
         #[arg(long)]
         pin: bool,
         /// Hours until the PIN stops letting people join (default 3, at most 24).
-        /// People already in keep their links.
+        /// With a room open, it lasts at least this long from now. People
+        /// already in keep their links.
         #[arg(long, requires = "pin", value_parser = clap::value_parser!(u64).range(1..=24))]
         hours: Option<u64>,
         /// Days until the share stops working (default 1, at most 365). A share
@@ -439,8 +444,9 @@ pub enum Cmd {
     },
     /// Stop sharing a jelly. `--to ana@example.com` stops only Ana's links
     /// (from `--to` or from joining with the PIN), and her open pages close;
-    /// `--link` stops the view-only link; `--pin` ends the PIN, so nobody new
-    /// joins, and everyone in stays. With none, every link stops and the
+    /// `--link` stops the view-only link; `--pin` ends the PIN of the jelly's
+    /// room for every jelly in it, so nobody new joins or moves between them,
+    /// and everyone in keeps their links. With none, every link stops and the
     /// jelly's final state stays here.
     Unshare {
         name: String,
