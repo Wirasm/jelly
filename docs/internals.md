@@ -119,7 +119,10 @@ then return them in sequence order, even when the wall clock moves backwards.
 ## Send and waiting
 
 A jelly counts what people did since the last `send` in `unsent` (comments,
-answers, verb calls, undos; `store::record`). The runtime shows the count on its
+answers, verb calls, undos; `store::record`). A verb call the view made with
+`jelly.do(verb, args, { quiet: true })` is left out: its `do` event carries
+`quiet: true`, which the daemon, the relay and the runtime all skip when they
+count. Nothing else about a quiet call changes. The runtime shows the count on its
 Send button, or a view draws its own (`data-send`, `jelly.person.send()`). `send`
 sets the count to zero and is the only event that ends `GET /api/wait` and the
 `jelly hear --wait` stream, unless `every=true` (`--every`). The relay keeps the

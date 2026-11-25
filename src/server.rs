@@ -465,13 +465,16 @@ struct CallReq {
     /// The element the person used, sent by the runtime.
     #[serde(default)]
     source: Option<Value>,
+    /// `jelly.do(verb, args, { quiet: true })`: not counted toward Send.
+    #[serde(default)]
+    quiet: bool,
 }
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
     if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "do", "verb": r.verb, "args": r.args, "source": r.source, "by": by(r.by)?})).await;
+        return share::forward(&app, &live, json!({"op": "do", "verb": r.verb, "args": r.args, "source": r.source, "quiet": r.quiet, "by": by(r.by)?})).await;
     }
-    app.change(|s| s.do_verb_from(&name, &r.verb, r.args, &by(r.by)?, r.source))
+    app.change(|s| s.do_verb_from(&name, &r.verb, r.args, &by(r.by)?, r.source, r.quiet))
 }
 
 #[derive(Deserialize)]

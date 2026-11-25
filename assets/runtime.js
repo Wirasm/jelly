@@ -4,6 +4,8 @@
 //   jelly.state                 current state (read only; change it with verbs)
 //   jelly.onState(fn)           fn(state, event) now and after every change, from anyone
 //   jelly.do(verb, args)      run a verb; resolves to the event, rejects with the reason
+//   jelly.do(verb, args, { quiet: true })  the same, but it does not count toward Send:
+//                               for calls the person did not make for the agent (a timer, a game loop)
 //   jelly.asset(file)           URL of a file added with `jelly asset` (or just use "assets/<file>")
 //   jelly.events(fn)            fn(event) for every event of every jelly; returns unsubscribe
 //
@@ -267,7 +269,7 @@
     if (ev.kind === "make" || ev.view_rev !== boot.viewRev) { reload(); return; }
     const was = unsent;
     if (ev.kind === "send") unsent = 0;
-    else if (isPerson(ev.by) && FOR_AGENT.includes(ev.kind)) unsent++;
+    else if (isPerson(ev.by) && FOR_AGENT.includes(ev.kind) && !ev.quiet) unsent++;
     if (unsent !== was) { drawSend(); unsentSubs.forEach((fn) => fn(unsent)); }
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "ask" || ev.kind === "answer" || ev.kind === "unask") refreshThreads().catch(console.error);
@@ -291,8 +293,8 @@
     get css() { return JELLY_CSS; },
     get state() { return state; },
     onState(fn) { subs.push(fn); fn(state, null); },
-    async do(verb, args = {}) {
-      const ev = trial ? await trialCall(verb, args) : await post("do", { verb, args, source: source() });
+    async do(verb, args = {}, { quiet = false } = {}) {
+      const ev = trial ? await trialCall(verb, args) : await post("do", { verb, args, source: source(), quiet });
       apply(ev);
       return ev;
     },

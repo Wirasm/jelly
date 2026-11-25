@@ -80,6 +80,7 @@ In the view:
 // this jelly
 jelly.onState((state, event) => render(state)); // now, and after every change by anyone
 jelly.do("add", { title });                   // runs a verb; rejects with its error
+jelly.do("pos", { x }, { quiet: true });        // the same, not counted on Send (timers, game loops)
 jelly.asset("shot.png");                        // URL of a file added with `jelly asset`
 // other jellies
 jelly.other("plan").onState((state) => …);      // its state, live; .state is a promise, .open() shows it
@@ -211,7 +212,10 @@ your session when they press Send. Do not wake on every click: use `--every` onl
 jelly where each change matters at once. A view can draw its own button: mark it
 `data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
 `jelly.person.onUnsent(fn)`). A view sends by itself when an action is the
-decision, as the compare recipe does on a pick. jelly's button sits bottom left
+decision, as the compare recipe does on a pick. Every verb call a person's page
+makes counts toward Send, so a call the person did not make for you (a timer, a
+game reporting positions) passes `{ quiet: true }` as the third argument of
+`jelly.do`; it still reaches `jelly hear`. jelly's button sits bottom left
 and moves up when it would lie on one of the view's buttons, links or fields.
 Place it yourself with `:root { --jelly-send-inset: auto auto 78px 10px; }`.
 
