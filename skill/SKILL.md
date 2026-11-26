@@ -226,8 +226,9 @@ and moves up when it would lie on one of the view's buttons, links or fields.
 Place it yourself with `:root { --jelly-send-inset: auto auto 78px 10px; }`.
 
 **Know if anyone is looking.** `jelly look` has a `screen` line, and `ask` and
-`show` say when nobody has the jelly open. Then say so in the terminal and give
-the address instead of waiting on a page nobody sees. If `ask` says their
+`show` say when nobody has the jelly open. Then `jelly open plan` opens it in
+their browser and prints the address: say so in the terminal instead of waiting
+on a page nobody sees. If `ask` says their
 browser showed a notification, the person has been told: wait for the answer.
 
 A question the person asks about a whole jelly arrives like a comment, marked
@@ -242,7 +243,7 @@ seq:N`). A Send has `kind` `send` and the number of changes it hands back in
 an `answer` with `args.id`, `args.option` and `args.text`. It holds no state;
 read that with `jelly state NAME`. In a
 script, add `--json` instead of parsing text. `hear` takes it only with
-`--wait`; `feed` prints text all the same; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
+`--wait`; `feed` takes it and prints text; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
 `recipes`, `open`, `relay`, `takedown`, `serve`, `setup` and `update` refuse it.
 
 **Put the decision where the code is.** When the jelly settled something about
@@ -328,8 +329,14 @@ jelly unshare plan --to ana@example.com # only Ana's links stop (PIN joiners too
 jelly takedown <link>            # a reported share on your relay, by its link or share id: deleted there, every link stops
 jelly design                     # the repo's DESIGN.md; views can link /p/<project>/design.css
 jelly keep plan                  # keep it; jellies nobody keeps are archived after a quiet week and removed 30 days later
+jelly unkeep plan                # stop keeping it
 jelly rm plan
 ```
+
+Through a link, one change (a verb call with its args, an answer, a comment)
+holds at most 64 KB, and a comment, reply or answer 10,000 characters; more is
+refused with a message for the person. Keep what a shared view sends small:
+an id and a few fields, not a drawing or a file.
 
 A jelly's full name is `project:name`; the project is the git repo you run in
 (or `--project`). The person can move a jelly to another project on the jelly
