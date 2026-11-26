@@ -2,7 +2,7 @@
 //! views. The jelly page people look at is itself an internal jelly named `page`.
 
 use crate::op::{Change, Op};
-use crate::store::{named, viewer, Error, Event, EventKind, InboxBatch, InboxCommit, InboxItem, InboxRequest, Past, Store, PAGE};
+use crate::store::{named, viewer, Error, Event, EventKind, InboxBatch, InboxCommit, InboxRequest, Past, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::body::Bytes;
@@ -299,7 +299,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/share", get(share).post(share_live).delete(unshare_live))
         .route("/api/jellies/{name}/share/pin", post(pin_live).delete(unpin_live))
         .route("/api/shares", get(shares))
-        .route("/api/inbox", get(inbox).post(read_inbox))
+        .route("/api/inbox", post(read_inbox))
         .route("/api/inbox/commit", post(commit_inbox))
         .route("/api/jellies/{name}/screen", post(put_screen))
         .route("/api/jellies/{name}/note", post(note))
@@ -1406,14 +1406,18 @@ mod tests {
     async fn the_inbox_reads_back_to_the_cursor_and_keeps_the_person_after_a_trim() {
         let (_d, app) = app();
         let verbs = "const verbs = { label(s, { id }) { s[id] = 1; } };";
-        let ask = |since: u64| inbox(State(app.clone()), Query(InboxQ { project: Some("p".into()), since: Some(since) }));
-        let ids = |r: Result<Json<Value>, ApiError>| r.unwrap().0.as_array().unwrap().iter().map(|e| e["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        let since = {
+        let request = |name: &str| crate::store::InboxRequest { project: "p".into(), reader: crate::store::InboxReader::Named { name: name.into() }, mine: None };
+        let ask = |name: &str| app.store.lock().unwrap().read_inbox(&request(name)).unwrap();
+        let ids = |batch: crate::store::InboxBatch| batch.events.iter().map(|e| json!(e)["args"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        {
             let mut s = app.store.lock().unwrap();
             s.make("j", "".into(), verbs.into(), json!({}), "agent", false, "", "p").unwrap();
-            s.do_verb("p:j", "label", json!({"id": "first"}), PERSON).unwrap().at_ms
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            s.do_verb("p:j", "label", json!({"id": "first"}), PERSON).unwrap();
+        }
+        let heard = ask("a");
+        let through = heard.through;
+        assert_eq!(ids(heard), ["first"]);
+        app.store.lock().unwrap().commit_inbox(crate::store::InboxCommit { inbox: request("a"), through }).unwrap();
         {
             let mut s = app.store.lock().unwrap();
             s.do_verb("p:j", "label", json!({"id": "second"}), PERSON).unwrap();
@@ -1421,48 +1425,11 @@ mod tests {
                 s.do_verb("p:j", "label", json!({"id": format!("agent{i}")}), "agent").unwrap();
             }
         }
-        assert_eq!(ids(ask(since).await), ["second"]);
-        assert_eq!(ids(ask(0).await), ["first", "second"]);
+        assert_eq!(ids(ask("a")), ["second"]);
+        assert_eq!(ids(ask("b")), ["first", "second"]);
         app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
-        assert_eq!(ids(ask(0).await), ["first", "second"], "the person's events outlive a trim");
-    }
-
-    #[tokio::test]
-    async fn timestamp_inbox_keeps_events_across_a_backward_clock_step() {
-        let (dir, app) = app();
-        let (recent, later) = {
-            let mut store = app.store.lock().unwrap();
-            store.make("clock", "".into(), "const verbs = { tick(s) { s.n = 1; } };".into(), json!({}), "agent", false, "", "test").unwrap();
-            let mut recent = store.do_verb("test:clock", "tick", json!({}), PERSON).unwrap();
-            recent.state = None;
-            let mut later = recent.clone();
-            later.seq += 1;
-            later.at_ms -= 1;
-            let mut older = later.clone();
-            older.seq += 1;
-            older.at_ms = 1;
-            std::fs::write(store.events_path(), format!("{}\n{}\n{}\n", serde_json::to_string(&recent).unwrap(), serde_json::to_string(&later).unwrap(), serde_json::to_string(&older).unwrap())).unwrap();
-            (recent, later)
-        };
-        *app.store.lock().unwrap() = Store::open(dir.path()).unwrap();
-        let path = app.store.lock().unwrap().events_path();
-        let mut bytes = std::fs::read(&path).unwrap();
-        let old_start = bytes[..bytes.len() - 1].iter().rposition(|&b| b == b'\n').unwrap() + 1;
-        bytes[old_start] = 0xff;
-        std::fs::write(&path, bytes).unwrap();
-        let empty = inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms) })).await.unwrap();
-        assert!(empty.0.as_array().unwrap().is_empty());
-        let result = inbox(State(app.clone()), Query(InboxQ { project: Some("test".into()), since: Some(recent.at_ms - 2) })).await.unwrap();
-        assert_eq!(result.0.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect::<Vec<_>>(), [recent.seq, later.seq]);
-        let mut shifted = std::fs::read(&path).unwrap();
-        shifted.insert(0, b'\n');
-        std::fs::write(&path, shifted).unwrap();
-        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(recent.at_ms - 2) })).await.is_err());
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
-        assert!(inbox(State(app.clone()), Query(InboxQ { project: None, since: Some(u64::MAX) })).await.is_err());
-        let reader = crate::store::InboxReader::Named { name: "unreadable".into() };
-        assert!(app.store.lock().unwrap().read_inbox(&crate::store::InboxRequest { project: "test".into(), reader, mine: None }).is_err());
+        assert_eq!(ids(ask("a")), ["second"], "after a trim a known reader still hears only what it has not heard");
+        assert_eq!(ids(ask("b")), ["first", "second"], "the person's events outlive a trim");
     }
 
     #[test]
