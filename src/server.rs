@@ -1220,13 +1220,38 @@ mod tests {
                 move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
-                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), dark, std::time::Duration::from_secs(5)).await
+                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), dark, RENDER_LIMIT).await
                     }
                 }).await.unwrap();
             let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
             assert!(!out.contains("png      "), "old_png={old_png}: {out}");
-            assert!(out.contains(&format!("No screenshot: the browser failed (exit status: {exit})")), "{out}");
+            assert!(out.contains(&format!("failed   no screenshot: the browser failed (exit status: {exit}). Run `jelly look` again; if it keeps failing, report it")), "{out}");
+            assert!(!out.contains("!  "), "{out}");
         }
+    }
+
+    /// The light render takes the png. When only its screenshot fails, what the
+    /// page measured still counts, and only the png is reported missing.
+    #[tokio::test]
+    async fn a_failed_screenshot_keeps_the_snapshot_it_came_with() {
+        let (_dir, app) = app();
+        create_page(&app, "PAGE", false).await;
+        let current = owner(&app, "test:x").await;
+        let posting = app.clone();
+        let response = look_at_width(app.clone(), "test:x".into(),
+            LookQ { width: Some(1280), height: None, png: true, full: false, json: false, compare: None, save: None },
+            move |_, _, path, dark| {
+                let (app, owner) = (posting.clone(), current.clone());
+                async move {
+                    let mut sc = snapshot(&owner, "MEASURED", 1);
+                    sc.dark = dark;
+                    post(&app, sc).await.unwrap();
+                    if path.is_some() { Err("the screenshot broke".to_string()) } else { Ok(()) }
+                }
+            }).await.unwrap();
+        let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+        assert!(out.contains("MEASURED") && out.contains("failed   no screenshot: the screenshot broke."), "{out}");
+        assert!(!out.contains("not checked") && !out.contains("png      ") && !out.contains("!  "), "{out}");
     }
 
     #[tokio::test]

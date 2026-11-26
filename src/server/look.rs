@@ -118,6 +118,13 @@ pub(super) fn chrome() -> Option<String> {
 /// How long `jelly look` waits for the browser.
 pub(super) const RENDER_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// The `failed` line for a render that did not finish: what went unchecked, why,
+/// and what to do. Agents fix the page for every `!` line; this one says
+/// nothing either way about the page, only another render can.
+pub(super) fn render_failed(unchecked: &str, why: &str, command: &str) -> String {
+    format!("failed   {unchecked}: {why}. Run `jelly {command}` again; if it keeps failing, report it")
+}
+
 /// Runs headless Chrome on a jelly at a given size. With `png`, writes a
 /// screenshot there; either way the page's runtime posts a fresh snapshot.
 /// With `trial`, the page runs that `jelly try`'s steps. With `dark`, the page
@@ -180,9 +187,12 @@ pub(super) async fn run_browser_at(bin: &str, url: &str, width: u32, height: u32
     let n = RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let profile = std::env::temp_dir().join(format!("jelly-chrome-{}-{n}", std::process::id()));
     let mut cmd = tokio::process::Command::new(bin);
-    // SwiftShader is Chrome's software GPU: WebGL views render without a real GPU.
-    // `--disable-gpu` would leave them with no WebGL context at all.
-    cmd.args(["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
+    // WebGL views get the machine's GPU, or SwiftShader, Chrome's software GPU,
+    // where there is none. Forcing SwiftShader (`--use-angle=swiftshader`) holds
+    // the page's clock back a second or more per render, and long enough under
+    // load for renders to hit their time limit. `--disable-gpu` would leave
+    // WebGL views with no context at all.
+    cmd.args(["--headless=new", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         .arg(format!("--user-data-dir={}", profile.display()))
         // Headless Chrome follows the machine's appearance unless told; 0 is dark, 1 light.
         .arg(format!("--blink-settings=preferredColorScheme={}", if dark { 0 } else { 1 }));
@@ -388,7 +398,8 @@ pub(super) async fn look(State(app): State<Shared>, Path(name): Path<String>, Qu
     }).await
 }
 
-/// One width: a light and a dark render, and with `png` a screenshot.
+/// One width: a light and a dark render at once. The light one takes the png,
+/// unless `full` needs a third render at the height the light one measured.
 pub(super) async fn look_at_width<F, Fut>(app: Shared, name: String, q: LookQ, mut render_page: F) -> Result<Response, ApiError>
 where
     F: FnMut(u32, u32, Option<std::path::PathBuf>, bool) -> Fut,
@@ -408,21 +419,33 @@ where
         Ok(app.screen_in(&name, &owner, dark)?.filter(|s| s.version == j.version && s.at_ms >= j.updated_ms && s.width == width && s.problems.is_some()))
     };
     let mut notes: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    let mut png_path = q.png.then(|| {
+        let dir = home.join("renders");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("{}-{width}.png", crate::disk::name(&name)))
+    });
+    let mut png = None;
     let mut snap = fresh(&app, false)?;
     // The dark render only checks contrast. It runs beside the light one, so it
     // costs a second browser but little extra time.
     let mut dark = fresh(&app, true)?;
     if snap.is_none() || dark.is_none() {
         let asked = now_ms();
-        let light_run = snap.is_none().then(|| render_page(width, height, None, false));
+        let shot = png_path.clone().filter(|_| !q.full);
+        let light_run = snap.is_none().then(|| render_page(width, height, shot.clone(), false));
         let dark_run = dark.is_none().then(|| render_page(width, height, None, true));
         let (light_run, dark_run) = tokio::join!(maybe(light_run), maybe(dark_run));
-        let wait_light = match light_run {
-            Some(Err(e)) => { notes.push(format!("No snapshot: {e}")); false }
-            ran => ran.is_some(),
+        // A light render that takes the png can fail at the screenshot after the
+        // page sent its snapshot, so that snapshot is still waited for.
+        let light_err = light_run.as_ref().and_then(|r| r.as_ref().err().cloned());
+        let wait_light = match &light_run {
+            Some(Err(_)) => shot.is_some(),
+            Some(Ok(())) => { png = shot.clone(); true }
+            None => false,
         };
         let wait_dark = match dark_run {
-            Some(Err(e)) => { notes.push(format!("No dark mode check: {e}")); false }
+            Some(Err(e)) => { failed.push(render_failed(&format!("dark mode at {width}px was not checked"), &e, "look")); false }
             ran => ran.is_some(),
         };
         for _ in 0..30 {
@@ -431,20 +454,22 @@ where
             if (!wait_light || snap.is_some()) && (!wait_dark || dark.is_some()) { break; }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        if wait_light && snap.is_none() { notes.push("The page rendered but sent no snapshot.".into()); }
+        match light_err {
+            Some(e) if snap.is_some() => { failed.push(render_failed("no screenshot", &e, "look")); png_path = None; }
+            Some(e) => failed.push(render_failed(&format!("light mode at {width}px was not checked"), &e, "look")),
+            None if wait_light && snap.is_none() => notes.push("The page rendered but sent no snapshot.".into()),
+            None => {}
+        }
         if wait_dark && dark.is_none() { notes.push("The dark mode render sent no snapshot.".into()); }
     }
-    let png = if q.png {
-        let dir = home.join("renders");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!("{}-{width}.png", crate::disk::name(&name)));
+    if let Some(path) = png_path.filter(|_| png.is_none()) {
         // The full page: as tall as the page said it was, within reason.
         let h = if q.full { snap.as_ref().map(|s| s.page_height).filter(|h| *h > height).unwrap_or(height).min(12000) } else { height };
         match render_page(width, h, Some(path.clone()), false).await {
-            Ok(()) => Some(path),
-            Err(e) => { notes.push(format!("No screenshot: {e}")); None }
+            Ok(()) => png = Some(path),
+            Err(e) => failed.push(render_failed("no screenshot", &e, "look")),
         }
-    } else { None };
+    }
 
     app.validate_render(&name, &owner, j.version)?;
     let mut out = summary(&app, &j);
@@ -458,6 +483,7 @@ where
     }
     for p in problem_lines(snap.as_ref(), dark.as_ref()) { line(&mut out, format!("!        {p}")); }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    for f in failed { line(&mut out, f); }
     if q.json {
         return Ok(Json(json!({
             "jelly": j.name, "version": j.version,
@@ -780,17 +806,18 @@ pub(super) async fn look_both(app: &Shared, port: u16, name: &str, json: bool) -
         render_probes(app, port, &probes.1[2..3], None),
         render_probes(app, port, &probes.1[3..], None),
     );
-    let mut notes = Vec::new();
-    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, what: &str| match r {
+    let (mut notes, mut failed): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let light_ran = light.is_ok();
+    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, unchecked: &str| match r {
         Ok(s) => s,
-        Err(e) => { notes.push(format!("No {what}: {e}")); vec![None; n] }
+        Err(e) => { failed.push(render_failed(unchecked, &e, "look")); vec![None; n] }
     };
-    let mut light = got(light, 2, "snapshot").into_iter();
+    let mut light = got(light, 2, "light mode at desktop and phone width was not checked").into_iter();
     let (desk_sc, phone_sc) = (light.next().flatten(), light.next().flatten());
-    let desk_dark_sc = got(dd, 1, "dark mode check").pop().flatten();
-    let phone_dark_sc = got(pd, 1, "dark mode check at phone width").pop().flatten();
-    if desk_sc.is_none() { notes.push("The page sent no snapshot at desktop width.".into()); }
-    if phone_sc.is_none() { notes.push("The page sent no snapshot at phone width.".into()); }
+    let desk_dark_sc = got(dd, 1, "dark mode at desktop width was not checked").pop().flatten();
+    let phone_dark_sc = got(pd, 1, "dark mode at phone width was not checked").pop().flatten();
+    if light_ran && desk_sc.is_none() { notes.push("The page sent no snapshot at desktop width.".into()); }
+    if light_ran && phone_sc.is_none() { notes.push("The page sent no snapshot at phone width.".into()); }
     let png = path.exists().then_some(path);
 
     let mut out = summary(app, &j);
@@ -805,6 +832,7 @@ pub(super) async fn look_both(app: &Shared, port: u16, name: &str, json: bool) -
         .collect();
     for p in desk_problems.iter().chain(&phone_problems) { line(&mut out, p.clone()); }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    for f in failed { line(&mut out, f); }
     let diff = match (&desk_sc, &phone_sc) {
         (Some(d), Some(p)) => Some(outline_diff(&d.text, &p.text)),
         _ => None,
@@ -904,23 +932,26 @@ pub(super) async fn compare(app: &Shared, port: u16, name: &str, (against, befor
         render_probes(app, port, &probes.1[2..3], None),
         render_probes(app, port, &probes.1[3..], None),
     );
-    let mut notes = Vec::new();
-    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, what: &str| match r {
+    let (mut notes, mut failed): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let light_ran = light.is_ok();
+    let mut got = |r: Result<Vec<Option<Screen>>, String>, n: usize, unchecked: &str| match r {
         Ok(s) => s,
-        Err(e) => { notes.push(format!("No {what}: {e}")); vec![None; n] }
+        Err(e) => { failed.push(render_failed(unchecked, &e, "look")); vec![None; n] }
     };
-    let mut light = got(light, 2, "snapshot").into_iter();
+    let mut light = got(light, 2, &format!("light mode of {against} and now was not checked")).into_iter();
     let (before_sc, now_sc) = (light.next().flatten(), light.next().flatten());
-    let before_dark = got(bd, 1, "dark mode check").pop().flatten();
-    let now_dark = got(nd, 1, "dark mode check").pop().flatten();
-    if before_sc.is_none() { notes.push(format!("{against} sent no snapshot.")); }
-    if now_sc.is_none() { notes.push("The page sent no snapshot.".into()); }
+    let before_dark = got(bd, 1, &format!("dark mode of {against} was not checked")).pop().flatten();
+    let now_dark = got(nd, 1, "dark mode now was not checked").pop().flatten();
+    if light_ran && before_sc.is_none() { notes.push(format!("{against} sent no snapshot.")); }
+    if light_ran && now_sc.is_none() { notes.push("The page sent no snapshot.".into()); }
     let png = path.exists().then_some(path);
 
     let was = measured_problems(&before_sc, &before_dark);
     let is = measured_problems(&now_sc, &now_dark);
-    let new: Vec<&String> = is.iter().filter(|p| !was.contains(p)).collect();
-    let fixed: Vec<&String> = was.iter().filter(|p| !is.contains(p)).collect();
+    // A side that was not checked has no problems to tell apart: nothing is new or fixed.
+    let checked = before_sc.is_some() && now_sc.is_some() && before_dark.is_some() && now_dark.is_some();
+    let new: Vec<&String> = if checked { is.iter().filter(|p| !was.contains(p)).collect() } else { Vec::new() };
+    let fixed: Vec<&String> = if checked { was.iter().filter(|p| !is.contains(p)).collect() } else { Vec::new() };
     let diff = match (&before_sc, &now_sc) {
         (Some(b), Some(n)) => Some(outline_diff(&b.text, &n.text)),
         _ => None,
@@ -936,13 +967,15 @@ pub(super) async fn compare(app: &Shared, port: u16, name: &str, (against, befor
         line(&mut out, p);
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    for f in failed { line(&mut out, f); }
     if q.json {
         let diff = diff.unwrap_or_default();
         return Ok(Json(json!({
             "jelly": j.name, "version": j.version, "against": against, "against_version": before.version,
             "summary": &out[..problems_from],
             "problems": out[problems_from..].lines().collect::<Vec<_>>(),
-            "new_problems": new, "fixed_problems": fixed,
+            // null, not [], when a side was not checked.
+            "new_problems": checked.then_some(new), "fixed_problems": checked.then_some(fixed),
             "png": png,
             "added": diff.added, "removed": diff.removed, "changed": diff.changed,
         })).into_response());
@@ -1074,31 +1107,26 @@ pub(super) async fn try_steps(State(app): State<Shared>, Path(name): Path<String
         let store = app.store.lock().expect("store lock");
         (store.get(&name)?.version, store.home().to_path_buf())
     };
-    let mut notes = Vec::new();
+    let (mut notes, mut failed): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let token = app.start_trial(&name, &r.steps)?;
-    match render(port, &name, Some(&token), width, height, None, false, RENDER_LIMIT).await {
+    // The screenshot is taken in the same render, once the steps have run.
+    let shot = r.png.then(|| {
+        let dir = home.join("renders");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("{}-try-{width}.png", crate::disk::name(&name)))
+    });
+    let mut png = None;
+    match render(port, &name, Some(&token), width, height, shot.as_deref(), false, RENDER_LIMIT).await {
         Ok(()) => {
+            png = shot;
             for _ in 0..30 {
                 if app.trials.lock().expect("trials lock").get(&token).is_some_and(|t| t.result.is_some()) { break; }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         }
-        Err(e) => notes.push(format!("No snapshot: {e}")),
+        Err(e) => failed.push(render_failed("the steps were not tried", &e, "try")),
     }
     let trial = app.trials.lock().expect("trials lock").remove(&token).expect("only this handler removes its trial");
-    // The screenshot is a second render that does the same steps from the same start.
-    let png = if r.png {
-        let dir = home.join("renders");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!("{}-try-{width}.png", crate::disk::name(&trial.name)));
-        let token = app.start_trial(&name, &r.steps)?;
-        let shot = render(port, &name, Some(&token), width, height, Some(&path), false, RENDER_LIMIT).await;
-        app.trials.lock().expect("trials lock").remove(&token);
-        match shot {
-            Ok(()) => Some(path),
-            Err(e) => { notes.push(format!("No screenshot: {e}")); None }
-        }
-    } else { None };
 
     let mut out = String::new();
     let line = |out: &mut String, s: String| { out.push_str(&s); out.push('\n'); };
@@ -1113,7 +1141,7 @@ pub(super) async fn try_steps(State(app): State<Shared>, Path(name): Path<String
             let step = trial.steps.get(f.step).map(|s| s.to_string()).unwrap_or_default();
             line(&mut out, format!("!        step {} ({step}) failed: {}; the steps after it did not run", f.step + 1, f.error));
         }
-    } else if notes.is_empty() {
+    } else if failed.is_empty() {
         notes.push("The page rendered but did not finish the steps.".into());
     }
     if r.json {
@@ -1124,11 +1152,12 @@ pub(super) async fn try_steps(State(app): State<Shared>, Path(name): Path<String
             "dialogs": res.map(|r| &r.dialogs[..]).unwrap_or_default(),
             // `step` counts from 0 here: it indexes `steps`.
             "failed": res.and_then(|r| r.failed.as_ref()),
-            "problems": notes, "png": png, "state": trial.state,
+            "problems": notes.iter().cloned().chain(failed.iter().cloned()).collect::<Vec<_>>(), "png": png, "state": trial.state,
             "outline": res.map(|r| &r.text),
         })).into_response());
     }
     for n in notes { line(&mut out, format!("!        {n}")); }
+    for f in failed { line(&mut out, f); }
     if let Some(p) = &png { line(&mut out, format!("png      {}", p.display())); }
     line(&mut out, format!("state    {}", state_shape(&trial.state)));
     if let Some(res) = trial.result {

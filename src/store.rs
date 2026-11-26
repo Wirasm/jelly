@@ -1350,7 +1350,7 @@ impl Store {
                 file.seek(SeekFrom::End(-1))?;
                 let mut last = [0];
                 file.read_exact(&mut last)?;
-                if last != [b'\n'] {
+                if last != *b"\n" {
                     return Err(std::io::Error::other("incomplete event history; repair events.jsonl before retrying"));
                 }
             }

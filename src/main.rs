@@ -681,7 +681,15 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 let shot = match &seen {
                     Some(v) => v["png"].as_str(),
                     None => text.lines().find_map(|l| l.strip_prefix("png ")).map(str::trim),
-                }.ok_or("no screenshot to use as the poster; see the `!` lines")?;
+                }.ok_or_else(|| {
+                    // The `failed` line says why; nothing else is printed before this error.
+                    let lines: Vec<&str> = match &seen {
+                        Some(v) => v["problems"].as_array().into_iter().flatten().filter_map(Value::as_str).collect(),
+                        None => text.lines().collect(),
+                    };
+                    let why: Vec<&str> = lines.into_iter().filter(|l| l.starts_with("failed ")).collect();
+                    format!("no screenshot to use as the poster\n{}", why.join("\n"))
+                })?;
                 let bytes = std::fs::read(shot).map_err(|e| format!("{shot}: {e}"))?;
                 ureq::post(&api(&format!("/{}/assets/poster.png?by={}", id(&name)?, encode(&by))))
                     .set("content-type", "application/octet-stream")
@@ -691,7 +699,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if let Some(v) = seen {
                 return print(v);
             } else if problems {
-                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
+                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ") || l.starts_with("failed ")).map(|l| format!("{l}\n")).collect();
                 output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
             } else {
                 output(format_args!("{text}"))?;
@@ -700,7 +708,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Try { name, width, png, steps, .. } => {
             let url = api(&format!("/{}/try", id(&name)?));
-            // Two renders with --png, each up to the daemon's 20 s limit.
+            // One render, up to the daemon's 20 s limit, after a wait for a free browser.
             let resp = ureq::post(&url).timeout(std::time::Duration::from_secs(90))
                 .send_json(json!({"steps": steps, "width": width, "png": png, "json": json})).map_err(describe)?;
             if json {

@@ -1,11 +1,34 @@
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+
+struct Daemon(Child);
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn open_always_prints_the_address_and_reports_browser_failures() {
     let dir = tempfile::tempdir().unwrap();
+    // `open NAME` asks the daemon whether the jelly exists, so it needs one.
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_jelly"))
+        .args(["serve", "--port", "0", "--home"])
+        .arg(dir.path().join("home"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let base = common::served_url(&mut daemon);
+    let _daemon = Daemon(daemon);
+    ureq::post(&format!("{base}/api/jellies"))
+        .send_json(serde_json::json!({"name": "other:plan", "view": "<p>plan</p>", "verbs": "const verbs = {};", "state": {}, "by": "test"}))
+        .unwrap();
     let opener = dir.path().join(if cfg!(target_os = "macos") {
         "open"
     } else {
@@ -29,11 +52,11 @@ fn open_always_prints_the_address_and_reports_browser_failures() {
             ("", None, "/"),
             ("repro", Some("other:plan"), "/j/other:plan/"),
         ] {
-            let url = format!("http://127.0.0.1:7879{path}");
+            let url = format!("{base}{path}");
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_jelly"));
             cmd.args([
                 "--url",
-                "http://127.0.0.1:7879",
+                &base,
                 "--project",
                 project,
                 "open",

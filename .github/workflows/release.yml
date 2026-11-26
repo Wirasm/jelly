@@ -1,9 +1,10 @@
 # Once a night, what was merged to development since the last release is
 # released: the jelly binary is built for every platform npm installs it on, the
 # npm packages are published, and a GitHub release with the tag `v1.2.3` is
-# made. A night with nothing new to ship does nothing. "Run workflow" on the
-# Actions page does the same at once, for a fix that cannot wait. Nobody tags or
-# bumps a version by hand. A pull request that touches the release only builds.
+# made, once the checks in check.yml pass. A night with nothing new to ship does
+# nothing. "Run workflow" on the Actions page does the same at once, for a fix
+# that cannot wait. Nobody tags or bumps a version by hand. A pull request that
+# touches the release only builds.
 name: release
 
 on:
@@ -53,6 +54,12 @@ jobs:
           echo "the latest release is $latest, Cargo.toml says $ours: releasing $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  # The same checks as a pull request. A night whose checks fail publishes nothing.
+  check:
+    if: github.event_name != 'pull_request' && needs.version.outputs.ships == 'true'
+    needs: version
+    uses: ./.github/workflows/check.yml
+
   build:
     # A pull request always builds, to prove the release still works.
     if: github.event_name == 'pull_request' || needs.version.outputs.ships == 'true'
@@ -78,7 +85,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      # The Rust in rust-toolchain.toml, the one check.yml tested with.
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: The binary starts and says the release version
         if: ${{ !matrix.cross }}
@@ -97,7 +105,7 @@ jobs:
 
   publish:
     if: github.event_name != 'pull_request' && needs.version.outputs.ships == 'true'
-    needs: [version, build]
+    needs: [version, check, build]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}

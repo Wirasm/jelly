@@ -127,7 +127,10 @@ jelly show sketch.html             # one HTML file straight to their screen: a j
 
 Run `jelly look` before you focus a jelly or ask about it, read its png, and fix
 every `error` and `!` line. Problems come with a selector you can paste into
-`try` and `--at`. A jelly with buttons or fields is not ready until `try` has
+`try` and `--at`. A `failed` line means that part of the page was not checked
+(the browser did not finish): look again, and report it if it keeps failing.
+With `--json`, every one of these lines is in `problems`, so an empty
+`problems` means the whole page was checked and nothing was found. A jelly with buttons or fields is not ready until `try` has
 used one and its verb shows under `calls`: `look` only loads the page, and a
 broken button looks fine until someone clicks it. Use `try`, not a browser
 driver: your clicks there are never recorded as the person. An `alert`, `confirm` or

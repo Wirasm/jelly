@@ -77,6 +77,11 @@ cargo test
 cargo clippy
 ```
 
+`.github/workflows/check.yml` runs both on every pull request, with
+`-D warnings` for clippy, and the relay's `npm ci && npm run check && npm test`.
+`rust-toolchain.toml` names the one Rust that builds, tests and releases jelly,
+here and in both workflows; move it forward in a pull request of its own.
+
 The person uses the released jelly day to day (`npx jellyware setup`), with its
 daemon on port 7878 and its skill in `~/.claude/skills/jelly`. While you work on
 jelly itself, that skill and that `jelly` can be a release behind this
@@ -110,7 +115,8 @@ and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.
 Nobody tags or bumps a version by hand. Once a night,
 `.github/workflows/release.yml` publishes what was merged to `development`
 since the last release to npm and GitHub, one patch above the latest release,
-and tags it `vX.Y.Z`. A night where nothing that ships changed (`src`, `assets`,
+and tags it `vX.Y.Z`. It runs `check.yml` first and publishes nothing when
+that fails. A night where nothing that ships changed (`src`, `assets`,
 `skill`, `npm`, `build.rs`, the Cargo files) releases nothing. A merged fix is
 therefore not out until the next night; when it cannot wait, run the workflow
 now: `gh workflow run release.yml --ref development`. Do not push a tag. The

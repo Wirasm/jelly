@@ -9,7 +9,7 @@ metric.
 ```bash
 jelly recipes monitor --out /tmp/monitor       # then edit start.json and driver.sh there
 jelly make monitor --from /tmp/monitor --state /tmp/monitor/start.json --about "Run: <what is running>"
-jelly look monitor                             # fix every `!` and `error` line first
+jelly look monitor                             # fix every `!` and `error` line; look again on a `failed` one
 jelly show monitor
 /tmp/monitor/driver.sh monitor 40 &            # the run: it pushes, and obeys the person
 ```

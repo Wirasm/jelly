@@ -1,0 +1,42 @@
+# The tests, clippy and the relay's checks, on every pull request. The nightly
+# release runs this too and publishes nothing when it fails.
+name: check
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    # The image has Google Chrome at /usr/bin/google-chrome, where jelly looks
+    # for it, so the tests that render pages run here. It has no GPU: WebGL
+    # views get SwiftShader.
+    runs-on: ubuntu-latest
+    # About 3 minutes normally.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # The Rust in rust-toolchain.toml, so a new release's lints cannot stop
+      # the nightly release on their own.
+      - run: rustup toolchain install
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  relay:
+    runs-on: ubuntu-latest
+    # Under a minute normally.
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
