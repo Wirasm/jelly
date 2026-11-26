@@ -8,7 +8,7 @@ diff is the backup, not the page.
 # Write your own state.json. To change the view or verbs: jelly recipes review --out DIR
 jelly make review --recipe review --state state.json --about "Review: <what they asked for>"
 git diff main...HEAD > /tmp/full.diff && jelly asset review /tmp/full.diff
-jelly look review                             # fix every `!` and `error` line first
+jelly look review                             # fix every `!` and `error` line; look again on a `failed` one
 jelly show review
 ```
 

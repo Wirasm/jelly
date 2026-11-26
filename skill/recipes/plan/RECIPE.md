@@ -8,7 +8,7 @@ It answers "where are you, what is next, and can I still change it?"
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes plan --out DIR
 jelly make plan --recipe plan --state state.json --about "Plan: <what they asked for>"
-jelly look plan                               # fix every `!` and `error` line first
+jelly look plan                               # fix every `!` and `error` line; look again on a `failed` one
 jelly show plan
 jelly do plan start '{"step":"schema"}'     # before you touch anything
 ```

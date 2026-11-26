@@ -294,8 +294,12 @@ their 20 s limit.
 png in the light one; only `--full` needs a third render, at the height the
 light one measured. `try --png` takes its png in the render that does the
 steps. A render that fails (no browser, a crash, the 20 s limit) prints a
-`failed` line, not a `!` line, and in `--json` goes under `render_failed`: it
-says nothing about the page, and agents fix every `!` line.
+`failed` line that names what was not checked, such as dark mode at 1280px,
+with `problems` in `--json` holding it too. It is not a `!` line, because agents
+change the page for those. A light render whose screenshot fails keeps the
+snapshot the page sent; only the png is missing. `--compare` reports nothing
+as new or fixed unless all four of its renders sent a snapshot, and its
+`new_problems` and `fixed_problems` are then null.
 
 ## Upgrading a home
 

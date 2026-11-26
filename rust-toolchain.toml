@@ -1,0 +1,5 @@
+# The Rust that tests, lints and releases jelly, locally and in CI.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy"]
+profile = "minimal"

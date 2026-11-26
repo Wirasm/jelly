@@ -8,7 +8,7 @@ Start it as soon as you have two observations, and add to it as you go.
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes timeline --out DIR
 jelly make timeline --recipe timeline --state state.json --about "Why <the thing> happened"
-jelly look timeline                            # fix every `!` and `error` line first
+jelly look timeline                            # fix every `!` and `error` line; look again on a `failed` one
 jelly show timeline
 ```
 

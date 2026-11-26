@@ -15,16 +15,20 @@ jobs:
     # for it, so the tests that render pages run here. It has no GPU: WebGL
     # views get SwiftShader.
     runs-on: ubuntu-latest
+    # About 3 minutes normally.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      # A fixed Rust, so a new release's clippy lints do not stop the nightly
-      # release on their own; move it forward in a pull request.
-      - run: rustup toolchain install 1.100.0 --profile minimal --component clippy && rustup default 1.100.0
+      # The Rust in rust-toolchain.toml, so a new release's lints cannot stop
+      # the nightly release on their own.
+      - run: rustup toolchain install
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
   relay:
     runs-on: ubuntu-latest
+    # Under a minute normally.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: relay

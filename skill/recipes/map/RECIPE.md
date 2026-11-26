@@ -8,7 +8,7 @@ through the picture instead of reading a description of it.
 ```bash
 # Write your own state.json. To change the view or verbs: jelly recipes map --out DIR
 jelly make map --recipe map --state state.json --about "How <the system> works"
-jelly look map                                # fix every `!` and `error` line first
+jelly look map                                # fix every `!` and `error` line; look again on a `failed` one
 jelly show map
 ```
 

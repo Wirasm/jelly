@@ -10,7 +10,7 @@ what would I change in it?"
 # Write your own state.json. To change the frame: jelly recipes compare --out DIR
 jelly make invite --recipe compare --state state.json --about "Invite flow: three takes"
 jelly asset invite path/to/the/products/app.css      # then name it in state.css
-jelly look invite                             # fix every `!` and `error` line first
+jelly look invite                             # fix every `!` and `error` line; look again on a `failed` one
 jelly try invite --click "[data-version=sheet]" --click ".jc-screen:not([hidden]) [data-next]"
 jelly show invite
 jelly hear --wait invite                      # in the background: wakes you when they pick
