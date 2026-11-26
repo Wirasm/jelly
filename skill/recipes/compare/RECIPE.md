@@ -62,7 +62,9 @@ nearest id. That is how a comment tells you which version and step it is about.
 ## What you hear
 
 - `pick {"id":"sheet"}` when they choose. The view also sends, so a
-  `jelly hear --wait` in the background wakes you.
+  `jelly hear --wait` in the background wakes you. Switching version and
+  walking steps are looking around: the frame keeps them in the page (in
+  `sessionStorage`, so they outlive a `jelly shape`) and calls no verb.
 - Comments, each with a selector like `#sheet-2 > div > button`: version
   `sheet`, step 2, that button.
 

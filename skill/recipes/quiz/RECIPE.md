@@ -15,6 +15,11 @@ People join with a name (it becomes `person:<name>` on their events) and wait in
 the lobby. You are the quizmaster: only non-person callers can open, reveal,
 add or finish. The example `state.json` is a short Nordic food quiz.
 
+`join` and `vote` are each person's own decisions, and everyone else sees them
+(the names in the lobby, how many answered, the bars), so both stay in state
+and count on Send. Nobody needs to press Send in a quiz: you follow the votes
+with `--every`.
+
 ## State
 
 | Key | What goes in it |
@@ -32,7 +37,7 @@ A right answer scores 500 plus up to 500 for speed.
 
 ```bash
 jelly do quiz open '{}'                 # the next round; prints `since seq:N`
-jelly hear --wait quiz --since seq:N --json      # one event per vote; repeat until all voted or time is up
+jelly hear --wait quiz --every --since seq:N --json   # one event per vote; repeat until all voted or time is up
 jelly do quiz reveal '{}'               # scores, the right answer and the vote bars
 jelly do quiz add '{"q":"…","options":["…","…"],"correct":0}'   # a round written from what you just saw
 jelly do quiz finish '{}'               # final scores

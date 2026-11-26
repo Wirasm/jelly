@@ -61,7 +61,8 @@ use it, so they cannot disagree.
 
 The person toggles items, moves levers, goes back to your cut and locks. It
 arrives in `jelly hear` as `put`, `lever`, `reset`, `lock` and `unlock` calls. A
-slider calls `lever` once, when they let go. `lock` is refused while the plan
+slider calls `lever` once, when they let go, so the count on Send counts
+what they set, not how far they dragged. `lock` is refused while the plan
 does not fit, and says by how much.
 
 ```bash

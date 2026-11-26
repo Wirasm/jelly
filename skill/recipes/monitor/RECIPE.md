@@ -97,6 +97,9 @@ Other verbs the driver uses: `phase '{"id":"measure"}'`, `log '{"text":"…","le
 
 Everything the person does arrives in `jelly hear` as `pause`, `resume`, `stop`,
 `threshold` and `judge` calls, and the driver sees it in `control` without you.
+Each of those calls and each comment adds one to the count on Send; each − or +
+on a limit is one `threshold`. Jumping from a chart to an anomaly is looking around: it
+stays in the page and calls no verb.
 
 - **Pause, resume, stop**: the driver handles them. If you are not running a
   driver (you push by hand each turn), read `jelly state monitor /control` at

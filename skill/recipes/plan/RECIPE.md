@@ -58,7 +58,11 @@ point; change them when the plan needs something else.
 The person reorders, vetoes, gates, clears a gate and leaves notes. It arrives
 in `jelly hear` as `move`, `veto`, `unveto`, `gate`, `clear_gate` and `note`
 calls. Read the inbox before every `start`: a veto on the step in progress
-stops it and puts it back to not started, and you should stop too.
+stops it and puts it back to not started, and you should stop too. Each of
+those calls and each comment adds one to the count on Send. Which step is on
+the stage and an open note field are looking around: they stay in the page and
+call no verb. Keep it so when you change the view, or call such a verb with
+`{ quiet: true }`.
 
 ```bash
 jelly do plan start '{"step":"schema"}'

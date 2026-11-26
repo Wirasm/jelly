@@ -59,7 +59,12 @@ something else: columns instead of rows, a timeline, numbers on the wires.
 
 The person taps boxes, walks traces and reacts. It arrives in `jelly hear` as
 `flag` (`wrong`, `more` or `careful`, on a node, with a note), `unflag`, and
-`understood` (they reached the end of a trace and it made sense).
+`understood` (they reached the end of a trace and it made sense). Each of those
+calls and each comment adds one to the count on Send. The open node, the trace
+being walked and the step it is on, and the overlay switch are looking around: they
+stay in the page and call no verb, and a `jelly shape` with a new view starts
+the person at the whole map again. Keep them out of verbs when you change the
+view, or call such a verb with `{ quiet: true }`.
 
 ```bash
 # "This is wrong": check the code. If they are right, fix the node as you answer.
