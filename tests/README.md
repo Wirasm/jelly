@@ -1,3 +1,13 @@
+# Tests that render pages
+
+`look`, `try`, `pr` and the share check start headless Chrome, so `cargo test`
+needs one: Chrome, Chromium, Edge or Brave in a usual place, or `JELLY_CHROME`
+set to its executable. GitHub's ubuntu runner has Chrome at
+`/usr/bin/google-chrome`. The tests run in parallel like the rest; every daemon
+on the machine shares a few browser slots (`browser_slot` in
+`src/server/look.rs`), so a busy machine makes renders wait their turn instead
+of starving each other.
+
 # Shared-file browser check
 
 `cargo test` includes the shared-file browser regression. Chrome/Chromium is

@@ -1217,12 +1217,13 @@ mod tests {
                 move |width, height, path, dark| {
                     let browser = browser.clone();
                     async move {
-                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), dark, std::time::Duration::from_secs(5)).await
+                        run_browser(&browser, 0, "test:x", None, width, height, path.as_deref(), dark, RENDER_LIMIT).await
                     }
                 }).await.unwrap();
             let out = String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
             assert!(!out.contains("png      "), "old_png={old_png}: {out}");
-            assert!(out.contains(&format!("No screenshot: the browser failed (exit status: {exit})")), "{out}");
+            assert!(out.contains(&format!("failed   no screenshot: the browser failed (exit status: {exit}) (the render failed, not the page)")), "{out}");
+            assert!(!out.contains("!  "), "{out}");
         }
     }
 

@@ -499,7 +499,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Feed { name: None, .. } => {
             let feeds = feed::read(&default_home()?)?;
             if feeds.is_empty() {
-                return output(format_args!("No feeds.\n")).map_err(Into::into);
+                return output(format_args!("No feeds.\n"));
             }
             for f in feeds {
                 output(format_args!("{}  {} · in {}\n", f.jelly, f.line(), f.cwd.display()))?;
@@ -517,7 +517,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if stop {
                 if feeds.len() == had { return Err(format!("{jelly} has no feed").into()); }
                 feed::write(&home, &feeds)?;
-                return output(format_args!("{jelly}: feed stopped\n")).map_err(Into::into);
+                return output(format_args!("{jelly}: feed stopped\n"));
             }
             let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --stop)")?;
             if command.is_empty() { return Err("give the command after `--`: jelly feed NAME VERB -- COMMAND".into()); }
@@ -681,7 +681,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             if let Some(v) = seen {
                 return print(v);
             } else if problems {
-                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ")).map(|l| format!("{l}\n")).collect();
+                let found: String = text.lines().filter(|l| l.starts_with("error ") || l.starts_with("! ") || l.starts_with("failed ")).map(|l| format!("{l}\n")).collect();
                 output(format_args!("{}", if found.is_empty() { "no problems\n" } else { &found }))?;
             } else {
                 output(format_args!("{text}"))?;
@@ -690,7 +690,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Try { name, width, png, steps, .. } => {
             let url = api(&format!("/{}/try", id(&name)?));
-            // Two renders with --png, each up to the daemon's 20 s limit.
+            // One render, up to the daemon's 20 s limit, after a wait for a free browser.
             let resp = ureq::post(&url).timeout(std::time::Duration::from_secs(90))
                 .send_json(json!({"steps": steps, "width": width, "png": png, "json": json})).map_err(describe)?;
             if json {

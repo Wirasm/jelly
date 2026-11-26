@@ -261,6 +261,19 @@ for `load` and 3 s for the budget. If the budget is not spent by then, it runs
 the 2.5 s in 500 ms steps at about real speed, so the page's own requests still
 get answers between steps, and then takes what is on screen.
 
+Chrome uses the machine's GPU, or SwiftShader (its software GPU) where there is
+none, so WebGL views get a context either way. Do not force SwiftShader with
+`--use-angle=swiftshader`: on a machine with a GPU it holds the clock back a
+second or more per render, and under load long enough for renders to hit
+their 20 s limit.
+
+`look` at one width runs a light and a dark render side by side, and takes the
+png in the light one; only `--full` needs a third render, at the height the
+light one measured. `try --png` takes its png in the render that does the
+steps. A render that fails (no browser, a crash, the 20 s limit) prints a
+`failed` line, not a `!` line, and in `--json` goes under `render_failed`: it
+says nothing about the page, and agents fix every `!` line.
+
 ## Upgrading a home
 
 jelly keeps no compatibility paths: a daemon reads only the current shape of a
