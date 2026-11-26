@@ -85,16 +85,16 @@ its own progress, apart from the same reader's unfiltered one, so it never moves
 an unfiltered read past events.
 Omitting `project` or using an empty string reads all projects. The response is
 `{ "events": [...], "through": 123 }`; events include `text`. The first read
-registers a fixed one-hour starting window, so uncommitted events remain available
-on retry even after that hour passes. After decoding and successfully writing and
+reads the log backwards to the first event older than an hour and stores that
+event's position as the reader's, so uncommitted events remain available on retry
+even after that hour passes. After decoding and successfully writing and
 flushing output, the CLI sends POST `/api/inbox/commit` with the same project and
 reader plus the returned `through` position. Commits only move that reader's
 progress forward and leave events newer than `through` unread. Lost or undecodable
 read responses do not consume events. Ambiguous output, failed acknowledgements
-or client crashes may replay events. GET `/api/inbox?project=...&since=...` remains
-a non-consuming timestamp query returning an array.
+or client crashes may replay events.
 
-Both routes return every event. The CLI folds what it prints (`inbox_lines` in
+The route returns every event. The CLI folds what it prints (`inbox_lines` in
 `main.rs`): the calls of one verb by one person on one jelly become one line,
 at the last call, with the count and that call's args (`Event::heard`).
 
@@ -112,9 +112,9 @@ to 1 MiB of your older events, so the inbox and `jelly look` still have them. A 
 keeps every event's position, and inbox reads go back only as far as the reader's
 position. `jelly look` uses the last change and last eight person events per jelly,
 kept in memory during startup validation and updated on append and trim; it does
-not scan the log on each request. Initial one-hour inbox windows and timestamp
-queries use an in-memory timestamp index to read only matching event byte ranges,
-then return them in sequence order, even when the wall clock moves backwards.
+not scan the log on each request. An inbox read starts at the end of the log and
+stops at the reader's position, or for a new reader at the first event older than
+an hour, so it never parses the history before that.
 
 ## Send and waiting
 

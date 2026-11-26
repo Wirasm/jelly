@@ -66,15 +66,10 @@ fn inbox_readers_are_independent_and_daemon_owned() {
     std::fs::create_dir_all(client.join("inbox")).unwrap();
     std::fs::write(client.join("inbox/p"), "9999999999999").unwrap();
     let daemon = Daemon::start(&home);
-    let event = daemon.person_event();
-    let legacy = || -> Vec<Value> { ureq::get(&format!("{}/api/inbox?project=p&since=0", daemon.url)).call().unwrap().into_json().unwrap() };
-    assert_eq!(legacy()[0]["seq"], event["seq"]);
+    daemon.person_event();
     assert!(!home.join("inbox-readers.json").exists());
     let read = |name: &str| stdout(daemon.command(&client).env("JELLY_AS", name).arg("hear").output().unwrap());
     for name in ["reader-a", "reader-b"] { has_event(&read(name)); empty(&read(name)); }
-    assert_eq!(legacy().len(), 1);
-    let filtered: Vec<Value> = ureq::get(&format!("{}/api/inbox?project=p&since={}", daemon.url, event["at_ms"])).call().unwrap().into_json().unwrap();
-    assert!(filtered.is_empty());
     daemon.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}));
     for name in ["reader-a", "reader-b"] { has_event(&read(name)); empty(&read(name)); }
     assert_eq!(std::fs::read_to_string(client.join("inbox/p")).unwrap(), "9999999999999");
@@ -261,10 +256,6 @@ fn inbox_missing_indexed_log_reports_failure_and_replays_after_restoration() {
         assert!(warning.contains("jelly hear failed: could not read inbox"), "{warning}");
         assert_eq!(std::fs::read(&cursors).unwrap(), saved_cursors);
     }
-    for since in [0, u64::MAX] {
-        let response = ureq::get(&format!("{}/api/inbox?since={since}", daemon.url)).call();
-        assert!(matches!(response, Err(ureq::Error::Status(500, _))));
-    }
     std::fs::write(&path, saved_log).unwrap();
     for reader in ["fresh", "retry"] {
         has_event(&stdout(daemon.command(temp.path()).args(["--as", reader, "hear"]).output().unwrap()));
@@ -281,8 +272,6 @@ fn inbox_uncommitted_reads_replay_and_commits_preserve_new_events() {
     let first = daemon.post("/api/inbox", request.clone());
     assert_eq!(first["events"][0]["seq"], event["seq"]);
     assert_eq!(daemon.post("/api/inbox", request.clone()), first);
-    let cursors: Value = serde_json::from_slice(&std::fs::read(temp.path().join("inbox-readers.json")).unwrap()).unwrap();
-    assert!(cursors[0].get("seq").is_none());
     let later = daemon.post("/api/jellies/p:sample/do", json!({"verb": "click", "args": {}, "by": "person"}));
     let mut commit = request.clone();
     commit["through"] = first["through"].clone();
