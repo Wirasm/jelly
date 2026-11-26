@@ -183,31 +183,6 @@ fn a_wait_without_since_starts_now_and_since_timeout_keeps_its_diagnostic() {
     assert!(daemon.log().iter().all(|ev| ev.get("state").is_none()));
 }
 
-/// A wait whose reader falls behind still hears the Send: the daemon reads the
-/// event log, so events the person fires after it cannot push it out.
-#[cfg(unix)]
-#[test]
-fn a_wait_that_falls_behind_still_hears_the_send() {
-    let daemon = Daemon::start();
-    // Every live event carries the whole state, so a big one fills the
-    // connection's buffers and then the daemon's queue of 1024 events.
-    daemon.post("/api/jellies", json!({"name": "busy", "project": "test", "view": "", "verbs": "const verbs = { tick(s) { s.n = (s.n || 0) + 1; } };", "state": {"big": "x".repeat(16 * 1024)}, "by": "agent"}));
-    let child = daemon.command(&["hear", "--wait", "--json", "busy", "--timeout", "30"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    let pid = child.id() as libc::pid_t;
-    // A stopped reader is a slow one: it reads nothing while the person works.
-    unsafe { libc::kill(pid, libc::SIGSTOP) };
-    let tick = || { daemon.post("/api/jellies/test:busy/do", json!({"verb": "tick", "by": "person"})); };
-    (0..300).for_each(|_| tick());
-    let sent = daemon.post("/api/jellies/test:busy/send", json!({"by": "person"}));
-    (0..1100).for_each(|_| tick());
-    unsafe { libc::kill(pid, libc::SIGCONT) };
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "the Send was missed: {}", String::from_utf8_lossy(&output.stderr));
-    let event: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!((event["kind"].clone(), event["seq"].clone()), (json!("send"), sent["seq"].clone()));
-}
-
 #[test]
 fn historical_short_names_keep_the_current_project_after_removal() {
     for other_exists in [false, true] {

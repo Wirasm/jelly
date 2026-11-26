@@ -2,29 +2,18 @@
 
 use super::*;
 
-/// `GET /api/wait`: what `jelly hear --wait` asks for. Without `since` the wait
-/// starts after the newest event the daemon has recorded.
-#[derive(Deserialize)]
-pub(super) struct WaitReq {
-    since: Option<u64>,
-    by: String,
-    project_jelly: Option<String>,
-    jelly: Option<String>,
-    timeout: Option<u64>,
-    #[serde(default)]
-    every: bool,
-}
-
-#[derive(Clone)]
+/// `GET /api/wait`, which is what `jelly hear --wait` asks.
+#[derive(Deserialize, Clone)]
 pub(super) struct WaitQ {
-    pub(super) since: u64,
+    /// Return the first matching event after this one. Without it the wait
+    /// starts at the newest event when it begins, and reads no history.
+    pub(super) since: Option<u64>,
     pub(super) by: String,
-    /// Resolve short names against the jellies present at the starting sequence.
-    pub(super) project_jelly: Option<String>,
     pub(super) jelly: Option<String>,
     pub(super) timeout: Option<u64>,
     /// Return on any change. Without it only a `send` ends the wait: the
     /// person works through a jelly and says when they are done.
+    #[serde(default)]
     pub(super) every: bool,
 }
 
@@ -36,12 +25,8 @@ pub(super) async fn send(State(app): State<Shared>, Path(name): Path<String>, Js
     app.change(|s| s.send(&name, &by(r.by)?))
 }
 
-pub(super) async fn wait(State(app): State<Shared>, Query(r): Query<WaitReq>) -> Result<Response, ApiError> {
-    by(Some(r.by.clone()))?;
-    // Every later event is in the log, which the wait reads, so "now" needs no
-    // lock shared with the wait itself.
-    let since = r.since.unwrap_or_else(|| app.store.lock().expect("store lock").sequence());
-    let q = WaitQ { since, by: r.by, project_jelly: r.project_jelly, jelly: r.jelly, timeout: r.timeout, every: r.every };
+pub(super) async fn wait(State(app): State<Shared>, Query(q): Query<WaitQ>) -> Result<Response, ApiError> {
+    by(Some(q.by.clone()))?;
     match wait_since(&app, &q).await? {
         Some(ev) => Ok(Json(ev).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
@@ -56,7 +41,8 @@ pub(super) fn recorded_change(reader: &mut impl BufRead, q: &WaitQ) -> Result<Op
     let mut line = String::new();
     while reader.read_line(&mut line).map_err(history_error)? != 0 {
         let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
-        if ev.seq > q.since && ev.by != q.by && (q.every || ev.kind == crate::store::EventKind::Send)
+        // A wait sets `since` before it reads (`wait_since_at_handoff`).
+        if q.since.is_none_or(|since| ev.seq > since) && ev.by != q.by && (q.every || ev.kind == crate::store::EventKind::Send)
             && q.jelly.as_ref().map_or(ev.jelly != PAGE, |j| *j == ev.jelly)
         {
             return Ok(Some(ev));
@@ -83,6 +69,15 @@ impl History {
             Err(e) => return Err(history_error(e)),
         };
         Ok(History { reader, trims: store.trims() })
+    }
+
+    /// The log from its end: what is recorded after `store.sequence()`.
+    pub(super) fn at_end(store: &Store) -> Result<History, Error> {
+        let mut history = History::open(store)?;
+        if let Some(reader) = &mut history.reader {
+            std::io::Seek::seek(reader, std::io::SeekFrom::End(0)).map_err(history_error)?;
+        }
+        Ok(history)
     }
 
     pub(super) fn next_change(&mut self, store: &Store, q: &WaitQ) -> Result<Option<Event>, Error> {
@@ -112,34 +107,19 @@ pub(super) async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl
         .ok_or_else(|| Error::Invalid("timeout is too large".into()))).transpose()?;
     let history = {
         let mut store = app.store.lock().expect("store lock");
-        let mut history = History::open(&store)?;
-        if let (Some(preferred), Some(reader)) = (&q.project_jelly, &mut history.reader) {
-            let (project, short) = preferred.split_once(':').unwrap_or(("", preferred));
-            let mut identities = std::collections::BTreeSet::new();
-            let mut line = String::new();
-            while reader.read_line(&mut line).map_err(history_error)? != 0 {
-                let ev: Event = serde_json::from_str(&line).map_err(history_error)?;
-                if ev.seq > q.since { break; }
-                if ev.kind == crate::store::EventKind::Move {
-                    if let Some(from) = ev.args.as_ref().and_then(|args| args["from"].as_str()) {
-                        identities.remove(from);
-                    }
-                }
-                if ev.jelly.split_once(':').map_or(ev.jelly.as_str(), |(_, short)| short) == short {
-                    if ev.kind == crate::store::EventKind::Remove {
-                        identities.remove(&ev.jelly);
-                    } else {
-                        identities.insert(ev.jelly);
-                    }
-                }
-                line.clear();
+        let history = match q.since {
+            Some(_) => {
+                let mut history = History::open(&store)?;
+                if let Some(ev) = history.next_change(&store, &q)? { return Ok(Some(ev)); }
+                history
             }
-            if !identities.is_empty() {
-                q.jelly = Some(crate::store::full_name(short, project));
+            // Now, under the lock every event is numbered and logged under:
+            // the log ends at this sequence, and the wait is already subscribed.
+            None => {
+                q.since = Some(store.sequence());
+                History::at_end(&store)?
             }
-            std::io::Seek::rewind(reader).map_err(history_error)?;
-        }
-        if let Some(ev) = history.next_change(&store, &q)? { return Ok(Some(ev)); }
+        };
         if let Some(name) = &q.jelly { store.get(name)?; }
         after_scan(&mut store);
         history
@@ -221,7 +201,7 @@ mod wait_tests {
     }
 
     fn query(jelly: Option<&str>, since: u64) -> WaitQ {
-        WaitQ { since, by: "agent".into(), project_jelly: None, jelly: jelly.map(String::from), timeout: Some(0), every: true }
+        WaitQ { since: Some(since), by: "agent".into(), jelly: jelly.map(String::from), timeout: Some(0), every: true }
     }
 
     fn note(app: &App, jelly: &str, who: &str) -> Event {
@@ -291,6 +271,21 @@ mod wait_tests {
         let woke = wait_since(&app, &on_send).await.unwrap().unwrap();
         assert_eq!((woke.seq, woke.args), (send.seq, Some(json!(2))));
         assert!(wait_since(&app, &WaitQ { every: false, ..query(Some("j"), send.seq) }).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_wait_without_since_hears_the_next_send_and_not_an_earlier_one() {
+        let (_dir, app) = fixture(8);
+        let _ = app.change(|s| s.send("j", "person")).unwrap();
+        let q = WaitQ { since: None, every: false, timeout: Some(5), ..query(Some("j"), 0) };
+        let waiting = wait_since(&app, &q);
+        tokio::pin!(waiting);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        }).await;
+        let send = app.change(|s| s.send("j", "person")).unwrap().0;
+        assert_eq!(waiting.await.unwrap().unwrap().seq, send.seq);
     }
 
     #[tokio::test]

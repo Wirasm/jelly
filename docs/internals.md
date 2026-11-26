@@ -128,8 +128,16 @@ sets the count to zero and is the only event that ends `GET /api/wait`, which is
 all `jelly hear --wait` does, unless `every=true` (`--every`). The wait reads
 `events.jsonl` after the `since` position, and the live bus only wakes it, so a
 reader that falls behind still hears the Send. Without `since` (no `--since`)
-the daemon starts the wait at its newest event. The relay keeps the
+the wait takes the daemon's newest event under the store lock, which every
+event is numbered and logged under, and reads from the end of the log, so it
+starts without reading history. `jelly` is a full name: the CLI resolves a
+short one in its project before it asks. The relay keeps the
 same count for a shared jelly.
+
+Two other listeners wake an agent on Send, and read Sends the same way. The
+daemon's `--wake` task (`server/wake.rs`) follows the log from its end, woken by
+the live bus. The Pi extension (`assets/pi-extension.ts`) runs one
+`jelly hear --wait --json` at a time, each `--since` the Send the last returned.
 
 ## Who is looking
 

@@ -581,16 +581,11 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             Ok(())
         }
         Cmd::Hear { wait: true, name, timeout, since, every, .. } => {
-            // A short name with --since is resolved by the daemon against the jellies
-            // present at that change, so a jelly removed since is still heard.
-            let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
-                .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
             // Without --since the daemon starts the wait at its newest event.
             let mut req = ureq::get(&format!("{}/api/wait", cli.url)).query("by", &by);
             if let Some(SequenceToken(seq)) = since { req = req.query("since", &seq.to_string()); }
             if let Some(n) = &name { req = req.query("jelly", n); }
-            if let Some(preferred) = project_jelly { req = req.query("project_jelly", &preferred); }
             if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
             if every { req = req.query("every", "true"); }
             let resp = req.call().map_err(describe)?;
