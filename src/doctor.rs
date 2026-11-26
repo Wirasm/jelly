@@ -52,6 +52,7 @@ pub fn run(home: &Path, url: &str) -> Vec<Check> {
             State::Link(target) => Check::ok(format!("{name} (a link to {})", target.display())),
             State::Missing => Check::fix(format!("{name} is missing"), "jelly setup"),
             State::Stale => Check::fix(format!("{name} is not the one this jelly comes with"), "jelly setup"),
+            State::Invalid => Check::fix(format!("{name} is not valid JSON, so setup leaves it alone"), "fix the file by hand, then run jelly setup"),
         }
     }));
     checks

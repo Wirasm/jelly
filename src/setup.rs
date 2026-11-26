@@ -54,6 +54,8 @@ pub enum State {
     Link(PathBuf),
     Missing,
     Stale,
+    /// A settings file that is not JSON, which `setup` will not touch.
+    Invalid,
 }
 
 /// What belongs where, for every agent that has a folder in `home`. `setup`
@@ -119,15 +121,12 @@ impl Item {
             Kind::File(text) if same(&self.path, text.as_bytes()) => State::Current,
             Kind::Skill | Kind::File(_) => State::Stale,
             Kind::Hook { event, command, .. } => {
-                let settings = fs::read_to_string(&self.path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok());
-                let Some(mut settings) = settings else { return State::Missing };
-                let found = ours(&mut settings, event, command);
-                if found.iter().any(|c| *c == command) {
-                    State::Current
-                } else if found.is_empty() {
-                    State::Missing
-                } else {
-                    State::Stale
+                let Ok(settings) = fs::read_to_string(&self.path).map(|text| serde_json::from_str::<Value>(&text)) else { return State::Missing };
+                let Ok(settings) = settings else { return State::Invalid };
+                match ours(&settings, event, command).as_slice() {
+                    [] => State::Missing,
+                    [(_, _, true)] => State::Current,
+                    _ => State::Stale,
                 }
             }
         }
@@ -190,13 +189,10 @@ impl Item {
             let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())? + "\n";
             fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))
         };
-        let found = ours(&mut settings, event, command);
+        let found = ours(&settings, event, command);
         if !found.is_empty() {
-            if found.iter().all(|c| *c == command) {
+            if !settle(&mut settings, event, command, &found) {
                 return Ok(self.line("already there"));
-            }
-            for c in found {
-                *c = json!(command);
             }
             save(&settings)?;
             return Ok(self.line(if dry_run { "would update" } else { "updated" }));
@@ -218,11 +214,31 @@ impl Item {
 
 /// The commands among Claude Code's hooks for `event` that run jelly's
 /// `command`: exactly, or with a path to the binary (`/old/bin/jelly hear --hook`).
-fn ours<'a>(settings: &'a mut Value, event: &str, command: &str) -> Vec<&'a mut Value> {
+/// Each is found at `(entry, hook)` in the event's list, with whether it is exact.
+fn ours(settings: &Value, event: &str, command: &str) -> Vec<(usize, usize, bool)> {
     let runs = |c: &str| c == command || c.strip_suffix(command).is_some_and(|dir| dir.ends_with(['/', '\\']));
-    settings.get_mut("hooks").and_then(|h| h.get_mut(event)).and_then(Value::as_array_mut).into_iter().flatten()
-        .filter_map(|entry| entry.get_mut("hooks").and_then(Value::as_array_mut)).flatten()
-        .filter_map(|hook| hook.get_mut("command")).filter(|c| c.as_str().is_some_and(runs)).collect()
+    let entries = settings.get("hooks").and_then(|h| h.get(event)).and_then(Value::as_array);
+    entries.into_iter().flatten().enumerate()
+        .flat_map(|(e, entry)| entry.get("hooks").and_then(Value::as_array).into_iter().flatten().enumerate().map(move |(h, hook)| (e, h, hook)))
+        .filter_map(|(e, h, hook)| hook.get("command").and_then(Value::as_str).filter(|c| runs(c)).map(|c| (e, h, c == command)))
+        .collect()
+}
+
+/// Leaves one hook for `command` among those `ours` found: the exact one if
+/// there is one, else the first, given `command`. Says whether anything changed.
+fn settle(settings: &mut Value, event: &str, command: &str, found: &[(usize, usize, bool)]) -> bool {
+    let keep = found.iter().find(|f| f.2).unwrap_or(&found[0]);
+    let Some(entries) = settings.get_mut("hooks").and_then(|h| h.get_mut(event)).and_then(Value::as_array_mut) else { return false };
+    entries[keep.0]["hooks"][keep.1]["command"] = json!(command);
+    // Last first, so the positions still to remove stay where they were.
+    for &(e, h, _) in found.iter().rev().filter(|f| *f != keep) {
+        let hooks = entries[e]["hooks"].as_array_mut().expect("ours found a list here");
+        hooks.remove(h);
+        if hooks.is_empty() {
+            entries.remove(e);
+        }
+    }
+    !keep.2 || found.len() > 1
 }
 
 #[cfg(test)]
@@ -284,5 +300,16 @@ mod tests {
         assert_eq!(after["hooks"]["UserPromptSubmit"], json!([{"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}]));
         assert_eq!(after["hooks"]["PostToolUse"][0]["hooks"][0]["command"], PLAN_HOOK);
         assert!(hooks().iter().all(|i| matches!(i.state(), State::Current)));
+
+        // The current hook beside one by an old path: one is left.
+        let both = json!([{"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}, {"hooks": [{"type": "command", "command": format!("/gone/bin/{HOOK}")}]}]);
+        fs::write(&settings, json!({"hooks": {"UserPromptSubmit": both}}).to_string()).unwrap();
+        run(home.path(), false).unwrap();
+        let after: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(after["hooks"]["UserPromptSubmit"], json!([{"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}]));
+
+        // A file that is not JSON: doctor says so, not that the hook is missing.
+        fs::write(&settings, "{ not json").unwrap();
+        assert!(hooks().iter().all(|i| matches!(i.state(), State::Invalid)));
     }
 }

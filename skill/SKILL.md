@@ -327,8 +327,9 @@ A jelly's full name is `project:name`; the project is the git repo you run in
 page, which changes its name: when a name you remember is gone, `jelly find`
 it. A short name means a jelly of the project you are in, in the CLI and in
 `jelly.other`; outside a project, the jelly with no project. For any other
-jelly, use the full name: a short name that only another project has is refused
-with the full name to use.
+jelly, use the full name; a jelly with no project is reached from a repo with
+`--project ""`. A short name that only another project has is refused with the
+full name to use.
 
 A project is only a name. You are in the one named after your repo unless you
 say otherwise, and you can work in any other:

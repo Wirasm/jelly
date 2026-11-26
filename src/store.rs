@@ -648,11 +648,11 @@ impl Store {
     fn missing(&self, name: &str) -> Error {
         let short = |id: &str| id.split_once(':').map_or(id, |(_, s)| s).to_string();
         let elsewhere: Vec<String> = self.jellies.keys().filter(|id| short(id) == short(name))
-            .map(|id| if id.contains(':') { id.clone() } else { format!("{id} (it has no project: pass --project \"\")") }).collect();
+            .map(|id| if id.contains(':') { id.clone() } else { format!("{id}, which has no project") }).collect();
         if elsewhere.is_empty() {
             return Error::NotFound(name.into());
         }
-        Error::NotFound(format!("{name}; did you mean {}? A short name means a jelly in this project only: give the full name", elsewhere.join(" or ")))
+        Error::NotFound(format!("{name}; did you mean {}? A short name means a jelly of this project only", elsewhere.join(" or ")))
     }
 
     #[allow(clippy::too_many_arguments)] // one call site per caller; a struct would only rename the arguments

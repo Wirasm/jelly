@@ -158,7 +158,7 @@ pub enum Cmd {
     Keep { name: String },
     /// Stop keeping a jelly.
     Unkeep { name: String },
-    /// Remove a jelly and its history.
+    /// Remove a jelly, its history and its feed.
     Rm { name: String },
     /// Stream events as JSON lines, for one jelly or all.
     Events {
@@ -341,8 +341,9 @@ pub enum Cmd {
     /// The command runs without a shell, from the folder you ran `jelly feed`
     /// in; use `sh -c '...'` for a pipe. A jelly has one feed: a new one
     /// replaces it. `jelly look NAME` says when it last ran and why it failed.
-    /// The feed rests while the jelly is archived, and follows it through
-    /// `jelly move` and `jelly project --move`. Without a NAME, list feeds.
+    /// The feed rests while the jelly is archived, follows it through
+    /// `jelly move` and `jelly project --move`, and goes with `jelly rm`.
+    /// Without a NAME, list feeds.
     Feed {
         name: Option<String>,
         verb: Option<String>,

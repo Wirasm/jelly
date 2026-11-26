@@ -199,9 +199,12 @@ they differ, so a home made by an older binary gets the new page.
 `/api/version` names; the daemon reads it every second and never writes it,
 and no HTTP route touches it. A feed belongs to a jelly by its full name, so
 `jelly move` and `jelly project --move` rewrite the file to take the feed
-along. A move on the jelly page cannot: `jelly feed` lists such a feed as not
-running. A due feed's command runs without a shell in the folder the feed was
-made in, for at most 60 seconds, one run at a time per jelly. Its standard output, parsed as JSON, becomes the
+along, dropping a feed left under the new name, and `jelly rm` removes it.
+They read the file before they change the jelly, so a file they cannot read
+stops them first. A move or removal on the jelly page cannot touch the file:
+`jelly feed` lists such a feed as not running. A due feed's command runs
+without a shell in the folder the feed was made in, for at most 60 seconds,
+one run at a time per jelly. Its standard output, parsed as JSON, becomes the
 arguments of the verb, called as `feed`. How the last run went is kept in memory
 and shown by `jelly look`. An archived jelly's feed does not run, and `jelly
 look` says it rests.
