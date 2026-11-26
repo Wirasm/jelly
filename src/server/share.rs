@@ -178,6 +178,7 @@ pub(crate) async fn share(app: &Shared, name: &str, who: &str, days: u64) -> Res
     let (r, share, s, w) = (relay.clone(), record.share.clone(), secret.clone(), who.to_string());
     let made = blocking(move || r.mint(&share, &s, &w, days)).await.map_err(api)?;
     record.links.insert(who.into(), secret.clone());
+    record.expires_at = made["expires_at"].as_u64().or(record.expires_at);
     home(app).save(&record)?;
     Ok(json!({"jelly": name, "url": relay::link(relay.pages(&made), &record.share, &secret), "who": who, "expires_at": made["expires_at"]}))
 }
@@ -195,6 +196,11 @@ pub(crate) async fn pin(app: &Shared, name: &str, hours: u64, days: u64) -> Resu
     let share = live.record.lock().await.share.clone();
     let r = relay.clone();
     let made = blocking(move || r.pin(&share, hours, days)).await.map_err(api)?;
+    {
+        let mut record = live.record.lock().await;
+        record.expires_at = made["expires_at"].as_u64().or(record.expires_at);
+        home(app).save(&record)?;
+    }
     let room: Vec<&Value> = made["room"].as_array().into_iter().flatten().map(|j| &j["name"]).collect();
     Ok(json!({"jelly": name, "pin": made["pin"], "url": relay::join_page(relay.pages(&made)), "expires_at": made["expires_at"], "tries": made["tries"], "room": room}))
 }
@@ -213,7 +219,7 @@ async fn publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, A
         return Err(Error::Invalid("the jelly page cannot be shared; share one of its jellies".into()).into());
     }
     app.store.lock().expect("store lock").get(name)?;
-    let record = Record { jelly: name.into(), share: relay::token(22)?, seq: 0, links: Default::default() };
+    let record = Record { jelly: name.into(), share: relay::token(22)?, seq: 0, links: Default::default(), expires_at: None };
     let live = track(app, record);
     let record = live.record.lock().await;
     let (doc, assets) = {
@@ -267,15 +273,15 @@ pub(crate) async fn list(app: &Shared, here: bool) -> Result<Value, ApiError> {
     let relay = home(app).relay()?;
     let mut out = Vec::new();
     for live in lives {
-        let (jelly, share, links) = {
+        let (jelly, share, links, expires_at) = {
             let r = live.record.lock().await;
-            (r.jelly.clone(), r.share.clone(), r.links.clone())
+            (r.jelly.clone(), r.share.clone(), r.links.clone(), r.expires_at)
         };
         let (r, s) = (relay.clone(), share.clone());
         let asked = if here { blocking(move || r.people(&s)).await.ok() } else { None };
         let mut row = match asked {
             Some(mut v) => { v["people_from"] = json!("relay"); v }
-            None => json!({"people_from": "record", "people": links.keys().map(|who| json!({"who": who, "can_act": !who.is_empty()})).collect::<Vec<_>>()}),
+            None => json!({"people_from": "record", "expires_at": expires_at, "people": links.keys().map(|who| json!({"who": who, "can_act": !who.is_empty()})).collect::<Vec<_>>()}),
         };
         row["jelly"] = json!(jelly);
         // The owner's own way in, when a link was minted here: links made with a PIN have none.
@@ -451,7 +457,7 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
         relay::Home(dir.path().into()).set_relay(&url).unwrap();
 
-        let live = track(&app, Record { jelly: "t:race".into(), share: SHARE.into(), seq: 0, links: Default::default() });
+        let live = track(&app, Record { jelly: "t:race".into(), share: SHARE.into(), seq: 0, links: Default::default(), expires_at: None });
         run(&app, &live);
         while socket.lock().await.is_none() {
             tokio::time::sleep(Duration::from_millis(10)).await;

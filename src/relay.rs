@@ -25,6 +25,10 @@ pub struct Record {
     pub seq: u64,
     /// Each link's secret by whom it is for; "" is the view-only link.
     pub links: BTreeMap<String, String>,
+    /// When the share ends, as the relay said when a link or a PIN was last
+    /// made, so the jelly page can say how long is left without asking it.
+    #[serde(default)]
+    pub expires_at: Option<u64>,
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, String> {
