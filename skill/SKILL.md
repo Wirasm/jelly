@@ -102,8 +102,8 @@ control sits there, move it with
 `:root { --jelly-comment-inset: auto 10px 78px auto; }` (CSS `inset` order; set
 it on `:root`, not on `body`).
 
-On the jelly page, keys typed in a jelly also drive the page: `j`, `k`, the
-arrows, Enter, `n` (the next jelly that waits on them), `c` and Esc. Keys typed into a field stay in the view,
+On the jelly page a jelly is open full size, and keys typed in it also drive
+the page: `n` (the next jelly that waits on the person), `c` and Esc. Keys typed into a field stay in the view,
 and so does Enter on a button or link. On a share link the person can act on,
 `c` toggles comment mode. A view that uses one of these keys itself keeps it by
 calling `preventDefault()` in its `keydown` listener, only when it used the key:
