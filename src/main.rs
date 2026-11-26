@@ -615,6 +615,35 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Reply { name, id: cid, text: None, .. } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Reply { name, id: cid, text: Some(text), resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
         Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
+        Cmd::Project { name: None, .. } => {
+            let list = get(&format!("{}/api/projects", cli.url))?;
+            if json {
+                return print(list);
+            }
+            let list = list.as_array().cloned().unwrap_or_default();
+            if list.is_empty() {
+                output(format_args!("No projects. One appears when a jelly is made in a git repo, or with `jelly project NAME`.\n"))?;
+            }
+            for p in &list {
+                let n = p["jellies"].as_u64().unwrap_or(0);
+                output(format_args!("{}  {}\n", p["name"].as_str().unwrap_or(""), match n { 0 => "empty".into(), 1 => "1 jelly".into(), n => format!("{n} jellies") }))?;
+            }
+            Ok(())
+        }
+        Cmd::Project { name: Some(name), to, rm } => {
+            let at = format!("{}/api/projects", cli.url);
+            let (done, line) = match (to, rm) {
+                (Some(to), _) => {
+                    let done = send("POST", &format!("{at}/{}/move", encode(&name)), json!({"to": to, "by": by}))?;
+                    let n = done["events"].as_u64().unwrap_or(0);
+                    let line = match n { 0 => format!("{name} held no jellies; it is {to} now"), 1 => format!("the 1 jelly in {name} is in {to} now, and its name starts with {to}:"), n => format!("the {n} jellies in {name} are in {to} now, and their names start with {to}:") };
+                    (done, line)
+                }
+                (None, true) => (send("DELETE", &format!("{at}/{}", encode(&name)), Value::Null)?, format!("{name}: removed")),
+                (None, false) => (send("POST", &at, json!({"name": name}))?, format!("{name}: made. Put a jelly in it with `jelly move NAME {name}` or `jelly --project {name} make ...`")),
+            };
+            if json { print(done) } else { output(format_args!("{line}\n")) }
+        }
         Cmd::Look { name, text, width, full, problems, poster, compare, save } => {
             let mut q = vec![];
             if let Some(c) = &compare { q.push(format!("compare={}", encode(c))); }

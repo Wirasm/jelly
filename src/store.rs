@@ -859,6 +859,84 @@ impl Store {
         Ok(ev)
     }
 
+    /// Every project and how many jellies it holds. A project is the part
+    /// before the colon in a jelly's name, so it exists while a jelly is in it;
+    /// its folder in `projects/` (made by `make_project`, or by a DESIGN.md)
+    /// lets it exist empty.
+    pub fn projects(&self) -> BTreeMap<String, usize> {
+        let mut all = BTreeMap::new();
+        if let Ok(dirs) = fs::read_dir(self.dir.join("projects")) {
+            for dir in dirs.flatten().filter(|d| d.path().is_dir()) {
+                if let Some(name) = dir.file_name().to_str().filter(|n| self.project_dir(n).is_ok()) {
+                    all.insert(name.to_string(), 0);
+                }
+            }
+        }
+        for j in self.list().filter(|j| !j.project().is_empty()) {
+            *all.entry(j.project().to_string()).or_insert(0) += 1;
+        }
+        all
+    }
+
+    /// An empty project, for jellies to be moved into.
+    pub fn make_project(&mut self, project: &str) -> Result<(), Error> {
+        let dir = self.project_dir(project)?;
+        if self.projects().contains_key(project) {
+            return Err(Error::Invalid(format!("there is already a project {project}")));
+        }
+        fs::create_dir_all(dir).map_err(|e| Error::Invalid(format!("could not make project {project}: {e}")))
+    }
+
+    /// Renames a project, or merges it into one that exists: every jelly in
+    /// `from` moves to `to` as `set_project` moves one, so each name changes
+    /// from `from:name` to `to:name`. Nothing moves if a name is taken in `to`.
+    /// `to` keeps its own DESIGN.md if it has one, else it gets `from`'s.
+    pub fn move_project(&mut self, from: &str, to: &str, by: &str) -> Result<Vec<Event>, BatchError> {
+        let (from_dir, to_dir) = (self.project_dir(from)?, self.project_dir(to)?);
+        if from == to {
+            return Err(Error::Invalid(format!("{from} is already called that")).into());
+        }
+        if !self.projects().contains_key(from) {
+            return Err(Error::Invalid(format!("no project named {from}")).into());
+        }
+        let names: Vec<String> = self.list().filter(|j| j.project() == from).map(|j| j.name.clone()).collect();
+        let taken: Vec<String> = names.iter().map(|n| format!("{to}:{}", &n[from.len() + 1..])).filter(|id| self.jellies.contains_key(id)).collect();
+        if !taken.is_empty() {
+            return Err(Error::Invalid(format!("{to} already has {}; move or remove {} first", taken.join(", "), if taken.len() == 1 { "it" } else { "them" })).into());
+        }
+        let mut events = Vec::new();
+        for name in names {
+            match self.set_project(&name, to, by) {
+                Ok(ev) => events.push(ev),
+                Err(error) => return Err(BatchError { events, error }),
+            }
+        }
+        if from_dir.exists() {
+            let (design, kept) = (from_dir.join("DESIGN.md"), to_dir.join("DESIGN.md"));
+            let moved = if !to_dir.exists() {
+                fs::create_dir_all(self.dir.join("projects")).and_then(|()| fs::rename(&from_dir, &to_dir))
+            } else if design.exists() && !kept.exists() {
+                fs::rename(&design, &kept).and_then(|()| fs::remove_dir_all(&from_dir))
+            } else {
+                fs::remove_dir_all(&from_dir)
+            };
+            if let Err(e) = moved {
+                return Err(BatchError { events, error: Error::Invalid(format!("the jellies moved, but the folder of {from} did not: {e}")) });
+            }
+        }
+        Ok(events)
+    }
+
+    /// Removes a project that holds no jelly, archived ones included.
+    pub fn remove_project(&mut self, project: &str) -> Result<(), Error> {
+        let dir = self.project_dir(project)?;
+        match self.projects().get(project) {
+            None => Err(Error::Invalid(format!("no project named {project}"))),
+            Some(0) => fs::remove_dir_all(dir).map_err(|e| Error::Invalid(format!("could not remove project {project}: {e}"))),
+            Some(n) => Err(Error::Invalid(format!("{project} still holds {n} {}; move or remove {} first", if *n == 1 { "jelly" } else { "jellies" }, if *n == 1 { "it" } else { "them" }))),
+        }
+    }
+
     /// Archives jellies nobody keeps or touched for `idle_ms`, unless they still
     /// wait on the person (an open ask or an open comment).
     pub fn sweep(&mut self, idle_ms: u64) -> Vec<Event> {
@@ -2389,6 +2467,55 @@ mod tests {
         assert!(s.set_project("rex:plan", "jelly", "person").is_err(), "jelly:plan exists");
         assert!(s.put_asset("rex:plan", "../x", b"", "agent").is_err());
         assert!(s.make("k", "".into(), VERBS.into(), json!({}), "agent", false, "", "Bad Project").is_err());
+    }
+
+    #[test]
+    fn a_project_is_made_renamed_merged_and_removed() {
+        let (d, mut s) = store();
+        s.make_project("launch").unwrap();
+        assert_eq!(s.projects(), BTreeMap::from([("launch".to_string(), 0)]), "an empty project exists");
+        assert!(s.make_project("launch").is_err(), "one project per name");
+        assert!(s.make_project("Bad Project").is_err());
+        assert!(s.make_project("a:b").is_err());
+
+        s.make("plan", "".into(), VERBS.into(), json!({}), "agent", false, "", "demo").unwrap();
+        s.make("quiz", "".into(), VERBS.into(), json!({}), "agent", false, "", "demo").unwrap();
+        s.put_asset("demo:plan", "shot.png", b"png", "agent").unwrap();
+        fs::create_dir_all(d.path().join("projects/demo")).unwrap();
+        fs::write(d.path().join("projects/demo/DESIGN.md"), "demo design").unwrap();
+        assert!(s.make_project("demo").is_err(), "a project with jellies exists already");
+        assert!(s.remove_project("demo").is_err(), "it still holds jellies");
+
+        // A name taken in the target stops the whole move.
+        s.make("quiz", "".into(), VERBS.into(), json!({}), "agent", false, "", "launch").unwrap();
+        let refused = s.move_project("demo", "launch", "person").unwrap_err();
+        assert!(refused.events.is_empty() && refused.error.to_string().contains("launch:quiz"), "{}", refused.error);
+        assert!(s.get("demo:plan").is_ok(), "nothing moved");
+        s.remove("launch:quiz", "person").unwrap();
+
+        let moved: Vec<String> = s.move_project("demo", "launch", "person").unwrap().into_iter().map(|e| e.jelly).collect();
+        assert_eq!(moved, ["launch:plan", "launch:quiz"]);
+        assert_eq!(s.assets("launch:plan"), ["shot.png"], "assets move with their jelly");
+        assert_eq!(s.projects(), BTreeMap::from([("launch".to_string(), 2)]), "demo is gone, folder and all");
+        assert!(!d.path().join("projects/demo").exists());
+        assert_eq!(fs::read_to_string(d.path().join("projects/launch/DESIGN.md")).unwrap(), "demo design", "launch had none, so it gets demo's");
+
+        // A rename to a new name carries the design along; a merge into a project with its own keeps that one.
+        s.move_project("launch", "shipped", "person").unwrap();
+        assert_eq!(fs::read_to_string(d.path().join("projects/shipped/DESIGN.md")).unwrap(), "demo design");
+        s.make("old", "".into(), VERBS.into(), json!({}), "agent", false, "", "past").unwrap();
+        fs::create_dir_all(d.path().join("projects/past")).unwrap();
+        fs::write(d.path().join("projects/past/DESIGN.md"), "past design").unwrap();
+        s.move_project("past", "shipped", "person").unwrap();
+        assert_eq!(fs::read_to_string(d.path().join("projects/shipped/DESIGN.md")).unwrap(), "demo design");
+        s.remove("shipped:old", "person").unwrap();
+        assert!(s.move_project("launch", "x", "person").is_err(), "launch is gone");
+
+        s.remove("shipped:plan", "person").unwrap();
+        s.remove("shipped:quiz", "person").unwrap();
+        s.remove_project("shipped").unwrap();
+        assert!(s.projects().is_empty());
+        assert!(s.remove_project("shipped").is_err());
     }
 
     #[test]
