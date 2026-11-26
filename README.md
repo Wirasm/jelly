@@ -151,7 +151,7 @@ the agent, share a jelly, restart the daemon. Load into a view only scripts you 
 Verbs run one at a time in QuickJS with a 1 second, 64 MB limit and no network,
 which keeps every change attributable and undoable. Live data is pushed in from
 outside with `jelly do`, or by a feed: a command the daemon runs on a timer.
-Feeds live in a file in the home that only `jelly feed` writes, so nothing that
+Feeds live in a file in the daemon's home that only the CLI writes, so nothing that
 reaches the port can make the daemon run a command of its choosing. A request
 can start only jelly's own commands: the jelly page's "Update now" installs
 the latest jellyware release, and `jelly hear --wake` has the daemon run `codex

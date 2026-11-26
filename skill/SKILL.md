@@ -307,7 +307,7 @@ jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses ass
 jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
 jelly feed prs refresh --every 120 -- gh pr list --json number,title   # the daemon runs it on a timer and passes the JSON to the verb
-jelly feed prs --stop            # `jelly feed` lists feeds; `jelly look prs` says how the last run went
+jelly feed prs --rm              # `jelly feed` lists feeds; `jelly look prs` says how the last run went
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly share plan --to ana@example.com   # a live link for Ana: she uses it from her phone, you hear person:ana@example.com
 jelly share plan --link          # a live view-only link: anyone watches, nobody acts
@@ -325,8 +325,11 @@ jelly rm plan
 A jelly's full name is `project:name`; the project is the git repo you run in
 (or `--project`). The person can move a jelly to another project on the jelly
 page, which changes its name: when a name you remember is gone, `jelly find`
-it. Short names work inside the same project, in the CLI and in
-`jelly.other`. From outside, use the full name.
+it. A short name means a jelly of the project you are in, in the CLI and in
+`jelly.other`; outside a project, the jelly with no project. For any other
+jelly, use the full name; a jelly with no project is reached from a repo with
+`--project ""`. A short name that only another project has is refused with the
+full name to use.
 
 A project is only a name. You are in the one named after your repo unless you
 say otherwise, and you can work in any other:
