@@ -17,7 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      # A fixed Rust, so a new release's clippy lints do not stop the nightly
+      # release on their own; move it forward in a pull request.
+      - run: rustup toolchain install 1.100.0 --profile minimal --component clippy && rustup default 1.100.0
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
