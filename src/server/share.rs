@@ -439,7 +439,10 @@ mod tests {
                     }
                 })
             }))
-            .route(&format!("/api/live/{SHARE}/op"), post(move || async move {
+            // Reads the op as the real relay does. Left unread, axum closes the
+            // connection after answering, and on macOS ureq then fails to read
+            // the answer with "Invalid argument (os error 22)".
+            .route(&format!("/api/live/{SHARE}/op"), post(move |_op: Json<Value>| async move {
                 let tx = from_op.lock().await.clone().unwrap();
                 let both = json!({"other": 1, "mine": 1});
                 tx.send(json!({"type": "events", "events": [event(1, "person:ana@example.com")], "doc": {"state": {"other": 1}}}).to_string()).unwrap();
