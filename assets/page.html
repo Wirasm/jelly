@@ -65,7 +65,6 @@
   h2.proj a { color: inherit; text-decoration: none; }
   h2.proj a:hover { color: var(--accent-ink); }
   h2.proj .n { font-size: 12px; color: var(--muted); }
-  h2.proj .pin { font-size: 14px; font-weight: 400; width: 240px; }
   .box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 6px; }
   .box.hot { border-color: var(--accent); box-shadow: 0 0 0 3px var(--brand-glow); }
   .sub { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 10px 4px; font-weight: 600; }
@@ -337,11 +336,11 @@
   // A project: what is kept, what is not, and what was archived, behind a button.
   function projectSection(p, list) {
     const kept = list.filter((j) => j.kept && !j.archived), rest = list.filter((j) => !j.kept && !j.archived), arch = list.filter((j) => j.archived);
-    const total = jellies.filter((j) => j.project === p).length, editing = ui.edit?.kind === "rename" && ui.edit.project === p;
+    const total = jellies.filter((j) => j.project === p).length;
     const counts = total ? [kept.length && `${kept.length} kept`, rest.length && `${rest.length} not kept`, arch.length && `${arch.length} archived`].filter(Boolean).join(" · ") : "empty";
     const showArch = ui.archived.has(p) || !!ui.q;
-    return `<section id="s-${slug(p || "none")}"><h2 class="proj">${editing ? `<input class="pin" id="rename" value="${esc(ui.edit.value)}" aria-label="New name for ${esc(p)}" autocomplete="off">` : p ? `<a href="/p/${enc(p)}">${esc(p)}</a>` : "No project"}
-      <span class="n">${counts}</span><span class="sp"></span>${p && !editing ? `<button class="btn quiet" data-rename="${esc(p)}">Rename</button>${total ? "" : `<button class="btn quiet" data-rmproject="${esc(p)}">Remove</button>`}` : ""}</h2>
+    return `<section id="s-${slug(p || "none")}"><h2 class="proj">${p ? `<a href="/p/${enc(p)}">${esc(p)}</a>` : "No project"}
+      <span class="n">${counts}</span><span class="sp"></span>${p && !total ? `<button class="btn quiet" data-rmproject="${esc(p)}">Remove</button>` : ""}</h2>
       <div class="box">${total ? "" : `<div class="none">No jellies yet. Agents working in a repo named ${esc(p)} put theirs here; move one in from its ··· menu.</div>`}
         ${kept.length ? `<div class="sub">Kept</div>${rows(kept, "k")}` : ""}
         ${rest.length ? `<div class="sub">Not kept</div>${rows(rest, "k")}` : ""}
@@ -376,7 +375,7 @@
     const names = [...new Set([...projects.map((p) => p.name), ...jellies.map((j) => j.project).filter(Boolean), ...(PROJECT ? [PROJECT] : [])])].sort((a, b) => last(b) - last(a) || a.localeCompare(b));
     const link = (href, label, list, on) => { const w = list.filter(waits).length; return `<a href="${href}" class="${on ? "on" : ""}"><span class="pn">${esc(label)}</span>${w ? `<span class="tag" title="${w} wait on you">${w}</span>` : ""}<span class="ct">${list.filter((j) => !j.archived).length}</span></a>`; };
     const rail = `<h2>Projects</h2>${link("/", "All", jellies, !PROJECT)}${names.map((p) => link(`/p/${enc(p)}`, p, jellies.filter((j) => j.project === p), p === PROJECT)).join("")}`
-      + (ui.edit?.kind === "new" ? `<input class="pin" id="newproject" value="${esc(ui.edit.value)}" placeholder="Name, then Enter" aria-label="Name of the new project" autocomplete="off"><div class="hint">a-z, 0-9, - and _</div>` : `<button class="padd" id="addproject">+ New project</button>`);
+      + (ui.edit ? `<input class="pin" id="newproject" value="${esc(ui.edit.value)}" placeholder="Name, then Enter" aria-label="Name of the new project" autocomplete="off"><div class="hint">a-z, 0-9, - and _</div>` : `<button class="padd" id="addproject">+ New project</button>`);
 
     let html = "";
     const w = found.filter(waits).sort(byChange);
@@ -762,17 +761,14 @@
   $("list").addEventListener("mouseleave", hidePeek);
   $("list").addEventListener("scroll", () => { hidePeek(); closeMenu(); }, { passive: true });
 
-  // Projects: make one, rename one (its jellies move with it), remove an empty one.
+  // Projects: make one, remove an empty one. A jelly moves between them from its ··· menu.
+  // There is no rename here: agents in a repo use the project named after it, and a
+  // rename would cut them off from their jellies. `jelly project OLD --move NEW` does it.
   const projectAt = (p) => `/api/projects/${enc(p)}`;
   async function finishEdit(input) {
-    const e = ui.edit, name = input.value.trim();
-    if (!name || (e.kind === "rename" && name === e.project)) { ui.edit = null; return render(); }
-    if (e.kind === "new") { if (await act("/api/projects", { name })) location.href = `/p/${enc(name)}`; return; }
-    const merge = projects.some((p) => p.name === name) || jellies.some((j) => j.project === name);
-    if (merge && !confirm(`There is already a project ${name}. Move every jelly in ${e.project} into it?`)) return;
-    if (!(await act(`${projectAt(e.project)}/move`, { to: name }))) return;
-    ui.edit = null;
-    if (PROJECT === e.project) location.href = `/p/${enc(name)}`; else refresh();
+    const name = input.value.trim();
+    if (!name) { ui.edit = null; return render(); }
+    if (await act("/api/projects", { name })) location.href = `/p/${enc(name)}`;
   }
   $("app").addEventListener("input", (e) => { if (ui.edit && e.target.classList.contains("pin")) ui.edit.value = e.target.value; });
   $("app").addEventListener("keydown", (e) => {
@@ -781,24 +777,21 @@
     if (e.key === "Escape") { e.stopPropagation(); ui.edit = null; render(); }
   });
   // A field takes focus once, when it opens, and goes when focus leaves it.
-  function startEdit(edit) {
-    ui.edit = edit;
+  function startEdit() {
+    ui.edit = { value: "" };
     render();
-    const field = $(edit.kind === "new" ? "newproject" : "rename");
-    field.focus();
-    field.select();
+    $("newproject").focus();
   }
   $("app").addEventListener("focusout", (e) => {
     if (redrawing || !ui.edit || !e.target.classList.contains("pin")) return;
     ui.edit = null;
     render();
   });
-  $("rail").addEventListener("click", (e) => { if (e.target.id === "addproject") startEdit({ kind: "new", value: "" }); });
+  $("rail").addEventListener("click", (e) => { if (e.target.id === "addproject") startEdit(); });
 
   $("list").addEventListener("click", async (e) => {
     const t = (sel) => e.target.closest(sel);
     if (t("[data-arch]")) { ui.archived.add(t("[data-arch]").dataset.arch); return render(); }
-    if (t("[data-rename]")) { const p = t("[data-rename]").dataset.rename; return startEdit({ kind: "rename", project: p, value: p }); }
     if (t("[data-rmproject]")) { const p = t("[data-rmproject]").dataset.rmproject; if (await act(projectAt(p), null, "DELETE")) { if (PROJECT === p) location.href = "/"; else refresh(); } return; }
     if (t("#shared")) return shareClick(e);
     if (t("a, input")) return;

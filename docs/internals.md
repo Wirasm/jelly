@@ -184,8 +184,10 @@ ask or comment still open). The page marks the last two days before that.
 
 Remove on the page takes the row away at once and sends the `DELETE` ten
 seconds later, so the person can undo it; a second remove, or leaving the page,
-sends it at once. `jelly rm` deletes at once. Projects are made, renamed and
-removed through `/api/projects`, the routes `jelly project` uses.
+sends it at once. `jelly rm` deletes at once. Projects are made and removed
+through `/api/projects`, the routes `jelly project` uses. The page has no
+rename: agents in a repo use the project named after it, so a rename would cut
+them off from their jellies. `jelly project OLD --move NEW` does it on purpose.
 
 At startup the daemon replaces the stored jelly page with the bundled one when
 they differ, so a home made by an older binary gets the new page.

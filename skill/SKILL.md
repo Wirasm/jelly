@@ -318,10 +318,22 @@ jelly rm plan
 ```
 
 A jelly's full name is `project:name`; the project is the git repo you run in
-(or `--project`). The person can rename a project on the jelly page, which
-renames its jellies: when a name you remember is gone, `jelly find` it. Short
-names work inside the same project, in the CLI and in
+(or `--project`). The person can move a jelly to another project on the jelly
+page, which changes its name: when a name you remember is gone, `jelly find`
+it. Short names work inside the same project, in the CLI and in
 `jelly.other`. From outside, use the full name.
+
+A project is only a name. You are in the one named after your repo unless you
+say otherwise, and you can work in any other:
+
+```bash
+jelly --project hiring make plan --from ./scratch --about "…"   # hiring:plan, from any repo
+jelly do hiring:plan add '{"title":"…"}'    # a full name works from anywhere
+jelly --project hiring hear                   # what the person did in hiring
+```
+
+Plain `jelly hear` covers your repo's project only, so after you make a jelly in
+another project, hear it with `--project` or wait on it by its full name.
 
 Live data: verbs have no network, so push it in from your turn, a script or a
 loop with `jelly do`.
