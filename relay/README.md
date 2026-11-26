@@ -229,19 +229,19 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   comments and asks, runs verbs in QuickJS (the daemon's engine, as
   WebAssembly), and keeps an event log.
 - The daemon stops a verb after 1 s. A Worker's clock stands still while code
-  runs, so the relay counts steps instead: a verb gets about 50 million
-  (calls and loop turns), which an empty loop uses in a fraction of a second.
-  Work inside a builtin such as `JSON.stringify` does not count, so a loop
-  that does a lot of it each turn runs until Cloudflare's CPU limit (30 s)
-  resets the jelly's object; its pages and the daemon reconnect.
+  runs, so the relay counts work instead: a verb gets 5,000 calls of QuickJS's
+  interrupt handler, roughly 25 million turns of an empty loop. That bounds
+  work, not time. Work inside a builtin such as `JSON.stringify` does not
+  count, so a loop that does a lot of it each turn runs until Cloudflare's CPU
+  limit (30 s) resets the jelly's object; its pages and the daemon reconnect.
 - What a link sends is limited, so one person cannot fill the jelly: a
   comment, reply or answer holds at most 10,000 characters, one change at most
-  256 KB (a verb's args, say), and a change from a link that would take the
+  64 KB (a verb's args, say), and a change from a link that would take the
   jelly past 4 MB is refused ("This jelly is full"). The jelly is one SQLite
   row, which holds 8 MB, so the rest stays for you: changes from your daemon
-  are not limited.
-- The event log is what the daemon catches up from. Each time it reconnects
-  the relay forgets the events it says it has mirrored, keeping the newest.
+  are not limited. The event log is not bounded: each change from a link
+  stores up to 64 KB in it, even when the verb ignores its args, for as long
+  as the share lasts.
 - While shared, the relay's copy is the live one. The daemon forwards local
   changes (`call`, `set`, `shape`, `ask`, `withdraw`, `reply`, `resolve`) to
   it, and mirrors every change back over a WebSocket, so `inbox`, `wait` and

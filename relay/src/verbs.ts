@@ -5,19 +5,19 @@
 //
 // The daemon stops a verb after 1 s. A Worker's clock stands still while code
 // runs (Date.now() is the time of the last I/O), so the relay counts steps
-// instead: QuickJS calls the interrupt handler about every 10,000 steps (calls
-// and loop turns).
+// instead: it counts calls to QuickJS's interrupt handler, which runs as
+// JavaScript calls functions and turns loops.
 
 import { newQuickJSWASMModuleFromVariant, newVariant, type QuickJSWASMModule } from "quickjs-emscripten-core";
 import baseVariant from "@jitl/quickjs-wasmfile-release-sync";
 // By path, not the package's "./wasm" export: wrangler picks the wasm loader by file name.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
 
-/** Interrupt calls a verb gets: about 50 million steps. Run locally, an empty
- *  loop uses them in 0.2 s and one that pushes to an array in under 2 s. Work
- *  inside a builtin (JSON.stringify, JSON.parse) is not counted, so a loop
- *  doing heavy builtin work each turn can still run until the platform's CPU
- *  limit resets the object. */
+/** Interrupt handler calls a verb gets: roughly 25 million turns of an empty
+ *  loop. How long that takes depends on the work in each turn and the machine,
+ *  so this bounds work, not time. Work inside a builtin (JSON.stringify,
+ *  JSON.parse) is not counted, so a loop doing heavy builtin work each turn
+ *  can still run until the platform's CPU limit resets the object. */
 const STEPS = 5_000;
 
 const variant = newVariant(baseVariant, { wasmModule });

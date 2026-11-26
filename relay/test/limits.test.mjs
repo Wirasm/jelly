@@ -1,6 +1,5 @@
 // What one share can be made to do to itself: a verb that never returns, a
-// link that sends too much, the event log, and ending a share while changes
-// arrive. Checked against the real Worker running locally: `npm test`
+// link that sends too much, and ending a share while changes arrive. Checked against the real Worker running locally: `npm test`
 // (wrangler starts it; nothing is deployed).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -38,17 +37,7 @@ async function ana(share) {
   return { ws, send };
 }
 
-/** The daemon's socket, catching up from `since`: resolves with the seqs it was sent. */
-function catchUp(share, since) {
-  const ws = new WebSocket(at(`/api/live/${share}/ws?since=${since}`).href.replace("http", "ws"), { headers: auth });
-  return new Promise((ok, no) => {
-    ws.onmessage = (m) => { ws.close(); ok(JSON.parse(m.data).events.map((e) => e.seq)); };
-    ws.onerror = no;
-  });
-}
-
-// Run locally the clock moves during a verb, so a clock-based limit passes
-// here too; deployed it stands still, which is why the relay counts steps.
+// On the old code this fails only on the message: local wrangler's clock moves during a verb, Cloudflare's does not, so the real bug cannot be shown here.
 test("a verb that never returns is stopped, and the share goes on working", async () => {
   const share = id(1);
   await publish(share);
@@ -69,8 +58,11 @@ test("a link cannot send text or args past the limits; the owner's daemon can", 
   const ok = await send("comment", { text: "x".repeat(10_000) });
   assert.equal(ok.ok, true);
   assert.match((await send("reply", { id: ok.value.args.id, text: long })).error, /at most 10,000 characters/);
-  assert.match((await send("do", { verb: "keep", args: "x".repeat(300_000) })).error, /at most 256 KB/);
-  assert.equal((await send("do", { verb: "keep", args: "x".repeat(200_000) })).ok, true);
+  // Characters are characters: 10,000 emoji fit, though each is two UTF-16 units.
+  assert.equal((await send("comment", { text: "🙂".repeat(10_000) })).ok, true);
+  // KB are bytes: 40,000 "é" are 80 KB as UTF-8, though only 40,000 UTF-16 units.
+  assert.match((await send("do", { verb: "keep", args: "é".repeat(40_000) })).error, /at most 64 KB/);
+  assert.equal((await send("do", { verb: "keep", args: "é".repeat(30_000) })).ok, true);
   // The owner's daemon is not limited: it may hold whatever the person's own jelly holds.
   assert.equal((await op(share, { op: "comment", text: long })).status, 200);
   ws.close();
@@ -88,20 +80,6 @@ test("changes from links stop short of filling the jelly, and the owner's still 
   assert.equal((await send("do", { verb: "inc" })).ok, true);
   assert.equal((await op(share, { op: "comment", text: "y".repeat(100_000) })).status, 200);
   ws.close();
-});
-
-test("the relay forgets events the daemon has mirrored, and keeps the rest", async () => {
-  const share = id(4);
-  await publish(share);
-  for (let i = 0; i < 4; i++) assert.equal((await op(share, { op: "do", verb: "inc" })).status, 200);
-  assert.deepEqual(await catchUp(share, 2), [3, 4]);
-  // The daemon said it had mirrored up to 2: those are gone; what comes after it stays.
-  assert.deepEqual(await catchUp(share, 0), [3, 4]);
-  // Mirrored up to the newest: the newest stays, so the next change follows it.
-  assert.deepEqual(await catchUp(share, 4), []);
-  assert.deepEqual(await catchUp(share, 0), [4]);
-  const r = await op(share, { op: "do", verb: "inc" });
-  assert.deepEqual((await r.json()).events.map((e) => e.seq), [5]);
 });
 
 test("a change made while the share ends is refused, never accepted and then lost", async () => {

@@ -69,9 +69,10 @@ const PART = 1 << 20;
  *  link that would take the saved jelly past this is refused, and the rest of
  *  the row stays for the owner's daemon. */
 const LINK_FULL = 4 << 20;
-/** The most a link sends in one change (a verb's args, a comment's anchor), and
- *  the longest comment, reply or answer it can write. The owner is not limited. */
-const LINK_MESSAGE = 256 * 1024;
+/** The most a link sends in one change, in bytes (a verb's args, a comment's
+ *  anchor; the recipes send a few ids and a note), and the longest comment,
+ *  reply or answer it can write, in characters. The owner is not limited. */
+const LINK_MESSAGE = 64 * 1024;
 const LINK_TEXT = 10_000;
 const MAX_DAYS = 365;
 const MAX_HOURS = 24;
@@ -354,7 +355,10 @@ export class Live extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
     // Deletes the alarm too (compatibility date 2026-02-24 and later).
     await this.ctx.storage.deleteAll();
-    await this.env.PINS.getByName("pins").leave(this.share);
+    // The share is gone whatever the PIN's room says. When leaving fails, the
+    // room keeps listing it until the PIN ends: a page in the room still shows
+    // its button, and following it or a PIN landing on it says it no longer works.
+    try { await this.env.PINS.getByName("pins").leave(this.share); } catch { /* as above */ }
   }
 
   async alarm() {
@@ -452,11 +456,11 @@ export class Live extends DurableObject<Env> {
     const reply = (ok: boolean, value?: unknown, error?: string) => ws.send(JSON.stringify({ type: "reply", ref: msg.ref, ok, value, error }));
     if (!seat.can_act) return reply(false, undefined, "This link is view only.");
     if (!msg.op || !PERSON_OPS.includes(msg.op)) return reply(false, undefined, `a link cannot ${msg.op}`);
-    if (message.length > LINK_MESSAGE) return reply(false, undefined, `This change is too big: a link sends at most ${LINK_MESSAGE / 1024} KB at a time.`);
+    if (size(message) > LINK_MESSAGE) return reply(false, undefined, `This change is too big: a link sends at most ${LINK_MESSAGE / 1024} KB at a time.`);
     const what = ({ comment: "A comment", reply: "A reply", answer: "An answer" } as Record<string, string>)[msg.op];
-    const text = String(msg.body?.text ?? "").trim();
-    if (what && text.length > LINK_TEXT) {
-      return reply(false, undefined, `${what} holds at most ${LINK_TEXT.toLocaleString("en")} characters; this one has ${text.length.toLocaleString("en")}. Shorten it or split it.`);
+    const chars = [...String(msg.body?.text ?? "").trim()].length;
+    if (what && chars > LINK_TEXT) {
+      return reply(false, undefined, `${what} holds at most ${LINK_TEXT.toLocaleString("en")} characters; this one has ${chars.toLocaleString("en")}. Shorten it or split it.`);
     }
     try {
       const { events, doc } = await this.change({ ...msg.body, op: msg.op }, `person:${seat.who}`, LINK_FULL);
@@ -551,13 +555,8 @@ export class Live extends DurableObject<Env> {
         const [client, server] = Object.values(new WebSocketPair());
         this.ctx.acceptWebSocket(server, ["owner"]);
         server.serializeAttachment({ owner: true, who: "", can_act: true } satisfies Seat);
-        // The daemon has mirrored, and saved its place after, every event up
-        // to `since`, and only it reads events: those it has go. The newest
-        // stays, so the seq counts on when the object wakes.
-        const since = Number(url.searchParams.get("since")) || 0;
-        sql.exec("DELETE FROM events WHERE seq <= ? AND seq < ?", since, this.seq);
         // Catch up from where the daemon left off, then every change as it happens.
-        server.send(JSON.stringify(this.since(since)));
+        server.send(JSON.stringify(this.since(Number(url.searchParams.get("since")) || 0)));
         return new Response(null, { status: 101, webSocket: client });
       }
       const asset = path.match(/^assets\/([^/]+)$/);
