@@ -66,7 +66,31 @@ cargo test
 cargo clippy
 ```
 
-For a manual run, use a throwaway daemon so your real jellies are untouched:
+The person uses the released jelly day to day (`npx jellyware setup`), with its
+daemon on port 7878 and its skill in `~/.claude/skills/jelly`. While you work on
+jelly itself, that skill and that `jelly` can be a release behind this
+checkout: read `skill/SKILL.md` here, and run what you built, not `jelly`.
+
+To keep a daemon of your build around, use a wrapper that gives it its own home
+and port, so it never opens the person's jellies:
+
+```sh
+#!/bin/sh
+export JELLY_HOME="$HOME/.jelly-dev" JELLY_URL="http://127.0.0.1:7879"
+bin=/path/to/this/checkout/target/debug/jelly
+# jelly starts its daemon by itself only on the default port.
+if [ "$1" != serve ] && ! curl -s -o /dev/null "$JELLY_URL/api/version"; then
+  nohup "$bin" serve --port 7879 >"$HOME/.jelly-dev.log" 2>&1 &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null "$JELLY_URL/api/version" && break; sleep 0.3; done
+fi
+exec "$bin" "$@"
+```
+
+Saved as `jelly-dev` on the PATH, `jelly-dev look plan` uses the build in
+`target/debug`. After `cargo build`, `jelly-dev doctor` says when the daemon
+still runs the old build; stop it and the next command starts the new one.
+
+For a one-off run or a test, use a throwaway daemon with an empty home:
 `jelly serve --temp` picks a free port and a fresh home, prints `jelly on URL` first,
 and removes the home when stopped. Pass that URL with `--url` or `JELLY_URL`.
 
