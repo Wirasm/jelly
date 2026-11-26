@@ -203,16 +203,34 @@ not an object throws on both. The two QuickJS builds word some engine errors
 differently (`stray is not defined` against `'stray' is not defined`), so the
 fixtures hold only errors whose words match.
 
-The share's record (`shares/<share>.json`) holds the relay's seq of the last
-change mirrored. After each record is saved the socket sends `{"saved": seq}`,
-and the relay deletes its events up to that seq, keeping the newest. A failed
-save sends nothing, so the relay keeps what a restart replays. A socket's
-first message, the catch-up, and the answer to an unshare carry the whole
-jelly: when the events after the record's seq are gone, the daemon mirrors
-the ones still there and takes the jelly as the relay has it, with one line
-on stderr. Any later message with a gap closes the socket, and the next one
-catches up. The missing changes are not in this home's log, so the inbox
-does not hear them and `look --compare` cannot rebuild their versions.
+The share's record (`shares/<share>.json`, written to a new file and renamed
+over the old) holds the relay's seq of the last change mirrored. After each
+record is saved the socket sends `{"saved": seq}`. Of the events up to that
+seq, the relay deletes those it made more than a week ago by its own clock,
+and keeps the newest whatever its age (`relay/src/trim.ts`), at most once an
+hour. A failed save sends nothing, so the relay keeps what a restart replays.
+A daemon away for less than a week, a home restored from a backup that
+recent, or a second home with a copy of the record, finds every event it
+missed and mirrors each one, so the inbox hears them all.
+
+A socket's first message, the catch-up, and the answer to an unshare carry
+the whole jelly. When the events right after the record's seq are gone (a
+daemon more than a week behind), the daemon mirrors the ones still there and
+then takes the jelly as the relay has it, with one `missed` event by `relay`
+that the inbox shows: how many changes it did not hear one by one, and to
+read the jelly's state. It does the same, with none missed, when no event is
+new but the relay's jelly has another version, view or number of comments or
+asks than this home's: the jelly file is older than the record, as after
+restoring only it. A `missed` event does not end `hear --wait`: a daemon that
+far behind has been away, so no wait was listening while those changes came
+in, and the next Send ends the wait as usual. Any later message with a gap
+closes the socket, and the next catch-up settles it. The missed changes are
+not in this home's log, so `look --compare` cannot rebuild their versions, and
+undo has nothing to undo across them: a mirrored change keeps an undo step
+only when it is one version on from a jelly this home had in full.
+
+`share::forward` answers a change with the first change mirrored at or past
+its seq, so a catch-up that skipped it still answers.
 
 ## Shares on the jelly page
 

@@ -44,7 +44,10 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let text = serde_json::to_string_pretty(value).expect("serializes");
-    std::fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+    // Written beside it and renamed over it, so a crash leaves the old file or
+    // the new one, never a torn one that stops every share from resuming.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text + "\n").and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// A random token of `len` characters from [A-Za-z0-9]: 22 give about 131 bits.

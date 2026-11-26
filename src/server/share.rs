@@ -5,7 +5,8 @@
 //! `inbox`, `wait` and `look` work as before. When the laptop sleeps the relay
 //! keeps going; on reconnecting the daemon catches up from the last event it saw.
 //! The daemon tells the relay what its record has saved, and the relay deletes
-//! those events; a daemon further behind catches up from the whole jelly.
+//! those of them older than a week; a daemon further behind catches up from the
+//! whole jelly and records a `missed` event saying so.
 
 use super::{content_type, ApiError, App, Shared, RUNTIME_JS};
 use crate::relay::{self, Fail, Record, Relay};
@@ -105,29 +106,39 @@ fn stop(app: &App, record: &Record) {
 }
 
 /// Mirrors the batch's events that are new here into the store, in order, and
-/// returns them with the relay's seq. When events before them are missing, a
-/// `whole` batch (the catch-up a socket starts with, or the last one of an
-/// unshare) still lands: its jelly is all of it, and the relay deleted the
-/// missing events only after some daemon with this share saved them. Any
-/// other batch with a gap is None, and the socket starts again.
+/// returns them with the relay's seq. A `whole` batch (the catch-up a socket
+/// starts with, or the last one of an unshare) carries the whole jelly. When
+/// the relay no longer has the events right after this home's (it keeps those
+/// a daemon saved for a week), or this home lost changes its record says it
+/// had, the jelly lands as the relay has it, with one `missed` event for the
+/// agent. Any other batch with a gap is None, and the socket starts again.
 fn apply(app: &App, live: &Live, record: &mut Record, batch: &Batch, whole: bool) -> Result<Option<Vec<(u64, Event)>>, Error> {
     let fresh: Vec<&Mirrored> = batch.events.iter().filter(|e| e.seq > record.seq).collect();
-    let Some(last) = fresh.last() else { return Ok(Some(Vec::new())) };
-    if fresh[0].seq != record.seq + 1 {
-        if !whole {
-            return Ok(None);
-        }
-        log(format_args!("{} caught up from the whole jelly: changes {} to {} were saved by a daemon with this share and are gone from the relay, so they are not in this home's history",
-            record.jelly, record.seq + 1, fresh[0].seq - 1));
+    let missed = fresh.first().map_or(0, |e| e.seq - record.seq - 1);
+    if missed > 0 && !whole {
+        return Ok(None);
     }
     let mut store = app.store.lock().expect("store lock");
+    let behind = whole && fresh.is_empty() && store.behind(&record.jelly, &batch.doc);
+    if fresh.is_empty() && !behind {
+        return Ok(Some(Vec::new()));
+    }
     let mut out = Vec::new();
     let mut failed = None;
-    for e in &fresh {
-        let doc = (e.seq == last.seq).then_some(&batch.doc);
+    for (i, e) in fresh.iter().enumerate() {
+        let last = i + 1 == fresh.len();
+        let doc = (last && missed == 0).then_some(&batch.doc);
         match store.mirror(&record.jelly, e, doc) {
-            Ok(ev) => { record.seq = e.seq; out.push((e.seq, ev)); }
+            // After a gap the record moves past the last event only once the jelly has landed.
+            Ok(ev) => { if doc.is_some() || !last { record.seq = e.seq; } out.push((e.seq, ev)); }
             Err(err) => { failed = Some(err); break; }
+        }
+    }
+    if failed.is_none() && (missed > 0 || behind) {
+        let seq = fresh.last().map_or(record.seq, |e| e.seq);
+        match store.caught_up(&record.jelly, missed, &batch.doc) {
+            Ok(ev) => { record.seq = seq; out.push((seq, ev)); }
+            Err(err) => failed = Some(err),
         }
     }
     let events: Vec<Event> = out.iter().map(|(_, e)| e.clone()).collect();
@@ -169,7 +180,8 @@ pub(crate) async fn forward(app: &Shared, live: &Live, change: &Change) -> Resul
     let arrived = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match mirrored.recv().await {
-                Ok((s, ev)) if s == seq => return Some(ev),
+                // Past it too: a catch-up that skipped it still made it.
+                Ok((s, ev)) if s >= seq => return Some(ev),
                 Err(broadcast::error::RecvError::Closed) => return None,
                 _ => {}
             }
@@ -439,6 +451,14 @@ mod tests {
     use tokio::sync::mpsc;
 
     const SHARE: &str = "aaaaaaaaaaaaaaaaaaaaaa";
+    const DAY: u64 = 86_400_000;
+    use crate::server::now_ms;
+
+    /// What `jelly hear` prints for `t:j`, as the inbox gives it.
+    fn heard(app: &Shared) -> Vec<String> {
+        let req = crate::store::InboxRequest { project: "t".into(), reader: crate::store::InboxReader::Named { name: "test".into() }, mine: None };
+        app.store.lock().unwrap().read_inbox(&req).unwrap().events.into_iter().map(|e| e.text).collect()
+    }
 
     fn event(seq: u64, by: &str) -> Value {
         json!({"seq": seq, "at_ms": 1, "kind": "do", "by": by, "verb": "pos", "args": {}, "version": seq + 1, "view_rev": 1})
@@ -529,10 +549,31 @@ mod tests {
         }
 
         /// As `Live.saved` does: the events up to `seq` go, but never the newest.
+        /// As `relay/src/trim.ts` does: of the events up to `seq`, those older
+        /// than a week go, but never the newest.
         fn trim(&mut self, seq: u64) {
             self.saved.push(seq);
             let newest = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap());
-            self.events.retain(|e| { let s = e["seq"].as_u64().unwrap(); s > seq || s == newest });
+            let week = now_ms() - 7 * DAY;
+            self.events.retain(|e| { let s = e["seq"].as_u64().unwrap(); s > seq || s == newest || e["at_ms"].as_u64().unwrap() >= week });
+        }
+
+        /// A person comments on the relay; the version stays.
+        fn comment(&mut self, by: &str, text: &str) {
+            let seq = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap()) + 1;
+            let c = json!({"id": format!("c{seq}"), "anchor": null, "text": text, "by": by, "at_ms": now_ms(), "resolved": false, "replies": []});
+            self.doc["comments"].as_array_mut().unwrap().push(c);
+            let ev = json!({"seq": seq, "at_ms": now_ms(), "kind": "comment", "by": by, "args": {"text": text}, "version": self.doc["version"], "view_rev": 1, "unsent": 0});
+            self.events.push(ev.clone());
+            let msg = json!({"type": "events", "events": [ev], "doc": {"state": self.doc["state"], "comments": self.doc["comments"], "asks": [], "unsent": 0}}).to_string();
+            self.sockets.retain(|s| s.send(msg.clone()).is_ok());
+        }
+
+        /// Every event so far was made `days` ago.
+        fn age(&mut self, days: u64) {
+            for e in &mut self.events {
+                e["at_ms"] = json!(e["at_ms"].as_u64().unwrap() - days * DAY);
+            }
         }
 
         fn seqs(&self) -> Vec<u64> {
@@ -549,7 +590,7 @@ mod tests {
             let seq = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap()) + 1;
             self.doc["version"] = json!(self.doc["version"].as_u64().unwrap() + 1);
             self.doc["state"] = state.clone();
-            let ev = json!({"seq": seq, "at_ms": 1, "kind": kind, "by": by, "version": self.doc["version"], "view_rev": 1, "unsent": 0});
+            let ev = json!({"seq": seq, "at_ms": now_ms(), "kind": kind, "by": by, "version": self.doc["version"], "view_rev": 1, "unsent": 0});
             self.events.push(ev.clone());
             let msg = json!({"type": "events", "events": [ev], "doc": {"state": state, "comments": [], "asks": [], "unsent": 0}}).to_string();
             self.sockets.retain(|s| s.send(msg.clone()).is_ok());
@@ -673,37 +714,66 @@ mod tests {
         app
     }
 
-    /// The daemon tells the relay what it saved, and the relay deletes those
-    /// events. A home restored from a backup is far behind what is left: it
-    /// catches up from the whole jelly on its first socket, and keeps that socket.
+    /// A home restored from a backup less than a week old finds every event
+    /// it missed still on the relay, and hears each one.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_home_restored_from_a_backup_catches_up_from_the_whole_jelly() {
+    async fn a_home_restored_from_a_recent_backup_hears_every_change() {
         let (dir, backup) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let app = app(dir.path());
         let held = Held::new(json!({}));
         serve(dir.path(), &held).await;
         let live = shared(&app, 0);
         held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
-        arrives(&app, json!({"n": 1})).await;
         until("the daemon says it saved 1", || held.lock().unwrap().saved.contains(&1)).await;
         copy(dir.path(), backup.path());
-        for n in 2..=4 {
-            held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
-        }
-        arrives(&app, json!({"n": 4})).await;
-        until("the relay deletes what the daemon saved", || held.lock().unwrap().seqs() == [4]).await;
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 2}));
+        held.lock().unwrap().change("send", "person:ana", json!({"n": 2}));
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 3}));
+        until("the daemon says it saved 4", || held.lock().unwrap().saved.ends_with(&[4])).await;
+        assert_eq!(held.lock().unwrap().seqs(), [1, 2, 3, 4], "nothing is a week old");
+        halt(&live);
+
+        let restored = restart(backup.path());
+        arrives(&restored, json!({"n": 3})).await;
+        let heard = heard(&restored);
+        assert_eq!(heard.len(), 4, "{heard:?}");
+        assert!(heard[2].starts_with("ana sent"), "the Send is heard: {heard:?}");
+    }
+
+    /// One more than a week behind finds the events it missed gone. It
+    /// catches up from the whole jelly on its first socket, keeps that socket,
+    /// and the agent hears what happened.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_home_restored_from_an_old_backup_catches_up_and_says_so() {
+        let (dir, backup) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        let live = shared(&app, 0);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
+        until("the daemon says it saved 1", || held.lock().unwrap().saved.contains(&1)).await;
+        copy(dir.path(), backup.path());
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 2}));
+        held.lock().unwrap().change("send", "person:ana", json!({"n": 2}));
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 3}));
+        arrives(&app, json!({"n": 3})).await;
+        held.lock().unwrap().age(8);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 4}));
+        until("the relay deletes what is saved and a week old", || held.lock().unwrap().seqs() == [5]).await;
         halt(&live);
 
         let restored = restart(backup.path());
         arrives(&restored, json!({"n": 4})).await;
-        until("the restored home says it saved 4", || held.lock().unwrap().saved.ends_with(&[4])).await;
-        // A person's change after the catch-up comes on the same socket.
+        until("the restored home says it saved 5", || held.lock().unwrap().saved.ends_with(&[5])).await;
         held.lock().unwrap().change("do", "person:bo", json!({"n": 5}));
         arrives(&restored, json!({"n": 5})).await;
         assert_eq!(held.lock().unwrap().since, [0, 1], "one socket each, no loop");
-        assert_eq!(home(&restored).records().unwrap()[0].seq, 5);
+        assert_eq!(home(&restored).records().unwrap()[0].seq, 6);
+        let heard = heard(&restored);
+        assert!(heard.iter().any(|l| l == "caught up from the relay: 3 changes on the shared jelly were not heard one by one (the relay keeps a week of them); `jelly state t:j` has the jelly as it is now, and `jelly look t:j` what people did"), "{heard:?}");
+        assert!(heard.last().unwrap().starts_with("bo "), "{heard:?}");
         let store = restored.store.lock().unwrap();
-        assert_eq!(store.get("t:j").unwrap().version, 6);
+        assert_eq!(store.get("t:j").unwrap().version, 7);
         assert!(store.at_version("t:j", 3).is_err(), "v3 was never in this home");
     }
 
@@ -721,8 +791,8 @@ mod tests {
         let live = shared(&app, 0);
         held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
         until("the daemon says it saved 1", || held.lock().unwrap().saved == [1]).await;
-        let record = dir.path().join("shares").join(format!("{SHARE}.json"));
-        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let shares = dir.path().join("shares");
+        std::fs::set_permissions(&shares, std::fs::Permissions::from_mode(0o555)).unwrap();
         held.lock().unwrap().change("do", "person:ana", json!({"n": 2}));
         held.lock().unwrap().change("do", "person:ana", json!({"n": 3}));
         arrives(&app, json!({"n": 3})).await;
@@ -731,12 +801,12 @@ mod tests {
         assert_eq!(held.lock().unwrap().seqs(), [1, 2, 3]);
         halt(&live);
 
-        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&shares, std::fs::Permissions::from_mode(0o755)).unwrap();
         let again = restart(dir.path());
         until("the restarted daemon says it saved 3", || held.lock().unwrap().saved.ends_with(&[3])).await;
         assert_eq!(held.lock().unwrap().since, [0, 1]);
         assert_eq!(again.store.lock().unwrap().get("t:j").unwrap().state, json!({"n": 3}));
-        assert_eq!(held.lock().unwrap().seqs(), [3]);
+        assert_eq!(held.lock().unwrap().seqs(), [1, 2, 3], "saved, but not a week old");
     }
 
     /// Two homes with one share record (a home copied to a second machine)
@@ -761,11 +831,14 @@ mod tests {
         until("both say they saved 2", || held.lock().unwrap().saved.iter().filter(|s| **s == 2).count() == 2).await;
         halt(&b.live("t:j").unwrap());
 
-        for n in 3..=5 {
+        for n in 3..=4 {
             held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
         }
-        arrives(&a, json!({"n": 5})).await;
-        until("the relay deletes what A saved", || held.lock().unwrap().seqs() == [5]).await;
+        arrives(&a, json!({"n": 4})).await;
+        // B stays away more than a week.
+        held.lock().unwrap().age(8);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 5}));
+        until("the relay deletes what A saved a week ago", || held.lock().unwrap().seqs() == [5]).await;
         let b = restart(b_dir.path());
         arrives(&b, json!({"n": 5})).await;
         held.lock().unwrap().change("do", "person:bo", json!({"n": 6}));
@@ -788,10 +861,13 @@ mod tests {
         home(&app).save(&Record { jelly: "t:j".into(), share: SHARE.into(), seq: 0, links: Default::default(), expires_at: None }).unwrap();
         copy(dir.path(), backup.path());
         let live = shared(&app, 0);
-        for n in 1..=3 {
+        for n in 1..=2 {
             held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
         }
-        until("the relay deletes what the daemon saved", || held.lock().unwrap().seqs() == [3]).await;
+        arrives(&app, json!({"n": 2})).await;
+        held.lock().unwrap().age(8);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 3}));
+        until("the relay deletes what the daemon saved a week ago", || held.lock().unwrap().seqs() == [3]).await;
         halt(&live);
 
         let (events, _) = broadcast::channel(32);
@@ -799,8 +875,37 @@ mod tests {
         // Shared, but its socket never got to catch up.
         track(&restored, home(&restored).records().unwrap().remove(0));
         let ended = unshare(&restored, "t:j", Stop::Share).await.map_err(|e| format!("{e:?}")).unwrap();
-        assert_eq!(ended["caught_up"], 1);
+        assert_eq!(ended["caught_up"], 2, "the last event, and the note that two were missed");
         assert_eq!(restored.store.lock().unwrap().get("t:j").unwrap().state, json!({"n": 3}));
         assert!(restored.live("t:j").is_none() && home(&restored).records().unwrap().is_empty());
+        // No undo step jumps the gap: undoing now would take back changes this home never saw.
+        let mut store = restored.store.lock().unwrap();
+        assert_eq!(store.undo("t:j", "agent").unwrap_err().to_string(), "t:j has nothing to undo");
+        assert_eq!(store.get("t:j").unwrap().state, json!({"n": 3}));
+        assert!(store.at_version("t:j", 2).is_err(), "look --compare cannot rebuild a version this home never had");
+        assert_eq!(store.at_version("t:j", 4).unwrap().state, json!({"n": 3}));
+    }
+
+    /// A home whose jelly file is older than its share record (the jelly came
+    /// back from a backup, the record did not) takes the jelly the catch-up
+    /// carries, though no event is new, and says so.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_jelly_older_than_its_share_record_catches_up_with_no_new_events() {
+        let (dir, old) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        let live = shared(&app, 0);
+        copy(&dir.path().join("jellies"), old.path());
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
+        held.lock().unwrap().comment("person:ana", "Nice");
+        until("the daemon says it saved 2", || held.lock().unwrap().saved.ends_with(&[2])).await;
+        halt(&live);
+        copy(old.path(), &dir.path().join("jellies"));
+
+        let again = restart(dir.path());
+        arrives(&again, json!({"n": 1})).await;
+        assert_eq!(again.store.lock().unwrap().get("t:j").unwrap().comments.len(), 1);
+        assert_eq!(heard(&again).last().unwrap(), "caught up from the relay: this home was behind its share (restored from a backup?), so it took the jelly as the relay has it; `jelly state t:j` shows it, and `jelly look t:j` what people did");
     }
 }
