@@ -151,29 +151,8 @@ pub(super) async fn wait_for_record(
     }
 }
 
-#[derive(Deserialize)]
-pub(super) struct InboxQ {
-    pub(super) project: Option<String>,
-    pub(super) since: Option<u64>,
-}
-
-/// What the person did since `since`, for jellies in `project`: the events an
-/// agent should hear about at the start of its next turn, each with a line of text.
-/// Timestamp queries use indexed byte ranges without assuming wall-clock order.
-pub(super) async fn inbox(State(app): State<Shared>, Query(q): Query<InboxQ>) -> Result<Json<Value>, ApiError> {
-    let since = q.since.unwrap_or(0);
-    let project = q.project.unwrap_or_default();
-    let events = app.store.lock().expect("store lock").events_since(since)
-        .map_err(|e| ApiError::Internal(format!("could not read the event log: {e}")))?;
-    let items: Vec<_> = events.into_iter().filter(|e| e.is_inbox_item(&project)).map(inbox_item).collect();
-    Ok(Json(json!(items)))
-}
-
-
-pub(super) fn inbox_item(event: Event) -> Value {
-    json!(InboxItem::from(event))
-}
-
+/// What the person did that this reader has not heard yet, each with a line of
+/// text. It consumes nothing: the CLI commits `through` once it has printed them.
 pub(super) async fn read_inbox(State(app): State<Shared>, Json(req): Json<InboxRequest>) -> Result<Json<InboxBatch>, ApiError> {
     Ok(Json(app.store.lock().expect("store lock").read_inbox(&req)?))
 }
