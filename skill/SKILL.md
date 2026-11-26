@@ -97,8 +97,12 @@ People write as `person`, or `person:<name>` once they set a name, so several
 people on one jelly stay apart; in verbs, a person is
 `by === "person" || by.startsWith("person:")`.
 
-Keep data in state, not page variables or localStorage, so you and the person
-see the same thing. Give elements stable `id`s: questions and comments point at
+Keep in state what you and the person both need: what they decided and what you
+show them. You both see the same thing, and it outlives a reshape. Make a verb
+for a change you need to hear or they may want to undo. What only helps them
+look around (which tab is open, which row is unfolded, where a walkthrough
+stands) is not a decision: keep it in the page, or call its verb with
+`{ quiet: true }` when it should outlive a reshape. Give elements stable `id`s: questions and comments point at
 them, and `jelly shape` keeps the focused field and scrolled boxes by id. A
 standalone jelly has a Comment button 10px from the bottom right; if a fixed
 control sits there, move it with
@@ -219,9 +223,10 @@ jelly where each change matters at once. A view can draw its own button: mark it
 `data-send`, call `jelly.person.send()`, and read `jelly.person.unsent` (or
 `jelly.person.onUnsent(fn)`). A view sends by itself when an action is the
 decision, as the compare recipe does on a pick. Every verb call a person's page
-makes counts toward Send, so a call the person did not make for you (a timer, a
-game reporting positions) passes `{ quiet: true }` as the third argument of
-`jelly.do`; it still reaches `jelly hear`. jelly's button sits bottom left
+makes counts toward Send, and the count should read as what they decided. A call
+that is not a decision (looking around, a timer, a game reporting positions)
+passes `{ quiet: true }` as the third argument of `jelly.do`; it still changes
+state and reaches `jelly hear`. jelly's button sits bottom left
 and moves up when it would lie on one of the view's buttons, links or fields.
 Place it yourself with `:root { --jelly-send-inset: auto auto 78px 10px; }`.
 
