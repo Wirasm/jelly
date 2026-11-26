@@ -1254,9 +1254,13 @@ impl Store {
             j.shaped_by = Some(ev.by.clone());
         }
         let moved = ev.version != j.version;
+        // One change moves the version by one. More means changes this home
+        // never saw (caught up from the whole jelly), which no step can undo.
+        let skipped = ev.version > j.version + 1;
         j.version = ev.version;
         j.view_rev = ev.view_rev;
         match (moved, doc) {
+            (true, Some(_)) if skipped => entry.history_from = entry.history_from.max(ev.version),
             (true, Some(_)) => push_step(entry, step),
             (true, None) => entry.history_from = entry.history_from.max(ev.version + 1),
             (false, _) => {}

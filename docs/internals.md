@@ -203,6 +203,17 @@ not an object throws on both. The two QuickJS builds word some engine errors
 differently (`stray is not defined` against `'stray' is not defined`), so the
 fixtures hold only errors whose words match.
 
+The share's record (`shares/<share>.json`) holds the relay's seq of the last
+change mirrored. After each record is saved the socket sends `{"saved": seq}`,
+and the relay deletes its events up to that seq, keeping the newest. A failed
+save sends nothing, so the relay keeps what a restart replays. A socket's
+first message, the catch-up, and the answer to an unshare carry the whole
+jelly: when the events after the record's seq are gone, the daemon mirrors
+the ones still there and takes the jelly as the relay has it, with one line
+on stderr. Any later message with a gap closes the socket, and the next one
+catches up. The missing changes are not in this home's log, so the inbox
+does not hear them and `look --compare` cannot rebuild their versions.
+
 ## Shares on the jelly page
 
 `GET /api/shares` lists every shared jelly with its people, and when it ends as

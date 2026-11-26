@@ -334,9 +334,21 @@ export class Live extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** The owner's daemon has saved every event up to `seq`, so they can go. The
+   *  newest stays whatever it says: `seq` continues from it when the object
+   *  wakes. A daemon further behind catches up from the whole jelly. */
+  private saved(seq: number) {
+    if (!this.doc || !Number.isSafeInteger(seq)) return;
+    this.ctx.storage.sql.exec("DELETE FROM events WHERE seq <= ? AND seq < ?", seq, this.seq);
+  }
+
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const seat = this.seat(ws);
-    if (seat.owner || typeof message !== "string") return;
+    if (typeof message !== "string") return;
+    if (seat.owner) {
+      try { this.saved(JSON.parse(message).saved); } catch { /* not for us */ }
+      return;
+    }
     let msg: { ref?: number; op?: string; body?: Record<string, unknown> };
     try { msg = JSON.parse(message); } catch { return; }
     const reply = (ok: boolean, value?: unknown, error?: string) => ws.send(JSON.stringify({ type: "reply", ref: msg.ref, ok, value, error }));

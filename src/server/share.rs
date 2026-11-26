@@ -4,6 +4,8 @@
 //! over one WebSocket per shared jelly and is mirrored into the local store, so
 //! `inbox`, `wait` and `look` work as before. When the laptop sleeps the relay
 //! keeps going; on reconnecting the daemon catches up from the last event it saw.
+//! The daemon tells the relay what its record has saved, and the relay deletes
+//! those events; a daemon further behind catches up from the whole jelly.
 
 use super::{content_type, ApiError, App, Shared, RUNTIME_JS};
 use crate::relay::{self, Fail, Record, Relay};
@@ -14,6 +16,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -27,6 +30,9 @@ pub(crate) struct Live {
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Each change as mirrored here, with the relay's seq, for `forward` to answer with.
     mirrored: broadcast::Sender<(u64, Event)>,
+    /// The relay's seq as the record on disk has it. The socket tells the
+    /// relay, which then deletes the events up to it.
+    saved: AtomicU64,
 }
 
 /// Events from the relay, with the jelly's parts as they are after the last one.
@@ -76,7 +82,8 @@ pub(crate) fn resume(app: &Shared) {
 /// From here on, local changes to the jelly go to the relay.
 fn track(app: &Shared, record: Record) -> Arc<Live> {
     let name = record.jelly.clone();
-    let live = Arc::new(Live { record: tokio::sync::Mutex::new(record), task: Mutex::new(None), mirrored: broadcast::channel(1024).0 });
+    let saved = AtomicU64::new(record.seq);
+    let live = Arc::new(Live { record: tokio::sync::Mutex::new(record), task: Mutex::new(None), mirrored: broadcast::channel(1024).0, saved });
     app.shares.lock().expect("shares lock").insert(name, live.clone());
     live
 }
@@ -98,12 +105,20 @@ fn stop(app: &App, record: &Record) {
 }
 
 /// Mirrors the batch's events that are new here into the store, in order, and
-/// returns them with the relay's seq. None when events before them are missing.
-fn apply(app: &App, live: &Live, record: &mut Record, batch: &Batch) -> Result<Option<Vec<(u64, Event)>>, Error> {
+/// returns them with the relay's seq. When events before them are missing, a
+/// `whole` batch (the catch-up a socket starts with, or the last one of an
+/// unshare) still lands: its jelly is all of it, and the relay deleted the
+/// missing events only after some daemon with this share saved them. Any
+/// other batch with a gap is None, and the socket starts again.
+fn apply(app: &App, live: &Live, record: &mut Record, batch: &Batch, whole: bool) -> Result<Option<Vec<(u64, Event)>>, Error> {
     let fresh: Vec<&Mirrored> = batch.events.iter().filter(|e| e.seq > record.seq).collect();
     let Some(last) = fresh.last() else { return Ok(Some(Vec::new())) };
     if fresh[0].seq != record.seq + 1 {
-        return Ok(None);
+        if !whole {
+            return Ok(None);
+        }
+        log(format_args!("{} caught up from the whole jelly: changes {} to {} were saved by a daemon with this share and are gone from the relay, so they are not in this home's history",
+            record.jelly, record.seq + 1, fresh[0].seq - 1));
     }
     let mut store = app.store.lock().expect("store lock");
     let mut out = Vec::new();
@@ -124,8 +139,9 @@ fn apply(app: &App, live: &Live, record: &mut Record, batch: &Batch) -> Result<O
     for change in &out {
         let _ = live.mirrored.send(change.clone());
     }
-    if let Err(e) = home(app).save(record) {
-        log(format_args!("{e}"));
+    match home(app).save(record) {
+        Ok(()) => live.saved.store(record.seq, Ordering::SeqCst),
+        Err(e) => log(format_args!("{e}")),
     }
     failed.map_or(Ok(Some(out)), Err)
 }
@@ -335,7 +351,7 @@ pub(crate) async fn unshare(app: &Shared, name: &str, what: Stop<'_>) -> Result<
     };
     let mut kept = 0;
     if let Some(batch) = last.map(serde_json::from_value::<Batch>).transpose().map_err(|e| ApiError::Internal(e.to_string()))? {
-        kept = apply(app, &live, &mut record, &batch)?.map_or(0, |e| e.len());
+        kept = apply(app, &live, &mut record, &batch, true)?.map_or(0, |e| e.len());
     }
     stop(app, &record);
     Ok(json!({"jelly": name, "ended": true, "caught_up": kept}))
@@ -378,6 +394,9 @@ async fn connect(app: &Shared, live: &Live) -> Result<(), Fail> {
     // The relay answers "ping" without waking the jelly. No answer within 75 s
     // means the connection is dead, as after the laptop slept.
     let mut ping = tokio::time::interval(Duration::from_secs(30));
+    // The first message is the catch-up, with the whole jelly.
+    let mut whole = true;
+    let mut told = 0;
     loop {
         tokio::select! {
             _ = ping.tick() => ws.send(Message::text("ping")).await.map_err(|e| Fail::Other(e.to_string()))?,
@@ -389,7 +408,15 @@ async fn connect(app: &Shared, live: &Live) -> Result<(), Fail> {
                 Ok(Some(Ok(Message::Text(t)))) => {
                     let batch: Batch = serde_json::from_str(t.as_str()).map_err(|e| Fail::Other(format!("unreadable message from the relay: {e}")))?;
                     let mut record = live.record.lock().await;
-                    match apply(app, live, &mut record, &batch) {
+                    let applied = apply(app, live, &mut record, &batch, std::mem::take(&mut whole));
+                    drop(record);
+                    // Only what is on disk: a daemon that restarts reads its position from there.
+                    let saved = live.saved.load(Ordering::SeqCst);
+                    if saved > told {
+                        ws.send(Message::text(json!({"saved": saved}).to_string())).await.map_err(|e| Fail::Other(e.to_string()))?;
+                        told = saved;
+                    }
+                    match applied {
                         Ok(Some(_)) => {}
                         Ok(None) => return Err(Fail::Other("missed some changes; catching up".into())),
                         Err(e) => return Err(Fail::Other(format!("could not mirror a change: {e}"))),
@@ -489,6 +516,8 @@ mod tests {
         doc: Value,
         /// The `since` of every socket the daemon opened.
         since: Vec<u64>,
+        /// Every position a daemon said it saved.
+        saved: Vec<u64>,
         sockets: Vec<mpsc::UnboundedSender<String>>,
     }
     type Fake = Arc<Mutex<Held>>;
@@ -497,6 +526,17 @@ mod tests {
         fn new(state: Value) -> Fake {
             let doc = json!({"name": "t:j", "about": "", "view": "", "verbs": "const verbs = { pos() {} };", "state": state, "version": 1, "view_rev": 1, "comments": [], "asks": [], "unsent": 0});
             Arc::new(Mutex::new(Held { doc, ..Default::default() }))
+        }
+
+        /// As `Live.saved` does: the events up to `seq` go, but never the newest.
+        fn trim(&mut self, seq: u64) {
+            self.saved.push(seq);
+            let newest = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap());
+            self.events.retain(|e| { let s = e["seq"].as_u64().unwrap(); s > seq || s == newest });
+        }
+
+        fn seqs(&self) -> Vec<u64> {
+            self.events.iter().map(|e| e["seq"].as_u64().unwrap()).collect()
         }
 
         fn after(&self, since: u64) -> Value {
@@ -516,11 +556,20 @@ mod tests {
         }
     }
 
-    /// Serves `held` as the relay of `dir`'s home.
-    async fn serve(dir: &std::path::Path, held: &Fake) {
-        let held = held.clone();
-        let fake = axum::Router::new().route(&format!("/api/live/{SHARE}/ws"), get(move |q: axum::extract::Query<std::collections::HashMap<String, String>>, up: WebSocketUpgrade| async move {
-            let since: u64 = q.get("since").and_then(|s| s.parse().ok()).unwrap_or(0);
+    type Q = axum::extract::Query<std::collections::HashMap<String, String>>;
+    fn since(q: &Q) -> u64 {
+        q.get("since").and_then(|s| s.parse().ok()).unwrap_or(0)
+    }
+
+    /// Serves `held` as the relay of `dir`'s home; returns its URL.
+    async fn serve(dir: &std::path::Path, held: &Fake) -> String {
+        let (held, ended) = (held.clone(), held.clone());
+        let fake = axum::Router::new().route(&format!("/api/live/{SHARE}"), axum::routing::delete(move |q: Q| async move {
+            let mut h = ended.lock().unwrap();
+            h.sockets.clear();
+            Json(h.after(since(&q)))
+        })).route(&format!("/api/live/{SHARE}/ws"), get(move |q: Q, up: WebSocketUpgrade| async move {
+            let since = since(&q);
             up.on_upgrade(move |mut ws| async move {
                 let (tx, mut rx) = mpsc::unbounded_channel::<String>();
                 let first = {
@@ -536,7 +585,13 @@ mod tests {
                             Some(m) => if ws.send(WsMessage::Text(m.into())).await.is_err() { return },
                             None => return,
                         },
-                        m = ws.recv() => if !matches!(m, Some(Ok(_))) { return },
+                        m = ws.recv() => match m {
+                            Some(Ok(WsMessage::Text(t))) => if let Some(seq) = serde_json::from_str::<Value>(t.as_str()).ok().and_then(|v| v["saved"].as_u64()) {
+                                held.lock().unwrap().trim(seq);
+                            },
+                            Some(Ok(_)) => {}
+                            _ => return,
+                        },
                     }
                 }
             })
@@ -545,6 +600,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
         relay::Home(dir.into()).set_relay(&url).unwrap();
+        url
     }
 
     /// Waits up to 5 s for `t:j` to hold `state`.
@@ -573,5 +629,178 @@ mod tests {
         arrives(&app, json!({"waved": true, "after": 1})).await;
         assert_eq!(held.lock().unwrap().since, [0], "the daemon kept its first socket");
         assert_eq!(live.record.lock().await.seq, 2);
+    }
+
+    /// Waits up to 5 s for `what` to hold.
+    async fn until(what: &str, mut ok: impl FnMut() -> bool) {
+        let done = tokio::time::timeout(Duration::from_secs(5), async { while !ok() { tokio::time::sleep(Duration::from_millis(10)).await } }).await;
+        assert!(done.is_ok(), "never: {what}");
+    }
+
+    /// Shares `t:j` from `app` as `SHARE` from relay seq `seq`, as `publish` leaves it.
+    fn shared(app: &Shared, seq: u64) -> Arc<Live> {
+        let record = Record { jelly: "t:j".into(), share: SHARE.into(), seq, links: Default::default(), expires_at: None };
+        home(app).save(&record).unwrap();
+        let live = track(app, record);
+        run(app, &live);
+        live
+    }
+
+    /// The daemon stops, as when its process ends: the record stays on disk.
+    fn halt(live: &Live) {
+        live.task.lock().unwrap().take().unwrap().abort();
+    }
+
+    /// A copy of a home, as a backup is.
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                std::fs::create_dir_all(&target).unwrap();
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    /// A daemon on a fresh copy of `dir`, started as `serve` starts one.
+    fn restart(dir: &std::path::Path) -> Shared {
+        let (events, _) = broadcast::channel(32);
+        let app: Shared = Arc::new(App { store: Mutex::new(crate::store::Store::open(dir).unwrap()), events, screens: Default::default(), trials: Default::default(), probes: Default::default(), shares: Default::default(), sharing: Default::default(), open: Default::default(), feeds: Default::default(), update: Default::default() });
+        resume(&app);
+        app
+    }
+
+    /// The daemon tells the relay what it saved, and the relay deletes those
+    /// events. A home restored from a backup is far behind what is left: it
+    /// catches up from the whole jelly on its first socket, and keeps that socket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_home_restored_from_a_backup_catches_up_from_the_whole_jelly() {
+        let (dir, backup) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        let live = shared(&app, 0);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
+        arrives(&app, json!({"n": 1})).await;
+        until("the daemon says it saved 1", || held.lock().unwrap().saved.contains(&1)).await;
+        copy(dir.path(), backup.path());
+        for n in 2..=4 {
+            held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
+        }
+        arrives(&app, json!({"n": 4})).await;
+        until("the relay deletes what the daemon saved", || held.lock().unwrap().seqs() == [4]).await;
+        halt(&live);
+
+        let restored = restart(backup.path());
+        arrives(&restored, json!({"n": 4})).await;
+        until("the restored home says it saved 4", || held.lock().unwrap().saved.ends_with(&[4])).await;
+        // A person's change after the catch-up comes on the same socket.
+        held.lock().unwrap().change("do", "person:bo", json!({"n": 5}));
+        arrives(&restored, json!({"n": 5})).await;
+        assert_eq!(held.lock().unwrap().since, [0, 1], "one socket each, no loop");
+        assert_eq!(home(&restored).records().unwrap()[0].seq, 5);
+        let store = restored.store.lock().unwrap();
+        assert_eq!(store.get("t:j").unwrap().version, 6);
+        assert!(store.at_version("t:j", 3).is_err(), "v3 was never in this home");
+    }
+
+    /// A record that fails to save is not told to the relay, which so keeps
+    /// the events after the last saved one. A restart reads the record from
+    /// disk and replays them; nothing is missing.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_save_then_a_restart_replays_from_what_is_on_disk() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        let live = shared(&app, 0);
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 1}));
+        until("the daemon says it saved 1", || held.lock().unwrap().saved == [1]).await;
+        let record = dir.path().join("shares").join(format!("{SHARE}.json"));
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o444)).unwrap();
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 2}));
+        held.lock().unwrap().change("do", "person:ana", json!({"n": 3}));
+        arrives(&app, json!({"n": 3})).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(held.lock().unwrap().saved, [1], "the daemon tells only what is on disk");
+        assert_eq!(held.lock().unwrap().seqs(), [1, 2, 3]);
+        halt(&live);
+
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let again = restart(dir.path());
+        until("the restarted daemon says it saved 3", || held.lock().unwrap().saved.ends_with(&[3])).await;
+        assert_eq!(held.lock().unwrap().since, [0, 1]);
+        assert_eq!(again.store.lock().unwrap().get("t:j").unwrap().state, json!({"n": 3}));
+        assert_eq!(held.lock().unwrap().seqs(), [3]);
+    }
+
+    /// Two homes with one share record (a home copied to a second machine)
+    /// both mirror the share and both tell the relay what they saved. The one
+    /// that was away catches up from the whole jelly when it comes back.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_daemons_with_one_share_record_both_keep_up() {
+        let (a_dir, b_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let a = app(a_dir.path());
+        let held = Held::new(json!({}));
+        let url = serve(a_dir.path(), &held).await;
+        home(&a).save(&Record { jelly: "t:j".into(), share: SHARE.into(), seq: 0, links: Default::default(), expires_at: None }).unwrap();
+        copy(a_dir.path(), b_dir.path());
+        relay::Home(b_dir.path().into()).set_relay(&url).unwrap();
+        let a_live = shared(&a, 0);
+        let b = restart(b_dir.path());
+        for n in 1..=2 {
+            held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
+        }
+        arrives(&a, json!({"n": 2})).await;
+        arrives(&b, json!({"n": 2})).await;
+        until("both say they saved 2", || held.lock().unwrap().saved.iter().filter(|s| **s == 2).count() == 2).await;
+        halt(&b.live("t:j").unwrap());
+
+        for n in 3..=5 {
+            held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
+        }
+        arrives(&a, json!({"n": 5})).await;
+        until("the relay deletes what A saved", || held.lock().unwrap().seqs() == [5]).await;
+        let b = restart(b_dir.path());
+        arrives(&b, json!({"n": 5})).await;
+        held.lock().unwrap().change("do", "person:bo", json!({"n": 6}));
+        arrives(&a, json!({"n": 6})).await;
+        arrives(&b, json!({"n": 6})).await;
+        let mut since = held.lock().unwrap().since.clone();
+        since.sort();
+        assert_eq!(since, [0, 0, 2], "each daemon opened one socket per start");
+        halt(&a_live);
+    }
+
+    /// Unsharing from a home far behind the relay still keeps the last of the
+    /// jelly: the relay's answer carries all of it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unsharing_from_a_home_behind_the_relay_keeps_the_jelly() {
+        let (dir, backup) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        home(&app).save(&Record { jelly: "t:j".into(), share: SHARE.into(), seq: 0, links: Default::default(), expires_at: None }).unwrap();
+        copy(dir.path(), backup.path());
+        let live = shared(&app, 0);
+        for n in 1..=3 {
+            held.lock().unwrap().change("do", "person:ana", json!({"n": n}));
+        }
+        until("the relay deletes what the daemon saved", || held.lock().unwrap().seqs() == [3]).await;
+        halt(&live);
+
+        let (events, _) = broadcast::channel(32);
+        let restored: Shared = Arc::new(App { store: Mutex::new(crate::store::Store::open(backup.path()).unwrap()), events, screens: Default::default(), trials: Default::default(), probes: Default::default(), shares: Default::default(), sharing: Default::default(), open: Default::default(), feeds: Default::default(), update: Default::default() });
+        // Shared, but its socket never got to catch up.
+        track(&restored, home(&restored).records().unwrap().remove(0));
+        let ended = unshare(&restored, "t:j", Stop::Share).await.map_err(|e| format!("{e:?}")).unwrap();
+        assert_eq!(ended["caught_up"], 1);
+        assert_eq!(restored.store.lock().unwrap().get("t:j").unwrap().state, json!({"n": 3}));
+        assert!(restored.live("t:j").is_none() && home(&restored).records().unwrap().is_empty());
     }
 }

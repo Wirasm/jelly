@@ -246,9 +246,8 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   64 KB (a verb's args, say), and a change from a link that would take the
   jelly past 4 MB is refused ("This jelly is full"). The jelly is one SQLite
   row, which holds 8 MB, so the rest stays for you: changes from your daemon
-  are not limited. The event log is not bounded: each change from a link
-  stores up to 64 KB in it, even when the verb ignores its args, for as long
-  as the share lasts.
+  are not limited. Each change from a link stores up to 64 KB in the event
+  log, even when the verb ignores its args, until your daemon has it.
 - While shared, the relay's copy is the live one. The daemon forwards local
   changes (`do`, `set`, `shape`, `ask`, `unask`, `answer`, `comment`, `reply`,
   `resolve`, `send`) to it, and mirrors every change back over a WebSocket,
@@ -256,6 +255,16 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   jelly's count toward Send, which the relay keeps for a shared jelly, so the
   Send button says the same on every link and at home. It keeps working while
   your laptop sleeps; the daemon catches up when it reconnects.
+- The daemon tells the relay, over that socket (`{"saved": seq}`), the last
+  event its share record has on disk. Of the events up to it, the relay
+  deletes those older than a week by its own clock, and always keeps the
+  newest, which the object numbers on from when it wakes (`src/trim.ts`). A
+  daemon away for less than a week (a laptop that slept, a home restored from
+  a recent backup, a second machine with a copy of the home) finds every
+  event it missed and hears each one. One away longer finds some gone: it
+  mirrors the events still there, takes the whole jelly the catch-up
+  carries, and the agent hears one line saying how many changes it did not
+  hear one by one. While your daemon is away, nothing is deleted.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.
 - Every page the relay serves (a link, `/pin`, a link that no longer works)
   says "Made with jelly", linking to getjellyware.com. On a link it is a strip
