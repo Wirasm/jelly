@@ -1437,7 +1437,7 @@ mod tests {
         assert_eq!(ids(ask("a")), ["second"]);
         assert_eq!(ids(ask("b")), ["first", "second"]);
         app.store.lock().unwrap().trim_events(2_000, 1 << 20).unwrap();
-        assert_eq!(ids(ask("a")), ["second"], "a trim past the reader's position keeps what it has not heard");
+        assert_eq!(ids(ask("a")), ["second"], "after a trim a known reader still hears only what it has not heard");
         assert_eq!(ids(ask("b")), ["first", "second"], "the person's events outlive a trim");
     }
 

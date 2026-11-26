@@ -85,11 +85,13 @@ its own progress, apart from the same reader's unfiltered one, so it never moves
 an unfiltered read past events.
 Omitting `project` or using an empty string reads all projects. The response is
 `{ "events": [...], "through": 123 }`; events include `text`. The first read
-returns every event from the oldest one stamped within the last hour, and stores
-the position before it as the reader's, so uncommitted events remain available on
-retry even after that hour passes. It reads the whole log to find that event,
-because stamps are not in log order: a change mirrored from a share keeps the
-relay's time, so a share that catches up logs older stamps after newer ones.
+returns every event from the oldest one stamped within the last hour (a stamp
+after now does not count), and stores the position before it as the reader's, so
+uncommitted events remain available on retry even after that hour passes. It
+reads the whole log to find that event, because stamps are not in log order: a
+change mirrored from a share keeps the relay's time, so a share that catches up
+logs older stamps after newer ones. The scan holds the store lock, so on a full
+log a verb sent during a reader's first read waits for it (tens of milliseconds).
 After decoding and successfully writing and
 flushing output, the CLI sends POST `/api/inbox/commit` with the same project and
 reader plus the returned `through` position. Commits only move that reader's
@@ -101,10 +103,11 @@ A reader's position only spares it a replay of the last hour, so the daemon
 never refuses to start over one. An entry in `inbox-readers.json` that does not
 parse, or a file that is not JSON, is dropped, and that reader is new on its next
 read. A file that cannot be read at all (a directory, no permission) fails reads,
-commits and startup. A trim drops every reader whose position is before the
-oldest event left in the log: it could not be served from there, and as a new
-reader it hears the last hour. That keeps the file from growing with every
-conversation that ever ran `jelly hear`.
+commits and startup. Each entry keeps `read_ms`, when its reader last started or
+committed a read (an entry without it counts as read now). Whenever the file is
+written, entries idle for 30 days are dropped, so it does not grow with every
+conversation that ever ran `jelly hear`. A reader that is only behind keeps its
+position: after a trim it hears every event still in the log after it.
 
 The route returns every event. The CLI folds what it prints (`inbox_lines` in
 `main.rs`): the calls of one verb by one person on one jelly become one line,
