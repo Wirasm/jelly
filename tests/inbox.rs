@@ -190,14 +190,14 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
     let home = temp.path().join("daemon");
     let daemon = Daemon::start(&home);
     daemon.person_event();
-    std::fs::write(home.join("inbox-readers.json"), "broken").unwrap();
+    std::fs::create_dir(home.join("inbox-readers.json")).unwrap();
     let client = temp.path().join("client");
     let result = daemon.command(&client).args(["--as", "a", "hear"]).output().unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("could not read inbox"));
     assert!(stdout(daemon.command(&client).args(["--as", "a", "hear", "--hook"]).output().unwrap()).contains("jelly hear failed: could not read inbox"));
-    std::fs::remove_file(home.join("inbox-readers.json")).unwrap();
-    let log = std::fs::read_to_string(home.join("events.jsonl")).unwrap();
+    std::fs::remove_dir(home.join("inbox-readers.json")).unwrap();
+    let log =std::fs::read_to_string(home.join("events.jsonl")).unwrap();
     let event: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
     let mut missing_field = event.clone();
     missing_field.as_object_mut().unwrap().remove("seq");

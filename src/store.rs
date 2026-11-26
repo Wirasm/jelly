@@ -573,19 +573,21 @@ impl RecentEvents {
     }
 }
 
-fn read_event_history(path: &Path) -> std::io::Result<(u64, BTreeMap<String, RecentEvents>)> {
+/// The first and the highest seq in the log, and each jelly's recent events.
+fn read_event_history(path: &Path) -> std::io::Result<(u64, u64, BTreeMap<String, RecentEvents>)> {
     let log = read_optional(path)?;
     if !log.is_empty() && !log.ends_with('\n') {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "event log is missing its final newline"));
     }
-    let mut seq = 0;
+    let (mut first, mut seq) = (None, 0);
     let mut recent = BTreeMap::<String, RecentEvents>::new();
     for line in log.split_inclusive('\n') {
         let event: Event = serde_json::from_str(line)?;
+        first.get_or_insert(event.seq);
         seq = seq.max(event.seq);
         recent.entry(event.jelly.clone()).or_default().push(event);
     }
-    Ok((seq, recent))
+    Ok((first.unwrap_or(0), seq, recent))
 }
 
 impl Store {
@@ -610,7 +612,7 @@ impl Store {
             }
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
-        let (seq, recent) = read_event_history(&dir.join("events.jsonl"))?;
+        let (_, seq, recent) = read_event_history(&dir.join("events.jsonl"))?;
         let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, trims: 0, source: None, quiet: false, at_ms: None, #[cfg(test)] log_failure: None };
         // Without the log, numbering would restart below what readers have
         // already committed, and they would never hear the new events (#69).
@@ -1373,7 +1375,17 @@ impl Store {
     pub(crate) fn trim_events(&mut self, keep: usize, carry: usize) -> std::io::Result<()> {
         trim_log(&self.events_path(), keep, carry)?;
         self.trims += 1;
-        self.recent = read_event_history(&self.events_path())?.1;
+        let (first, _, recent) = read_event_history(&self.events_path())?;
+        self.recent = recent;
+        // A reader whose position is before the oldest event left can no longer
+        // be served from it. Dropped, it is a new reader and hears the last hour,
+        // and the file does not grow with every conversation that ever read.
+        let mut cursors = self.inbox_cursors()?;
+        let before = cursors.len();
+        cursors.retain(|c| c.seq + 1 >= first);
+        if cursors.len() < before {
+            write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)?;
+        }
         Ok(())
     }
 
@@ -1425,12 +1437,20 @@ impl Store {
         Ok(())
     }
 
+    /// A cursor only spares its reader a replay of the last hour, so an entry
+    /// that does not parse, or a file that is not a JSON list, is dropped: that
+    /// reader is new on its next read. Only a file that cannot be read fails.
     fn inbox_cursors(&self) -> std::io::Result<Vec<InboxCursor>> {
-        match fs::read(self.dir.join("inbox-readers.json")) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e),
-        }
+        let bytes = match fs::read(self.dir.join("inbox-readers.json")) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        // Parsing entry by entry through `Value` takes twice as long, so only when one fails.
+        Ok(serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            let entries: Vec<Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+            entries.into_iter().filter_map(|entry| serde_json::from_value(entry).ok()).collect()
+        }))
     }
 
     pub fn read_inbox(&self, req: &InboxRequest) -> Result<InboxBatch, Error> {
@@ -1444,25 +1464,26 @@ impl Store {
         let read = || -> std::io::Result<InboxBatch> {
             let mut cursors = self.inbox_cursors()?;
             let existing = cursors.iter().find(|c| c.matches(req)).map(|c| c.seq);
-            // A new reader starts after the newest event older than an hour.
+            // A new reader starts at the oldest event stamped within the last hour.
+            // Stamps are not in log order (a change mirrored from a share keeps the
+            // relay's time), so it reads the whole log, which a trim keeps small.
             let hour_ago = at_ms.saturating_sub(3_600_000);
-            let mut start = existing;
+            let mut oldest_recent = None;
             let mut through = existing.unwrap_or(self.seq);
             let mut events = Vec::new();
             self.events_back(|line| {
                 let event: Event = serde_json::from_str(line)?;
                 through = through.max(event.seq);
-                if start.map_or(event.at_ms <= hour_ago, |seq| event.seq <= seq) {
-                    start = Some(event.seq);
-                    return Ok(false);
-                }
-                if wanted(&event) { events.push(InboxItem::from(event)); }
+                if existing.is_some_and(|seq| event.seq <= seq) { return Ok(false); }
+                if event.at_ms > hour_ago { oldest_recent = Some(event.seq); }
+                if wanted(&event) { events.push(event); }
                 Ok(true)
             })?;
-            events.reverse();
+            let start = existing.unwrap_or(oldest_recent.map_or(through, |seq| seq - 1));
+            let events = events.into_iter().rev().filter(|e| e.seq > start).map(InboxItem::from).collect();
             if existing.is_none() {
                 // Fix the start so an unacknowledged response can be retried even an hour later.
-                cursors.push(InboxCursor { project: project.clone(), reader: reader.clone(), mine: mine.clone(), seq: start.unwrap_or(0) });
+                cursors.push(InboxCursor { project: project.clone(), reader: reader.clone(), mine: mine.clone(), seq: start });
                 write_atomic(&self.dir.join("inbox-readers.json"), &serde_json::to_vec(&cursors)?)?;
             }
             Ok(InboxBatch { events, through })
@@ -2163,12 +2184,6 @@ mod tests {
         fs::write(s.events_path(), events.join("\n") + "\n").unwrap();
         let s = Store::open(dir.path()).unwrap();
         assert!(!dir.path().join("inbox-readers.json").exists());
-        let path = s.events_path();
-        let saved = fs::read(&path).unwrap();
-        // The read stops at the first record older than the hour, so damage before it goes unread.
-        let mut damaged = saved.clone();
-        damaged[0] = 0xff;
-        fs::write(&path, damaged).unwrap();
         let first = s.read_inbox_at(&req("p", &reader), first_read_at).unwrap();
         assert_eq!(first.events.iter().map(|item| item.event.seq).collect::<Vec<_>>(), [3, 4]);
         let retry_at = first_read_at + 3_600_001;
@@ -2176,7 +2191,6 @@ mod tests {
         assert_eq!(serde_json::to_value(s.read_inbox_at(&req("p", &reader), retry_at).unwrap()).unwrap(), expected);
         let empty_reader = InboxReader::Named { name: "empty".into() };
         assert!(s.read_inbox_at(&req("p", &empty_reader), retry_at).unwrap().events.is_empty());
-        fs::write(&path, saved).unwrap();
         drop(s);
         let mut s = Store::open(dir.path()).unwrap();
         assert_eq!(serde_json::to_value(s.read_inbox_at(&req("p", &reader), retry_at).unwrap()).unwrap(), expected);
@@ -2273,9 +2287,6 @@ mod tests {
         s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
         let path = dir.path().join("inbox-readers.json");
         let saved = fs::read(&path).unwrap();
-        fs::write(&path, "broken").unwrap();
-        assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(consume_inbox(&mut s, "p", reader.clone()).is_err());
@@ -2294,6 +2305,64 @@ mod tests {
         fs::remove_dir(s.events_path()).unwrap();
         fs::write(s.events_path(), log).unwrap();
         assert_eq!(consume_inbox(&mut s, "p", reader).unwrap().len(), 1);
+    }
+
+    fn seqs(events: Vec<Event>) -> Vec<u64> {
+        events.iter().map(|e| e.seq).collect()
+    }
+
+    #[test]
+    fn an_unreadable_reader_is_dropped_and_never_stops_the_daemon() {
+        let (dir, mut s) = store();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let named = |name: &str| InboxReader::Named { name: name.into() };
+        let heard = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        consume_inbox(&mut s, "p", named("kept")).unwrap();
+        let path = dir.path().join("inbox-readers.json");
+        let mut entries: Vec<Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        entries.push(json!({"project": "p", "reader": {"kind": "named", "name": "lost"}, "since_ms": 1}));
+        fs::write(&path, serde_json::to_vec(&entries).unwrap()).unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let next = s.do_verb("p:sample", "label", json!({"id": "b", "value": "y"}), PERSON).unwrap();
+        assert_eq!(seqs(consume_inbox(&mut s, "p", named("kept")).unwrap()), [next.seq]);
+        assert_eq!(seqs(consume_inbox(&mut s, "p", named("lost")).unwrap()), [heard.seq, next.seq], "a new reader hears the last hour");
+        // A file that is not JSON holds no readers: each is new.
+        fs::write(&path, "broken").unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(seqs(consume_inbox(&mut s, "p", named("kept")).unwrap()), [heard.seq, next.seq]);
+        assert!(consume_inbox(&mut s, "p", named("kept")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_trim_drops_the_readers_it_left_behind() {
+        let (dir, mut s) = store();
+        s.make("sample", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "p").unwrap();
+        let named = |name: &str| InboxReader::Named { name: name.into() };
+        consume_inbox(&mut s, "p", named("behind")).unwrap();
+        for i in 0..50 {
+            s.do_verb("p:sample", "label", json!({"id": format!("n{i}"), "value": "x"}), "agent").unwrap();
+        }
+        consume_inbox(&mut s, "p", named("current")).unwrap();
+        let heard = s.do_verb("p:sample", "label", json!({"id": "a", "value": "x"}), PERSON).unwrap();
+        s.trim_events(2_000, 0).unwrap();
+        let records: Vec<InboxCursor> = serde_json::from_slice(&fs::read(dir.path().join("inbox-readers.json")).unwrap()).unwrap();
+        assert_eq!(records.iter().map(|c| c.reader.clone()).collect::<Vec<_>>(), [named("current")]);
+        assert_eq!(seqs(consume_inbox(&mut s, "p", named("current")).unwrap()), [heard.seq]);
+        assert_eq!(seqs(consume_inbox(&mut s, "p", named("behind")).unwrap()), [heard.seq], "a dropped reader hears the last hour");
+    }
+
+    /// A share that catches up after a dropped connection logs the relay's
+    /// changes with the relay's times, after events made here since.
+    #[test]
+    fn a_new_reader_hears_the_last_hour_around_a_change_mirrored_with_an_old_time() {
+        let (_d, mut s) = store();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let before = s.do_verb("p:j", "label", json!({"id": "a", "value": "1"}), PERSON).unwrap();
+        let ev: Mirrored = serde_json::from_value(json!({"seq": 1, "at_ms": now_ms() - 7_200_000, "kind": "do", "by": "person:bo", "verb": "label",
+            "args": {"id": "b", "value": "2"}, "version": before.version + 1, "view_rev": before.view_rev})).unwrap();
+        let caught_up = s.mirror("p:j", &ev, None).unwrap();
+        let after = s.do_verb("p:j", "label", json!({"id": "c", "value": "3"}), PERSON).unwrap();
+        assert_eq!(seqs(consume_inbox(&mut s, "p", InboxReader::Named { name: "new".into() }).unwrap()), [before.seq, caught_up.seq, after.seq]);
     }
 
     #[test]

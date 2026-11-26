@@ -85,14 +85,26 @@ its own progress, apart from the same reader's unfiltered one, so it never moves
 an unfiltered read past events.
 Omitting `project` or using an empty string reads all projects. The response is
 `{ "events": [...], "through": 123 }`; events include `text`. The first read
-reads the log backwards to the first event older than an hour and stores that
-event's position as the reader's, so uncommitted events remain available on retry
-even after that hour passes. After decoding and successfully writing and
+returns every event from the oldest one stamped within the last hour, and stores
+the position before it as the reader's, so uncommitted events remain available on
+retry even after that hour passes. It reads the whole log to find that event,
+because stamps are not in log order: a change mirrored from a share keeps the
+relay's time, so a share that catches up logs older stamps after newer ones.
+After decoding and successfully writing and
 flushing output, the CLI sends POST `/api/inbox/commit` with the same project and
 reader plus the returned `through` position. Commits only move that reader's
 progress forward and leave events newer than `through` unread. Lost or undecodable
 read responses do not consume events. Ambiguous output, failed acknowledgements
 or client crashes may replay events.
+
+A reader's position only spares it a replay of the last hour, so the daemon
+never refuses to start over one. An entry in `inbox-readers.json` that does not
+parse, or a file that is not JSON, is dropped, and that reader is new on its next
+read. A file that cannot be read at all (a directory, no permission) fails reads,
+commits and startup. A trim drops every reader whose position is before the
+oldest event left in the log: it could not be served from there, and as a new
+reader it hears the last hour. That keeps the file from growing with every
+conversation that ever ran `jelly hear`.
 
 The route returns every event. The CLI folds what it prints (`inbox_lines` in
 `main.rs`): the calls of one verb by one person on one jelly become one line,
@@ -105,7 +117,7 @@ malformed events or is nonempty and missing its final newline. This prevents
 reusing positions already passed by inbox readers or corrupting the final record
 on the next append. A daemon that starts without the log numbers new events
 after the highest position committed in `inbox-readers.json`, so readers still
-hear them; it refuses startup if that file cannot be read.
+hear them; it refuses startup if that file exists and cannot be read.
 
 `~/.jelly/events.jsonl` is trimmed once it passes 8 MiB, to its newest 4 MiB plus up
 to 1 MiB of your older events, so the inbox and `jelly look` still have them. A trim
@@ -113,8 +125,8 @@ keeps every event's position, and inbox reads go back only as far as the reader'
 position. `jelly look` uses the last change and last eight person events per jelly,
 kept in memory during startup validation and updated on append and trim; it does
 not scan the log on each request. An inbox read starts at the end of the log and
-stops at the reader's position, or for a new reader at the first event older than
-an hour, so it never parses the history before that.
+stops at the reader's position, so it never parses the history before that; only a
+new reader's first read parses the whole log.
 
 ## Send and waiting
 
