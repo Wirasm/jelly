@@ -322,7 +322,7 @@
         "kind": "terminal",
         "before": "let rendered = render(…).await;   // waits for Chrome to exit\nfor _ in 0..30 { if let Some(s) = snap() { return Ok(…) } … }",
         "after": "tokio::pin!(render);\nloop {\n    if let Some(s) = snap() { return Ok(…) }   // dropping render stops Chrome\n    …\n    tokio::select! {\n        r = &mut render => rendered = Some((r, Instant::now())),\n        _ = sleep(50 ms) => {}\n    }\n}",
-        "caption": "anchor_place in src/server.rs"
+        "caption": "anchor_place in src/server.rs, now ask_shown in src/server/ask.rs"
       },
       "by": "agent"
     },

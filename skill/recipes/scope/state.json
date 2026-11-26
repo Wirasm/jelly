@@ -129,7 +129,7 @@
       "cost": 2,
       "value": 2,
       "group": "run",
-      "why": "attention and ask --spec print raw JSON. Costs tokens, breaks nothing.",
+      "why": "waiting and ask --spec print raw JSON. Costs tokens, breaks nothing.",
       "in": false
     },
     {

@@ -73,9 +73,6 @@ fn daemon(url: &str) -> Check {
             Ok(_) => Check::ok(format!("daemon at {url}, the same build as this jelly")),
             Err(e) => Check::fix(format!("daemon at {url} did not say its version ({e})"), "run `jelly serve` for details"),
         },
-        // A daemon from before `/api/version` cannot be asked to restart either.
-        Err(ureq::Error::Status(404, _)) => Check::fix(format!("daemon at {url} is an older build than this jelly ({VERSION})"),
-            "stop that `jelly serve` process, and the next jelly command starts this build"),
         Err(ureq::Error::Transport(t)) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
             if startup::is_default_endpoint(url) {
                 Check::ok(format!("no daemon at {url}: the next jelly command starts it"))

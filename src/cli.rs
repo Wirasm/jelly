@@ -417,7 +417,7 @@ pub enum Cmd {
     /// (`jelly unshare NAME --pin`).
     ///
     /// While a jelly is shared, the relay holds the live copy: it keeps working
-    /// while this machine sleeps, and your changes (call, set, shape, ask,
+    /// while this machine sleeps, and your changes (do, set, shape, ask,
     /// unask, reply) go there. Undo, move, rm and a new ask round wait until
     /// `jelly unshare`.
     Share {

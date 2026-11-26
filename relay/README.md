@@ -229,8 +229,8 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   comments and asks, runs verbs in QuickJS (the daemon's engine, as
   WebAssembly) with the same 1 s limit, and keeps an event log.
 - While shared, the relay's copy is the live one. The daemon forwards local
-  changes (`call`, `set`, `shape`, `ask`, `withdraw`, `reply`, `resolve`) to
-  it, and mirrors every change back over a WebSocket, so `inbox`, `wait` and
+  changes (`do`, `set`, `shape`, `ask`, `unask`, `answer`, `comment`, `reply`,
+  `resolve`, `send`) to it, and mirrors every change back over a WebSocket, so `hear`, `hear --wait` and
   `look` work as before. It keeps working while your laptop sleeps; the daemon
   catches up when it reconnects.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.

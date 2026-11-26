@@ -407,7 +407,7 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
             "kept": j.kept, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
-            "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
+            "created_ms": j.created_ms,
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
             "open_asks": j.asks.iter().filter(|a| a.is_open()).count(),

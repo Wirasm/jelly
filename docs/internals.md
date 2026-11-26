@@ -44,8 +44,8 @@ was last checked.
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
 Finite commands finish their changes before printing. `events` and `dev`
-stop when an output write detects closure; while idle, they keep waiting. `wait`
-keeps its event selection and timeout behavior, detecting closure only when it
+stop when an output write detects closure; while idle, they keep waiting. `hear
+--wait` keeps its event selection and timeout behavior, detecting closure only when it
 prints a qualifying event. `serve` continues serving when stdout closes.
 
 ## Inbox
@@ -60,11 +60,11 @@ hook output as `jelly hear failed: ...`. Failed reads do not advance progress.
 Claude's `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader
 across commands and resumed conversations. JSON `session_id` identifies hook
 invocations only. To share that progress with ordinary commands, supply the same
-conversation ID through `inbox --session-id` or `JELLY_SESSION_ID` (or use the
+conversation ID through `hear --session-id` or `JELLY_SESSION_ID` (or use the
 same explicit `--as` / `JELLY_AS` name for both).
 
 Inbox identity uses explicit `--as` / `JELLY_AS` first, then
-`inbox --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
+`hear --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
 `session_id` from hook stdin. Other agents should export a stable, distinct
 conversation token as `JELLY_SESSION_ID`. Without one, the invoking parent
 process's PID and start time identify the reader for that process's lifetime;
@@ -159,8 +159,9 @@ background, so they match the page they sit on.
 
 ## Shares on the jelly page
 
-`GET /api/shares` lists every shared jelly with its people from the daemon's
-own record (`people_from` is `record`), which is what the jelly page asks for
+`GET /api/shares` lists every shared jelly with its people, and when it ends as
+the relay last said (`expires_at`), from the daemon's own record (`people_from`
+is `record`), which is what the jelly page asks for
 every 20 seconds. With `?here=true`, which the page sends only while a share's
 people are showing (its Who button), the daemon asks the relay for each share
 (`GET /api/live/<share>/people`) who holds a link, when each last opened one
@@ -276,7 +277,3 @@ python3 scripts/migrate-home-2026-11.py ~/.jelly --write
 It renames the stored fields and event kinds, rewrites old runtime names in
 views, gives the jelly page and ask pages the bundled view, and drops undo
 history, which holds views written for the old runtime.
-
-After that, a new bundled jelly page reaches an existing home with
-`jelly shape page --view assets/page.html`. This replaces the page's view and
-keeps its state.
