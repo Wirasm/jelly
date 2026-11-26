@@ -289,6 +289,11 @@ jelly recipes plan --out /tmp/plan             # its files, to edit; then jelly 
 
 ```bash
 jelly ls                         # this project's jellies; --all for every project
+jelly move plan launch           # the jelly is launch:plan now; "" for no project
+jelly project                    # every project and how many jellies it holds
+jelly project launch             # an empty project, to move jellies into
+jelly project demo --move launch # rename it, or merge it into launch: every jelly in it is launch:name now
+jelly project launch --rm        # remove it; it must hold no jelly
 jelly find three issues          # the person named a jelly loosely: which one, and its state
 jelly serve --temp               # a throwaway daemon (free port, fresh home); use its URL as JELLY_URL
 jelly pull plan ./plan           # the full jelly into a folder: view.html, verbs.js, state.json, assets/
@@ -313,7 +318,9 @@ jelly rm plan
 ```
 
 A jelly's full name is `project:name`; the project is the git repo you run in
-(or `--project`). Short names work inside the same project, in the CLI and in
+(or `--project`). The person can rename a project on the jelly page, which
+renames its jellies: when a name you remember is gone, `jelly find` it. Short
+names work inside the same project, in the CLI and in
 `jelly.other`. From outside, use the full name.
 
 Live data: verbs have no network, so push it in from your turn, a script or a

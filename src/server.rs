@@ -293,6 +293,9 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/try", post(try_steps))
         .route("/api/tries/{token}", post(put_trial_result))
         .route("/api/tries/{token}/do", post(trial_call))
+        .route("/api/projects", get(projects).post(make_project))
+        .route("/api/projects/{project}", axum::routing::delete(remove_project))
+        .route("/api/projects/{project}/move", post(move_whole_project))
         .route("/api/projects/{project}/design", get(get_design).put(put_design))
         .route("/p/{project}/DESIGN.md", get(get_design))
         .route("/p/{project}/design.css", get(design_css))
@@ -589,6 +592,44 @@ struct ProjectReq {
 async fn move_project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
     app.not_shared(&name, "move")?;
     app.change(|s| s.set_project(&name, &r.project, &by(r.by)?))
+}
+
+/// Every project with the number of jellies in it, empty ones too.
+async fn projects(State(app): State<Shared>) -> Json<Value> {
+    let store = app.store.lock().expect("store lock");
+    Json(json!(store.projects().into_iter().map(|(name, jellies)| json!({"name": name, "jellies": jellies})).collect::<Vec<_>>()))
+}
+
+#[derive(Deserialize)]
+struct MakeProjectReq {
+    name: String,
+}
+
+async fn make_project(State(app): State<Shared>, Json(r): Json<MakeProjectReq>) -> Result<Json<Value>, ApiError> {
+    app.store.lock().expect("store lock").make_project(&r.name)?;
+    Ok(Json(json!({"name": r.name, "jellies": 0})))
+}
+
+async fn remove_project(State(app): State<Shared>, Path(project): Path<String>) -> Result<Json<Value>, ApiError> {
+    app.store.lock().expect("store lock").remove_project(&project)?;
+    Ok(Json(json!({"name": project})))
+}
+
+#[derive(Deserialize)]
+struct MoveProjectReq {
+    to: String,
+    by: Option<String>,
+}
+
+/// Renames a project or merges it into another: each of its jellies moves, so
+/// none of them may be shared, as for `move_project` on one jelly.
+async fn move_whole_project(State(app): State<Shared>, Path(project): Path<String>, Json(r): Json<MoveProjectReq>) -> Result<Json<Value>, ApiError> {
+    let by = by(r.by)?;
+    let names: Vec<String> = app.store.lock().expect("store lock").list().filter(|j| j.project() == project).map(|j| j.name.clone()).collect();
+    for name in &names {
+        app.not_shared(name, "move")?;
+    }
+    app.change_many(|s| s.move_project(&project, &r.to, &by))
 }
 
 async fn remove(State(app): State<Shared>, Path(name): Path<String>, Query(q): Query<ByQ>) -> Result<Json<Event>, ApiError> {

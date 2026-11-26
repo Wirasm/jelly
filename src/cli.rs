@@ -365,6 +365,25 @@ pub enum Cmd {
     },
     /// Move a jelly to another project ("" for none). Its name becomes project:name.
     Move { name: String, to: String },
+    /// Projects: the part before the colon in a jelly's name. Without a NAME,
+    /// list them with how many jellies each holds. With a NAME, make an empty
+    /// one to move jellies into; a project also appears when a jelly is made in
+    /// it and goes when its last jelly does, unless it was made here.
+    ///
+    /// `--move NEW` renames it: every jelly in it becomes `NEW:name`, so use
+    /// the new names afterwards. When NEW exists the two merge, unless a name is
+    /// taken there. A shared jelly cannot move: `jelly unshare` it first.
+    /// Agents in a git repo still make jellies in the project named after the
+    /// repo's folder; `--project` says otherwise.
+    Project {
+        name: Option<String>,
+        /// Rename NAME to NEW, or merge it into NEW.
+        #[arg(long = "move", value_name = "NEW", requires = "name")]
+        to: Option<String>,
+        /// Remove NAME. It must hold no jelly, archived ones included.
+        #[arg(long, requires = "name", conflicts_with = "to")]
+        rm: bool,
+    },
     /// Add files (images, video, models, data) next to a jelly. A view refers
     /// to them as `assets/<file>`. They stay out of state and undo.
     Asset {

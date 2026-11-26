@@ -32,6 +32,10 @@ thing: no aliases for commands, flags or runtime fields.
   answers do not bump it; an event's `seq` counts everything.
 - A jelly's id is `project:name`; the project is the part before the colon. Short
   names resolve in the CLI (current project) and the runtime (the view's project).
+- A project has no id of its own. It exists while a jelly is in it, or while its
+  folder `~/.jelly/projects/<project>/` does (`jelly project NAME`, or a
+  DESIGN.md). Renaming one moves every jelly in it (`Store::move_project`), so
+  their ids change; do not add a second name or a display label for a project.
 - Assets live in `~/.jelly/assets/<id>/`, outside state and undo. On Windows the folder
   is `project+name`, because `:` is not allowed in a file name (`disk::name`). Views are
   served at `/j/<id>/` so `assets/<file>` resolves; keep that trailing slash.
