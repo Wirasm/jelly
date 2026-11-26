@@ -1,12 +1,24 @@
-// Runs a jelly's verbs exactly as the daemon does (src/verbs.rs): the same
-// QuickJS engine, the same wrapper script, a fresh runtime per call, 1 s and
-// 64 MB limits. Workers cannot eval, so QuickJS runs as WebAssembly, and the
-// .wasm is imported as a module because a Worker cannot fetch it at runtime.
+// Runs a jelly's verbs as the daemon does (src/verbs.rs): the same QuickJS
+// engine, the same wrapper script, a fresh runtime per call, a 64 MB limit.
+// Workers cannot eval, so QuickJS runs as WebAssembly, and the .wasm is
+// imported as a module because a Worker cannot fetch it at runtime.
+//
+// The daemon stops a verb after 1 s. A Worker's clock stands still while code
+// runs (Date.now() is the time of the last I/O), so the relay counts steps
+// instead: it counts calls to QuickJS's interrupt handler, which runs as
+// JavaScript calls functions and turns loops.
 
 import { newQuickJSWASMModuleFromVariant, newVariant, type QuickJSWASMModule } from "quickjs-emscripten-core";
 import baseVariant from "@jitl/quickjs-wasmfile-release-sync";
 // By path, not the package's "./wasm" export: wrangler picks the wasm loader by file name.
 import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
+
+/** Interrupt handler calls a verb gets: roughly 25 million turns of an empty
+ *  loop. How long that takes depends on the work in each turn and the machine,
+ *  so this bounds work, not time. Work inside a builtin (JSON.stringify,
+ *  JSON.parse) is not counted, so a loop doing heavy builtin work each turn
+ *  can still run until the platform's CPU limit resets the object. */
+const STEPS = 5_000;
 
 const variant = newVariant(baseVariant, { wasmModule });
 let loading: Promise<QuickJSWASMModule> | undefined;
@@ -30,16 +42,16 @@ ${src}
 function evaluate(mod: QuickJSWASMModule, code: string): unknown {
   const rt = mod.newRuntime();
   rt.setMemoryLimit(64 << 20);
-  const deadline = Date.now() + 1000;
-  rt.setInterruptHandler(() => Date.now() > deadline);
+  let steps = 0;
+  rt.setInterruptHandler(() => ++steps > STEPS);
   const ctx = rt.newContext();
   try {
     const result = ctx.evalCode(code);
     if (result.error) {
       const e = ctx.dump(result.error);
       result.error.dispose();
-      throw new Refusal(Date.now() > deadline
-        ? "verb ran longer than 1s and was stopped"
+      throw new Refusal(steps > STEPS
+        ? "verb ran too long and was stopped: does it loop forever?"
         : `verbs did not load: ${e?.name ?? "Error"}: ${e?.message ?? "unknown error"}`);
     }
     const out = JSON.parse(ctx.getString(result.value));
