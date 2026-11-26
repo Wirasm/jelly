@@ -31,18 +31,34 @@ enum Run {
 }
 
 /// Asks for the latest release now and once a day. No answer is no news:
-/// being offline is normal.
+/// being offline is normal, and it asks again at the next look.
+///
+/// The day is counted on the wall clock, looked at every few minutes. A timer
+/// of a day would not do: it stands still while the machine sleeps, so on a
+/// laptop "a day" could be most of a week.
 pub(super) fn start(app: &Shared) {
     LazyLock::force(&STARTED);
     let app = app.clone();
     tokio::spawn(async move {
+        let mut asked_ms = None;
         loop {
-            if let Ok(Ok(latest)) = tokio::task::spawn_blocking(update::latest).await {
-                app.update.lock().expect("update lock").latest = Some(latest);
+            if due(asked_ms, now_ms()) {
+                if let Ok(Ok(latest)) = tokio::task::spawn_blocking(update::latest).await {
+                    app.update.lock().expect("update lock").latest = Some(latest);
+                    asked_ms = Some(now_ms());
+                }
             }
-            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+            tokio::time::sleep(LOOK_EVERY).await;
         }
     });
+}
+
+const ASK_EVERY_MS: u64 = 24 * 3600 * 1000;
+const LOOK_EVERY: Duration = Duration::from_secs(10 * 60);
+
+/// Whether to ask npm now: never answered, or the last answer is a day old.
+fn due(asked_ms: Option<u64>, now_ms: u64) -> bool {
+    asked_ms.is_none_or(|asked| now_ms.saturating_sub(asked) >= ASK_EVERY_MS)
 }
 
 fn install() -> Option<Install> {
@@ -121,4 +137,17 @@ fn restart_now(app: &Shared) -> String {
     }
     let _ = app;
     CANNOT_RESTART.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_latest_release_is_asked_for_once_a_day_by_the_wall_clock() {
+        assert!(due(None, 5), "no answer yet: ask");
+        assert!(!due(Some(1_000), 1_000 + ASK_EVERY_MS - 1));
+        // A laptop asleep for three days wakes with the same timer but a later clock.
+        assert!(due(Some(1_000), 1_000 + 3 * ASK_EVERY_MS));
+    }
 }
