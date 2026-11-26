@@ -34,9 +34,17 @@ export type RunVerb = (verbs: string, verb: string, state: Json, args: Json, by:
 
 /** Rust's `str::trim`: the characters with Unicode's White_Space property. JavaScript's
  *  `trim` also takes U+FEFF and leaves U+0085, so the two would store different text. */
-const SPACE = "[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+";
-const ENDS = new RegExp(`^${SPACE}|${SPACE}$`, "g");
-export const trim = (s: unknown) => String(s ?? "").replace(ENDS, "");
+const SPACE = new Set([0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+  0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000]);
+/** A loop from each end, not a regex: `/\s+$/` backtracks from every space of a
+ *  long inner run, and a link could send one to stall the jelly for everyone. */
+export function trim(s: unknown): string {
+  const t = String(s ?? "");
+  let from = 0, to = t.length;
+  while (from < to && SPACE.has(t.charCodeAt(from))) from++;
+  while (to > from && SPACE.has(t.charCodeAt(to - 1))) to--;
+  return t.slice(from, to);
+}
 
 /** `store::is_person`: "person", or "person:<name>" with a name. */
 export const isPerson = (by: string) => by === "person" || (by.startsWith("person:") && by.length > "person:".length);

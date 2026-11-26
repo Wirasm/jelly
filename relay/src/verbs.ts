@@ -20,7 +20,7 @@ const STEPS = 5_000;
 export class Refusal extends Error {}
 
 function script(src: string, body: string): string {
-  return `(function() {
+  return `(function() { 'use strict';
   var __v;
   try { __v = (function() {
 ${src}

@@ -110,9 +110,24 @@
         { "change": { "op": "set", "pointer": "/list/2", "value": 1, "by": "agent" }, "refused": "/list/2 is past the end of the array" },
         { "change": { "op": "set", "pointer": "/list/1", "remove": true, "by": "agent" }, "refused": "/list/1 is past the end of the array" },
         { "change": { "op": "set", "pointer": "/list/x", "value": 1, "by": "agent" }, "refused": "\"x\" is not an array index" },
+        { "change": { "op": "set", "pointer": "/list/18446744073709551616", "value": 1, "by": "agent" }, "refused": "/list/18446744073709551616 is past the end of the array" },
+        { "change": { "op": "set", "pointer": "/list/18446744073709551616", "remove": true, "by": "agent" }, "refused": "/list/18446744073709551616 is past the end of the array" },
+        { "change": { "op": "set", "pointer": "/list/18446744073709551616/x", "value": 1, "by": "agent" }, "refused": "nothing at /list/18446744073709551616" },
         { "change": { "op": "set", "pointer": "/list/+0", "value": 1, "by": "agent" }, "refused": "\"+0\" is not an array index" },
         { "change": { "op": "set", "pointer": "/list/00", "value": 1, "by": "agent" }, "refused": "\"00\" is not an array index",
           "jelly": { "state": { "list": [1], "n": 5, "o": {} }, "version": 1 } }
+      ]
+    },
+    {
+      "name": "verbs run in strict mode: a write to state that is not an object throws",
+      "jelly": { "verbs": "const verbs = { put(s) { s.n = 1; }, swap() { return { n: 1 }; } }", "state": 5 },
+      "steps": [
+        { "change": { "op": "do", "verb": "put", "by": "agent" }, "refused": "TypeError: not an object", "jelly": { "state": 5, "version": 1 } },
+        { "change": { "op": "set", "pointer": "", "value": "text", "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "" }, "version": 2, "view_rev": 1 }, "jelly": { "state": "text" } },
+        { "change": { "op": "do", "verb": "put", "by": "agent" }, "refused": "TypeError: not an object", "jelly": { "state": "text" } },
+        { "change": { "op": "do", "verb": "swap", "by": "agent" },
+          "event": { "kind": "do", "by": "agent", "verb": "swap", "args": null, "version": 3, "view_rev": 1 }, "jelly": { "state": { "n": 1 } } }
       ]
     },
     {

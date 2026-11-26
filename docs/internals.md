@@ -192,7 +192,16 @@ The relay sends every change back over the daemon's WebSocket to the share,
 and `Store::mirror` records it here as it happened there, with the relay's
 count toward Send. A kind of change this daemon does not know is mirrored as
 `unknown`, with the jelly as the relay sent it, so a relay deployed before the
-daemon cannot stall the mirror.
+daemon cannot stall the mirror. `jelly hear` shows it, the changes of one
+person on one jelly folded into one line, with what to do (`jelly update`).
+The kind's own name is not kept. A jelly binary older than the `unknown` kind
+refuses to start on a log that holds one.
+
+Both sides run verbs in strict mode (`'use strict'` in the wrapper script of
+`src/verbs.rs` and `relay/src/verbs.ts`), so a verb that writes to state that is
+not an object throws on both. The two QuickJS builds word some engine errors
+differently (`stray is not defined` against `'stray' is not defined`), so the
+fixtures hold only errors whose words match.
 
 ## Shares on the jelly page
 

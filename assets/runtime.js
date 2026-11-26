@@ -128,6 +128,23 @@
     drawSend();
     unsentSubs.forEach((fn) => fn(unsent));
   };
+  // How many counts events have brought, so a fetch started before one cannot set an older count.
+  let counted = 0;
+  // A relay deployed before changes carried the count has it only in the jelly:
+  // one fetch at a time, and one more after it when changes came meanwhile.
+  let recounting = null, recountAgain = false;
+  function recount() {
+    if (recounting) { recountAgain = true; return; }
+    const at = counted;
+    recounting = (async () => {
+      try {
+        const j = share ? await viaShare("show") : await (await fetch(api)).json();
+        if (counted === at) setUnsent(j.unsent || 0);
+      } catch (e) { console.error(e); }
+      recounting = null;
+      if (recountAgain) { recountAgain = false; recount(); }
+    })();
+  }
   const subs = [];
   const enc = encodeURIComponent;
   const api = `/api/jellies/${enc(boot.name)}`;
@@ -278,9 +295,8 @@
       return;
     }
     if (ev.kind === "make" || ev.view_rev !== boot.viewRev) { reload(); return; }
-    // A relay deployed before changes carried the count has it only in the jelly.
-    if (typeof ev.unsent === "number") setUnsent(ev.unsent);
-    else refreshThreads().catch(console.error);
+    if (typeof ev.unsent === "number") { counted++; setUnsent(ev.unsent); }
+    else recount();
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "ask" || ev.kind === "answer" || ev.kind === "unask") refreshThreads().catch(console.error);
 
@@ -1154,6 +1170,7 @@
 
   let latestRefresh;
   function refreshThreads() {
+    const at = counted;
     const refresh = (async () => {
       let j;
       try {
@@ -1171,7 +1188,8 @@
       comments = j.comments || []; asks = j.asks || []; working = j.working || null;
       // The view first: an ask it draws must not flash in the stack.
       for (const fn of askSubs) { try { fn(); } catch (e) { console.error(e); } }
-      drawMarkers(); drawWorking(); drawSend(); setUnsent(j.unsent || 0);
+      drawMarkers(); drawWorking(); drawSend();
+      if (counted === at) setUnsent(j.unsent || 0);
     })();
     latestRefresh = refresh;
     return refresh;

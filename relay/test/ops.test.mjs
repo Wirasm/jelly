@@ -45,3 +45,23 @@ for (const c of fixtures.cases) {
     });
   });
 }
+
+// What the fixtures cannot hold: changes the relay alone makes or counts.
+test("the relay's own lock changes nothing but the event, and undo counts toward Send as at home", () => {
+  const doc = { name: "t:j", about: "", view: "", verbs: "const verbs = {}", state: {}, version: 1, view_rev: 1, comments: [], asks: [], unsent: 2 };
+  const ev = ops.apply(doc, { op: "lock", tries: 10 }, "relay", 1, runVerb);
+  assert.deepEqual(made(ev), { kind: "lock", by: "relay", verb: null, args: { tries: 10 }, source: null, quiet: false, version: 1, view_rev: 1 });
+  assert.equal(doc.unsent, 2);
+  assert.equal(ops.countsTowardSend("undo", "person:ana", false), true);
+  assert.equal(ops.countsTowardSend("undo", "agent", false), false);
+  assert.equal(ops.countsTowardSend("lock", "person", false), false);
+});
+
+test("trim takes a long run of spaces inside text in linear time", () => {
+  const inner = "a" + " ".repeat(200_000) + "a";
+  const start = performance.now();
+  assert.equal(ops.trim(inner), inner);
+  assert.equal(ops.trim(" 　" + inner + "\u0085\t"), inner);
+  assert.equal(ops.trim(" ".repeat(200_000)), "");
+  assert.ok(performance.now() - start < 100, `took ${performance.now() - start} ms`);
+});

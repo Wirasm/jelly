@@ -36,6 +36,8 @@ pub(super) struct AskReq {
 pub(super) async fn ask(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
     let by = self::by(r.spec["by"].as_str().map(String::from))?;
     let asked = now_ms();
+    // A missing jelly answers 404 before a bad spec answers 400.
+    app.store.lock().expect("store lock").get(&name)?;
     let item = crate::store::ask_item(&r.spec, &by)?;
     let Json(ev) = apply(&app, &name, Change { by, op: Op::Ask { item: Box::new(item) } }).await?;
     let mut out = json!(ev);

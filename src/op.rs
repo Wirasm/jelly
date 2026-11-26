@@ -140,6 +140,35 @@ mod tests {
         }
     }
 
+    /// The relay runs whatever verbs it is sent, so a shared jelly's new verbs
+    /// are checked before they go, with the store's own words.
+    #[test]
+    fn verbs_that_do_not_load_never_reach_the_relay() {
+        let shape = |verbs: &str| Change { by: "agent".into(), op: Op::Shape { view: None, verbs: Some(verbs.into()), about: None } };
+        let err = shape("const verbs = {").check().unwrap_err().to_string();
+        assert!(err.starts_with("new verbs rejected, jelly unchanged: verbs did not load: SyntaxError"), "{err}");
+        assert!(shape("const verbs = { a() {} }").check().is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.make("j", "".into(), "const verbs = {}".into(), json!({}), "agent", false, "", "").unwrap();
+        assert_eq!(shape("const verbs = {").apply(&mut store, "j").unwrap_err().to_string(), err);
+    }
+
+    /// Undo is not a change a shared jelly takes (the relay refuses it), so it
+    /// is not in tests/ops.json; it counts toward Send at home as `countsTowardSend` says.
+    #[test]
+    fn a_persons_undo_counts_toward_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.make("j", "".into(), "const verbs = { inc(s) { s.n = 1; } }".into(), json!({}), "agent", false, "", "").unwrap();
+        store.do_verb("j", "inc", Value::Null, "agent").unwrap();
+        store.undo("j", "person:ana").unwrap();
+        assert_eq!(store.get("j").unwrap().unsent, 1);
+        store.do_verb("j", "inc", Value::Null, "agent").unwrap();
+        store.undo("j", "agent").unwrap();
+        assert_eq!(store.get("j").unwrap().unsent, 1);
+    }
+
     /// What both sides put in an event: absent `verb`, `args` and `source` are
     /// null, and an absent `quiet` is false.
     fn made(ev: &Value) -> Value {

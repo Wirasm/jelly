@@ -38,7 +38,7 @@ pub fn run(src: &str, verb: &str, state: &Value, args: &Value, by: &str, at_ms: 
 /// Wraps the verbs source so `__v` holds its `verbs` object, then runs `body`.
 fn script(src: &str, body: &str) -> String {
     format!(
-        "(function() {{
+        "(function() {{ 'use strict';
            var __v;
            try {{ __v = (function() {{
 {src}

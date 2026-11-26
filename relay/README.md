@@ -236,9 +236,11 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
 - The daemon stops a verb after 1 s. A Worker's clock stands still while code
   runs, so the relay counts work instead: a verb gets 5,000 calls of QuickJS's
   interrupt handler, roughly 25 million turns of an empty loop. That bounds
-  work, not time. Both say "verb ran too long and was stopped" when they stop one. Work inside a builtin such as `JSON.stringify` does not
+  work, not time. Work inside a builtin such as `JSON.stringify` does not
   count, so a loop that does a lot of it each turn runs until Cloudflare's CPU
   limit (30 s) resets the jelly's object; its pages and the daemon reconnect.
+  Both say "verb ran too long and was stopped" when they stop one, and both
+  run verbs in strict mode.
 - What a link sends is limited, so one person cannot fill the jelly: a
   comment, reply or answer holds at most 10,000 characters, one change at most
   64 KB (a verb's args, say), and a change from a link that would take the
@@ -249,11 +251,11 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   as the share lasts.
 - While shared, the relay's copy is the live one. The daemon forwards local
   changes (`do`, `set`, `shape`, `ask`, `unask`, `answer`, `comment`, `reply`,
-  `resolve`, `send`) to it, and mirrors every change back over a WebSocket, so `hear`, `hear --wait` and
-  `look` work as before. Each change carries the jelly's count toward Send,
-  which the relay keeps for a shared jelly, so the Send button says the same
-  on every link and at home. It keeps working while your laptop sleeps; the daemon
-  catches up when it reconnects.
+  `resolve`, `send`) to it, and mirrors every change back over a WebSocket,
+  so `hear`, `hear --wait` and `look` work as before. Each change carries the
+  jelly's count toward Send, which the relay keeps for a shared jelly, so the
+  Send button says the same on every link and at home. It keeps working while
+  your laptop sleeps; the daemon catches up when it reconnects.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.
 - Every page the relay serves (a link, `/pin`, a link that no longer works)
   says "Made with jelly", linking to getjellyware.com. On a link it is a strip

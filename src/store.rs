@@ -411,7 +411,7 @@ pub struct MirroredDoc {
 }
 
 /// Every kind of change. Adding one means adding it here and to `describe`.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum EventKind {
     Make,
@@ -482,7 +482,8 @@ pub const PAGE: &str = "page";
 
 impl Event {
     pub fn is_inbox_item(&self, project: &str) -> bool {
-        let heard = self.kind == EventKind::Lock || is_person(&self.by) && self.kind.is_for_agent();
+        // A lock and a change of an unknown kind come from the relay, and say what to do.
+        let heard = matches!(self.kind, EventKind::Lock | EventKind::Unknown) || is_person(&self.by) && self.kind.is_for_agent();
         heard && self.jelly != PAGE && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
     }
 
@@ -536,7 +537,8 @@ impl Event {
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
-            EventKind::Unknown => "made a kind of change this jelly does not know; `jelly update` to name it".into(),
+            EventKind::Unknown => format!("made {} of a kind this jelly does not know; `jelly update`, and `jelly state {}` has the jelly as it is now",
+                if times > 1 { format!("{times} changes") } else { "a change".into() }, self.jelly),
             EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join and its room is over; people already in keep their links. `jelly share {} --pin` makes a new one",
                 a["tries"], self.jelly),
         }
@@ -1701,7 +1703,9 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
         },
         Value::Array(a) => {
             // An index as RFC 6901 writes it, as `pointer_mut` reads the ones before it: no sign, no leading zero.
-            let index = (key == "0" || !key.starts_with(['0', '+'])).then(|| key.parse::<usize>().ok()).flatten();
+            // One too big for a usize is still an index, past any array's end.
+            let index = (key == "0" || (!key.is_empty() && !key.starts_with('0') && key.bytes().all(|b| b.is_ascii_digit())))
+                .then(|| key.parse::<usize>().unwrap_or(usize::MAX));
             let i = if key == "-" { a.len() } else { index.ok_or_else(|| format!("{key:?} is not an array index"))? };
             match value {
                 Some(v) if i < a.len() => a[i] = v,
@@ -2770,7 +2774,8 @@ mod tests {
         let waved = s.mirror("p:j", &ev(1, "wave", Some(4)), Some(&doc)).unwrap();
         assert_eq!((waved.kind, waved.unsent), (EventKind::Unknown, Some(4)));
         assert_eq!(s.get("p:j").unwrap().state, json!({"labels": {}, "waved": true}));
-        assert_eq!(waved.describe(), "made a kind of change this jelly does not know; `jelly update` to name it");
+        assert_eq!(waved.describe(), "made a change of a kind this jelly does not know; `jelly update`, and `jelly state p:j` has the jelly as it is now");
+        assert!(waved.is_inbox_item("p"), "the agent hears it");
         // A relay from before events carried the count sends it with the jelly only.
         let doc: MirroredDoc = serde_json::from_value(json!({"unsent": 7})).unwrap();
         s.mirror("p:j", &ev(2, "resolve", None), Some(&doc)).unwrap();
