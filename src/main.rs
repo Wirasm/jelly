@@ -149,14 +149,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     // Only commands that make or open jellies need it, so git runs only for those.
     let project = || detect_project(cli.project.clone());
     // Names are unique per project: a short name means this project's jelly
-    // when there is one, and `project:name` always means exactly that jelly.
+    // only, and `project:name` always means exactly that jelly. When the short
+    // name lives in another project, the daemon's "no jelly" says where.
     let id = |name: &str| -> Result<String, String> {
         if name.contains(':') || name == store::PAGE {
             return Ok(name.into());
         }
-        let list = get(&api(""))?;
-        Ok(store::resolve_name(name, &project(), list.as_array().into_iter().flatten()
-            .filter_map(|j| j["name"].as_str())))
+        Ok(store::full_name(name, &project()))
     };
     // `show` moves the jelly page, so it reaches nobody unless that page is open.
     let show = |name: Value| -> Result<(), CommandError> {
@@ -390,6 +389,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name)?, encode(&by))), Value::Null)?),
         Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n)).transpose()?;
+            if let Some(n) = &name {
+                get(&api(&format!("/{n}/state")))?; // a wrong name would stream nothing
+            }
             let q = name.map(|n| format!("?jelly={}", encode(&n))).unwrap_or_default();
             let resp = ureq::get(&format!("{}/api/events{q}", cli.url)).call().map_err(describe)?;
             for line in BufReader::new(resp.into_reader()).lines() {
@@ -497,29 +499,35 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Show { name } => show(json!(name.map(|n| id(&n)).transpose()?)),
         Cmd::Feed { name: None, .. } => {
-            let feeds = feed::read(&default_home()?)?;
+            let feeds = feed::read(&daemon_home(&cli.url)?)?;
             if feeds.is_empty() {
-                return output(format_args!("No feeds.\n")).map_err(Into::into);
+                return output(format_args!("No feeds.\n"));
             }
+            // A jelly removed, or moved on the jelly page, leaves its feed behind.
+            let list = get(&api(""))?;
+            let names: Vec<&str> = list.as_array().into_iter().flatten().filter_map(|j| j["name"].as_str()).collect();
             for f in feeds {
-                output(format_args!("{}  {} · in {}\n", f.jelly, f.line(), f.cwd.display()))?;
+                let gone = if names.contains(&f.jelly.as_str()) { String::new() } else {
+                    format!(" · does not run: there is no jelly {}. `jelly feed {} --rm` removes it; feed the jelly under its new name if it moved", f.jelly, f.jelly)
+                };
+                output(format_args!("{}  {} · in {}{gone}\n", f.jelly, f.line(), f.cwd.display()))?;
             }
             Ok(())
         }
-        Cmd::Feed { name: Some(name), verb, every, stop, command } => {
-            // The file in the home is the feed: the daemon reads it and never
-            // takes a command over HTTP.
-            let home = default_home()?;
+        Cmd::Feed { name: Some(name), verb, every, rm, command } => {
+            // The file in the daemon's home is the feed: the daemon reads it
+            // and never takes a command over HTTP.
+            let home = daemon_home(&cli.url)?;
             let mut feeds = feed::read(&home)?;
             let jelly = id(&name)?;
             let had = feeds.len();
-            feeds.retain(|f| f.jelly != jelly && f.jelly != name);
-            if stop {
-                if feeds.len() == had { return Err(format!("{jelly} has no feed").into()); }
+            feeds.retain(|f| f.jelly != jelly);
+            if rm {
+                if feeds.len() == had { return Err(format!("{jelly} has no feed; `jelly feed` lists them").into()); }
                 feed::write(&home, &feeds)?;
-                return output(format_args!("{jelly}: feed stopped\n")).map_err(Into::into);
+                return output(format_args!("{jelly}: feed removed\n"));
             }
-            let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --stop)")?;
+            let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --rm)")?;
             if command.is_empty() { return Err("give the command after `--`: jelly feed NAME VERB -- COMMAND".into()); }
             if every < feed::FASTEST { return Err(format!("--every is in seconds, {} or more", feed::FASTEST).into()); }
             get(&api(&format!("/{jelly}/state")))?; // fail on a wrong name
@@ -614,7 +622,16 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Reply { name, id: cid, text: None, .. } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Reply { name, id: cid, text: Some(text), resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
-        Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
+        Cmd::Move { name, to } => {
+            let ev = send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?;
+            let (Some(from), Some(now)) = (ev["args"]["from"].as_str(), ev["jelly"].as_str()) else {
+                return Err("the daemon did not say which jelly moved where".into());
+            };
+            let fed = feed::follow(&daemon_home(&cli.url)?, |j| (j == from).then(|| now.to_string()))?;
+            report(ev.clone())?;
+            if fed > 0 && !json { output(format_args!("{now}: its feed moved with it\n"))?; }
+            Ok(())
+        }
         Cmd::Project { name: None, .. } => {
             let list = get(&format!("{}/api/projects", cli.url))?;
             if json {
@@ -635,8 +652,11 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let (done, line) = match (to, rm) {
                 (Some(to), _) => {
                     let done = send("POST", &format!("{at}/{}/move", encode(&name)), json!({"to": to, "by": by}))?;
+                    let prefix = format!("{name}:");
+                    let fed = feed::follow(&daemon_home(&cli.url)?, |j| j.strip_prefix(&prefix).map(|short| store::full_name(short, &to)))?;
                     let n = done["events"].as_u64().unwrap_or(0);
                     let line = match n { 0 => format!("{name} held no jellies; it is {to} now"), 1 => format!("the 1 jelly in {name} is in {to} now, and its name starts with {to}:"), n => format!("the {n} jellies in {name} are in {to} now, and their names start with {to}:") };
+                    let line = match fed { 0 => line, 1 => format!("{line}. Its 1 feed moved with it"), n => format!("{line}. Their {n} feeds moved with them") };
                     (done, line)
                 }
                 (None, true) => (send("DELETE", &format!("{at}/{}", encode(&name)), Value::Null)?, format!("{name}: removed")),
@@ -1178,6 +1198,7 @@ fn report_line(ev: &Value) -> String {
             else { ". Nobody has it on screen: tell the person, or `jelly show` it" }),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
         "make" => "made".into(),
+        "keep" => if ev["args"] == false { "no longer kept".into() } else { "kept".into() },
         k => k.to_string(),
     };
     let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
@@ -1304,6 +1325,13 @@ fn default_home() -> Result<PathBuf, String> {
     std::env::var_os("JELLY_HOME").map(PathBuf::from)
         .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
         .ok_or_else(|| "could not find your home directory: set --home or JELLY_HOME".into())
+}
+
+/// The home of the daemon at `url`, which holds the feeds it runs. It can differ
+/// from this CLI's own (`--url` or `JELLY_URL` naming another daemon).
+fn daemon_home(url: &str) -> Result<PathBuf, String> {
+    get(&format!("{url}/api/version"))?["home"].as_str().map(PathBuf::from).ok_or_else(|| format!(
+        "the daemon at {url} is older than this jelly and does not say where its home is, so its feeds cannot be found. Stop it, and the next jelly command starts this one"))
 }
 
 fn get(url: &str) -> Result<Value, String> {

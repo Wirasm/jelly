@@ -1,103 +1,47 @@
-use axum::{extract::Request, http::StatusCode, response::IntoResponse, routing::any, Json, Router};
-use serde_json::json;
-use std::process::Command;
-use std::sync::mpsc;
+mod common;
 
-struct LookupServer {
-    url: String,
-    requests: mpsc::Receiver<String>,
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
+use serde_json::{json, Value};
+use std::process::{Child, Command, Output, Stdio};
 
-impl LookupServer {
-    fn start() -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let (sent, requests) = mpsc::channel();
-        let (shutdown, stopped) = tokio::sync::oneshot::channel();
-        let thread = std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-                let router = Router::new().fallback(any(move |req: Request| {
-                    let sent = sent.clone();
-                    async move {
-                        sent.send(format!("{} {}", req.method(), req.uri())).unwrap();
-                        if req.uri().path() == "/api/jellies" {
-                            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "identity lookup unavailable"}))).into_response()
-                        } else {
-                            Json(json!({})).into_response()
-                        }
-                    }
-                }));
-                axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), router)
-                    .with_graceful_shutdown(async { let _ = stopped.await; }).await.unwrap();
-            });
-        });
-        Self { url, requests, shutdown: Some(shutdown), thread: Some(thread) }
-    }
-}
+struct Daemon(Child, String);
 
-impl Drop for LookupServer {
+impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self.shutdown.take().unwrap().send(());
-        self.thread.take().unwrap().join().unwrap();
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
-#[test]
-fn short_name_commands_stop_when_identity_lookup_fails() {
-    let server = LookupServer::start();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("spec.json"), "{}").unwrap();
-    std::fs::write(dir.path().join("asset.txt"), "asset").unwrap();
-    // A broken resolver must not launch the real browser during this regression.
-    let open = dir.path().join("open");
-    std::fs::write(&open, "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let commands = [
-        vec!["rm", "plan"], vec!["do", "plan", "tick"], vec!["set", "plan", "{}"],
-        vec!["state", "plan"], vec!["shape", "plan", "--about", "updated"],
-        vec!["undo", "plan"], vec!["keep", "plan"], vec!["unkeep", "plan"],
-        vec!["look", "plan"], vec!["events", "plan"], vec!["ask", "plan", "Which?"],
-        vec!["ask", "plan", "Check", "--seen"], vec!["unask", "plan", "a1"], vec!["show", "plan"],
-        vec!["working", "plan", "updating"], vec!["working", "plan", "--done"],
-        vec!["ask", "plan", "--spec", "spec.json"], vec!["hear", "--wait", "--every", "plan", "--timeout", "0"],
-        vec!["hear", "--wait", "--every", "plan", "--since", "seq:0", "--timeout", "0"], vec!["waiting", "plan"],
-        vec!["reply", "plan", "c1", "answer"], vec!["move", "plan", "other"],
-        vec!["look", "plan", "--text"], vec!["note", "plan", "note"], vec!["pull", "plan"],
-        vec!["dev", "plan", "missing"],
-        vec!["asset", "plan", "asset.txt"], vec!["share", "plan"], vec!["reply", "plan", "c1", "--resolve"],
-        vec!["open", "plan"],
-    ];
-    let mut failures = Vec::new();
-    for project in ["test", ""] {
-        for args in &commands {
-            let output = Command::new(env!("CARGO_BIN_EXE_jelly"))
-                .current_dir(dir.path()).env("PATH", dir.path()).env_remove("JELLY_AS")
-                .args(["--url", &server.url, "--project", project, "--as", "agent"])
-                .args(args).output().unwrap();
-            let requests: Vec<_> = server.requests.try_iter().collect();
-            if output.status.code() != Some(1) || !output.stdout.is_empty()
-                || String::from_utf8_lossy(&output.stderr).trim() != "jelly: identity lookup unavailable"
-                || requests != ["GET /api/jellies"] {
-                failures.push(format!("project={project:?}, {args:?}: {output:?}, requests={requests:?}"));
-            }
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+fn jelly(url: &str, project: &str, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_jelly")).env_remove("JELLY_AS")
+        .args(["--url", url, "--project", project, "--as", "agent"]).args(args).output().unwrap()
 }
 
+/// A short name means this project's jelly, or the jelly with no project when
+/// there is no project, never a jelly of the same name in another project.
 #[test]
-fn explicit_ids_bypass_candidate_lookup() {
-    let server = LookupServer::start();
-    for name in ["test:plan", "page"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_jelly"))
-            .args(["--url", &server.url, "--project", "test", "state", name]).output().unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert_eq!(server.requests.try_iter().collect::<Vec<_>>(), [format!("GET /api/jellies/{name}/state")]);
-    }
+fn a_short_name_never_reaches_another_project() {
+    let home = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jelly")).args(["serve", "--port", "0", "--home"]).arg(home.path())
+        .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let url = common::served_url(&mut child);
+    let daemon = Daemon(child, url);
+    let url = daemon.1.as_str();
+    let make = |project: &str| {
+        ureq::post(&format!("{url}/api/jellies")).send_json(json!({"name": "counter", "project": project, "view": "",
+            "verbs": "const verbs = { add(s) { s.n = (s.n || 0) + 1; } };", "state": {}, "by": "agent"})).unwrap();
+    };
+    make("audit");
+
+    let refused = jelly(url, "other", &["do", "counter", "add"]);
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success() && said.contains("no jelly named other:counter; did you mean audit:counter?"), "{said}");
+    let outside = jelly(url, "", &["do", "counter", "add"]);
+    assert!(!outside.status.success(), "{outside:?}");
+
+    make("");
+    assert!(jelly(url, "", &["do", "counter", "add"]).status.success());
+    let state = |name: &str| -> Value { ureq::get(&format!("{url}/api/jellies/{name}/state")).call().unwrap().into_json().unwrap() };
+    assert_eq!(state("counter"), json!({"n": 1}));
+    assert_eq!(state("audit:counter"), json!({}), "the other project's jelly was not touched");
 }

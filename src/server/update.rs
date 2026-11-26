@@ -66,13 +66,16 @@ fn install() -> Option<Install> {
 }
 
 /// `started_ms` changes when the daemon restarts, which is how the jelly page
-/// and `jelly update` know the new one is up.
+/// and `jelly update` know the new one is up. `home` is where `jelly feed`
+/// writes the feeds this daemon runs.
 pub(super) async fn version(State(app): State<Shared>) -> Json<Value> {
+    let home = app.store.lock().expect("store lock").home().to_path_buf();
     let status = app.update.lock().expect("update lock");
     let source = install() != Some(Install::Npm);
     Json(json!({
         "version": VERSION,
         "started_ms": STARTED.0,
+        "home": home,
         "latest": status.latest,
         "newer": status.latest.as_deref().is_some_and(|latest| update::newer(latest, VERSION)),
         "install": if source { "source" } else { "npm" },

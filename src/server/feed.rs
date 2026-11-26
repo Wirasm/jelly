@@ -3,11 +3,12 @@
 use super::*;
 use crate::feed::Feed;
 
-/// How a feed's last run went. Memory only.
+/// What the loop last did with a feed, for `jelly look`. Memory only.
 #[derive(Clone)]
-pub(super) struct FeedRun {
-    pub(super) at_ms: u64,
-    pub(super) error: Option<String>,
+pub(super) enum FeedRun {
+    Ran { at_ms: u64, error: Option<String> },
+    /// Skipped, because its jelly is archived.
+    Resting,
 }
 
 /// A command that runs longer than this is stopped.
@@ -25,17 +26,22 @@ pub(super) fn start(app: Shared) {
             let feeds = crate::feed::read(&home).unwrap_or_default();
             started.retain(|name, _| feeds.iter().any(|f| f.jelly == *name));
             for feed in feeds {
+                // A feed whose jelly is gone does not run; `jelly feed` lists it as such.
+                let Ok(archived) = app.store.lock().expect("store lock").get(&feed.jelly).map(|j| j.archived) else { continue };
                 // An archived jelly's feed rests until someone restores the jelly.
-                let awake = app.store.lock().expect("store lock").get(&feed.jelly).is_ok_and(|j| !j.archived);
+                if archived {
+                    app.feeds.lock().expect("feeds lock").insert(feed.jelly.clone(), FeedRun::Resting);
+                    continue;
+                }
                 let due = started.get(&feed.jelly).is_none_or(|at| at.elapsed() >= Duration::from_secs(feed.every.max(crate::feed::FASTEST)));
-                if !awake || !due || !running.lock().expect("running lock").insert(feed.jelly.clone()) {
+                if !due || !running.lock().expect("running lock").insert(feed.jelly.clone()) {
                     continue;
                 }
                 started.insert(feed.jelly.clone(), Instant::now());
                 let (app, running) = (app.clone(), running.clone());
                 tokio::spawn(async move {
                     let error = run(&app, &feed).await.err();
-                    app.feeds.lock().expect("feeds lock").insert(feed.jelly.clone(), FeedRun { at_ms: now_ms(), error });
+                    app.feeds.lock().expect("feeds lock").insert(feed.jelly.clone(), FeedRun::Ran { at_ms: now_ms(), error });
                     running.lock().expect("running lock").remove(&feed.jelly);
                 });
             }
@@ -73,8 +79,9 @@ async fn run(app: &Shared, feed: &Feed) -> Result<(), String> {
 pub(super) fn line(app: &App, home: &std::path::Path, jelly: &str) -> Option<String> {
     let feed = crate::feed::read(home).ok()?.into_iter().find(|f| f.jelly == jelly)?;
     let last = match app.feeds.lock().expect("feeds lock").get(jelly) {
-        Some(FeedRun { at_ms, error: None }) => format!("ran {}", ago(*at_ms)),
-        Some(FeedRun { at_ms, error: Some(e) }) => format!("FAILED {}: {e}", ago(*at_ms)),
+        Some(FeedRun::Ran { at_ms, error: None }) => format!("ran {}", ago(*at_ms)),
+        Some(FeedRun::Ran { at_ms, error: Some(e) }) => format!("FAILED {}: {e}", ago(*at_ms)),
+        Some(FeedRun::Resting) => "rests while the jelly is archived; any change brings it back".into(),
         None => "has not run yet".into(),
     };
     Some(format!("feed     {} · {last}", feed.line()))

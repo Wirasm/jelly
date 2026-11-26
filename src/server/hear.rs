@@ -119,7 +119,7 @@ pub(super) async fn wait_since_at_handoff(app: &App, q: &WaitQ, after_scan: impl
                 line.clear();
             }
             if !identities.is_empty() {
-                q.jelly = Some(crate::store::resolve_name(short, project, identities.iter().map(String::as_str)));
+                q.jelly = Some(crate::store::full_name(short, project));
             }
             std::io::Seek::rewind(reader).map_err(history_error)?;
         }

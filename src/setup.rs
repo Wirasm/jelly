@@ -118,8 +118,18 @@ impl Item {
             Kind::Skill if skill_files().all(|(file, bytes)| same(&self.path.join(file), bytes)) => State::Current,
             Kind::File(text) if same(&self.path, text.as_bytes()) => State::Current,
             Kind::Skill | Kind::File(_) => State::Stale,
-            Kind::Hook { command, .. } if fs::read_to_string(&self.path).is_ok_and(|text| text.contains(command)) => State::Current,
-            Kind::Hook { .. } => State::Missing,
+            Kind::Hook { event, command, .. } => {
+                let settings = fs::read_to_string(&self.path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok());
+                let Some(mut settings) = settings else { return State::Missing };
+                let found = ours(&mut settings, event, command);
+                if found.iter().any(|c| *c == command) {
+                    State::Current
+                } else if found.is_empty() {
+                    State::Missing
+                } else {
+                    State::Stale
+                }
+            }
         }
     }
 
@@ -163,7 +173,8 @@ impl Item {
     }
 
     /// Adds `command` to Claude Code's hooks for `event`, unless a hook there
-    /// already runs it.
+    /// already runs it. A hook that runs jelly by another path (a binary that
+    /// may be gone) gets `command` instead.
     fn write_hook(&self, event: &str, matcher: Option<&str>, command: &str, dry_run: bool) -> Result<String, String> {
         let path = &self.path;
         let text = match fs::read_to_string(path) {
@@ -171,12 +182,25 @@ impl Item {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
             Err(e) => return Err(format!("could not read {}: {e}", path.display())),
         };
-        if text.contains(command) {
-            return Ok(self.line("already there"));
-        }
         let Ok(mut settings) = serde_json::from_str::<Value>(&text) else {
             return Ok(self.line("left alone: it is not valid JSON"));
         };
+        let save = |settings: &Value| -> Result<(), String> {
+            if dry_run { return Ok(()); }
+            let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())? + "\n";
+            fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))
+        };
+        let found = ours(&mut settings, event, command);
+        if !found.is_empty() {
+            if found.iter().all(|c| *c == command) {
+                return Ok(self.line("already there"));
+            }
+            for c in found {
+                *c = json!(command);
+            }
+            save(&settings)?;
+            return Ok(self.line(if dry_run { "would update" } else { "updated" }));
+        }
         let hooks = settings.as_object_mut().map(|s| s.entry("hooks").or_insert_with(|| json!({})));
         let listed = hooks.and_then(Value::as_object_mut).map(|h| h.entry(event).or_insert_with(|| json!([])));
         let Some(list) = listed.and_then(Value::as_array_mut) else {
@@ -187,12 +211,18 @@ impl Item {
             entry["matcher"] = json!(matcher);
         }
         list.push(entry);
-        if !dry_run {
-            let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
-            fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-        }
+        save(&settings)?;
         Ok(self.line(if dry_run { "would add" } else { "added" }))
     }
+}
+
+/// The commands among Claude Code's hooks for `event` that run jelly's
+/// `command`: exactly, or with a path to the binary (`/old/bin/jelly hear --hook`).
+fn ours<'a>(settings: &'a mut Value, event: &str, command: &str) -> Vec<&'a mut Value> {
+    let runs = |c: &str| c == command || c.strip_suffix(command).is_some_and(|dir| dir.ends_with(['/', '\\']));
+    settings.get_mut("hooks").and_then(|h| h.get_mut(event)).and_then(Value::as_array_mut).into_iter().flatten()
+        .filter_map(|entry| entry.get_mut("hooks").and_then(Value::as_array_mut)).flatten()
+        .filter_map(|hook| hook.get_mut("command")).filter(|c| c.as_str().is_some_and(runs)).collect()
 }
 
 #[cfg(test)]
@@ -234,5 +264,25 @@ mod tests {
         let after: Value = serde_json::from_str(&fs::read_to_string(at(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(after["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
         assert_eq!(after["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    /// A source build wrote its own path into the hooks; after moving to the npm
+    /// release that binary is gone and every prompt failed with exit 127.
+    #[test]
+    fn a_hook_that_runs_jelly_by_another_path_is_replaced() {
+        let home = tempfile::tempdir().unwrap();
+        let settings = home.path().join(".claude/settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let old = |command: &str| json!([{"hooks": [{"type": "command", "command": format!("/gone/bin/{command}"), "timeout": 3}]}]);
+        fs::write(&settings, json!({"hooks": {"UserPromptSubmit": old(HOOK), "PostToolUse": old(PLAN_HOOK)}}).to_string()).unwrap();
+        let hooks = || items(home.path()).into_iter().filter(|i| matches!(i.kind, Kind::Hook { .. })).collect::<Vec<_>>();
+        assert!(hooks().iter().all(|i| matches!(i.state(), State::Stale)), "doctor says to fix it");
+
+        let out = run(home.path(), false).unwrap().join("\n");
+        assert!(!out.contains("already there"), "{out}");
+        let after: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(after["hooks"]["UserPromptSubmit"], json!([{"hooks": [{"type": "command", "command": HOOK, "timeout": 3}]}]));
+        assert_eq!(after["hooks"]["PostToolUse"][0]["hooks"][0]["command"], PLAN_HOOK);
+        assert!(hooks().iter().all(|i| matches!(i.state(), State::Current)));
     }
 }

@@ -24,8 +24,8 @@ other `--url` / `JELLY_URL` targets must already be running.
 `src/update.rs` holds what the daemon, `jelly update`, `jelly doctor` and
 `jelly hear --hook` share. The daemon asks `JELLY_UPDATE_URL` (default: npm's
 `jellyware/latest`; `off` never asks) at start and once a day, and answers
-`GET /api/version` with `{version, started_ms, latest, newer, install, commands,
-updating, failed}`. `install` is `npm` when the daemon's binary sits under
+`GET /api/version` with `{version, started_ms, home, latest, newer, install,
+commands, updating, failed}`. `install` is `npm` when the daemon's binary sits under
 `node_modules/@getjellyware/`, else `source`, and then `commands` are the two
 to run in the checkout. `JELLY_NPM` names another npm binary.
 `.cargo/config.toml` sets `JELLY_UPDATE_URL=off` for `cargo test` and `cargo
@@ -195,12 +195,16 @@ they differ, so a home made by an older binary gets the new page.
 
 ## Feeds
 
-`jelly feed` writes `feeds.json` in the home; the daemon reads it every second
-and never writes it, and no HTTP route touches it. A due feed's command runs
-without a shell in the folder the feed was made in, for at most 60 seconds, one
-run at a time per jelly. Its standard output, parsed as JSON, becomes the
+`jelly feed` writes `feeds.json` in the home of the daemon it talks to, which
+`/api/version` names; the daemon reads it every second and never writes it,
+and no HTTP route touches it. A feed belongs to a jelly by its full name, so
+`jelly move` and `jelly project --move` rewrite the file to take the feed
+along. A move on the jelly page cannot: `jelly feed` lists such a feed as not
+running. A due feed's command runs without a shell in the folder the feed was
+made in, for at most 60 seconds, one run at a time per jelly. Its standard output, parsed as JSON, becomes the
 arguments of the verb, called as `feed`. How the last run went is kept in memory
-and shown by `jelly look`. An archived jelly's feed does not run.
+and shown by `jelly look`. An archived jelly's feed does not run, and `jelly
+look` says it rests.
 
 ## Pull requests
 

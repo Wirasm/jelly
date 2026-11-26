@@ -1,7 +1,7 @@
 //! Feeds: commands the daemon runs on a timer to keep a jelly's data fresh
-//! (`jelly feed`). The list is one file in the home. `jelly feed` writes it and
-//! the daemon only reads it, so nothing that arrives over HTTP can make the
-//! daemon run a command.
+//! (`jelly feed`). The list is one file in the daemon's home. `jelly feed`,
+//! `jelly move` and `jelly project --move` write it and the daemon only reads
+//! it, so nothing that arrives over HTTP can make the daemon run a command.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,6 +41,23 @@ pub fn read(home: &Path) -> Result<Vec<Feed>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("{}: {e}", path(home).display())),
     }
+}
+
+/// After `jelly move` or `jelly project --move`: each feed whose jelly got a new
+/// name (`renamed` returns it) follows the jelly. Returns how many moved.
+pub fn follow(home: &Path, renamed: impl Fn(&str) -> Option<String>) -> Result<usize, String> {
+    let mut feeds = read(home)?;
+    let mut moved = 0;
+    for feed in &mut feeds {
+        if let Some(name) = renamed(&feed.jelly) {
+            feed.jelly = name;
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        write(home, &feeds)?;
+    }
+    Ok(moved)
 }
 
 pub fn write(home: &Path, feeds: &[Feed]) -> Result<(), String> {
