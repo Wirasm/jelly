@@ -176,7 +176,7 @@ pub enum Cmd {
     ///
     /// `jelly ask NAME "Which header?" --option a="Bold" --option b="Quiet" --recommend b --why "…" --at "#hero"`
     /// puts one ask on an existing jelly, next to what it is about. It shows on
-    /// the jelly and in the person's attention queue. With `--wait` it blocks
+    /// the jelly and under Waiting on you on the jelly page. With `--wait` it blocks
     /// until the person answers and prints `a1 answered: <option> · "<note>"`.
     /// With --json it prints the ask's event, or with --wait the answered item.
     ///

@@ -161,16 +161,33 @@ background, so they match the page they sit on.
 
 `GET /api/shares` lists every shared jelly with its people from the daemon's
 own record (`people_from` is `record`), which is what the jelly page asks for
-every 20 seconds. With `?here=true`, which the page sends only while its Shared
-panel is open, the daemon asks the relay for each share
+every 20 seconds. With `?here=true`, which the page sends only while a share's
+people are showing (its Who button), the daemon asks the relay for each share
 (`GET /api/live/<share>/people`) who holds a link, when each last opened one
 (`opened_ms`, set when a link's page connects), how many of their pages are
 open now (`here`) and when the share ends. If the relay does not answer, the
 people come from the record. Links are made on
 the relay's `share_origin` when its answer has one (the relay's `SHARE_ORIGIN`),
 else on the relay's own URL. The jelly page shows
-this under "N shared" in its top bar and stops a link or a whole share with the
-same routes `jelly unshare` uses.
+this under "Shared now", with the time each share has left, and stops a link or
+a whole share with the same routes `jelly unshare` uses.
+
+## The jelly page's list
+
+The page draws every jelly as one line under its project, from
+`GET /api/jellies`, `GET /api/projects` (empty projects too) and `GET /api/asks`.
+What waits on the person (an open ask, or a reply to their comment) is first,
+the newest change on top, and `n` opens the next one at its ask. Each jelly in
+the list carries `archives_ms`: when `Store::sweep` will archive it, by the one
+rule in `Jelly::archives_ms`, or null when it will not (kept, archived, or an
+ask or comment still open). The page marks the last two days before that.
+
+Remove on the page takes the row away at once and sends the `DELETE` ten
+seconds later, so the person can undo it; a second remove, or leaving the page,
+sends it at once. `jelly rm` deletes at once. Projects are made and removed
+through `/api/projects`, the routes `jelly project` uses. The page has no
+rename: agents in a repo use the project named after it, so a rename would cut
+them off from their jellies. `jelly project OLD --move NEW` does it on purpose.
 
 At startup the daemon replaces the stored jelly page with the bundled one when
 they differ, so a home made by an older binary gets the new page.

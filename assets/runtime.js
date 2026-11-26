@@ -20,7 +20,7 @@
 //   jelly.person.asks           every ask on this jelly, answered and unasked ones too;
 //                               open ones have no .answer and no .unasked; .answer.option is the pick
 //   jelly.person.onAsk(fn)      fn() now and whenever asks or comments change
-//   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the dock; returns unsubscribe
+//   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the jelly page; returns unsubscribe
 //   jelly.person.comments       comment threads on this jelly
 //   jelly.person.answer(id, { option, text }), .comment(anchor, text), .reply(id, text), .resolve(id)
 //
@@ -728,7 +728,7 @@
       try {
         await refreshThreads();
       } catch (e) {
-        if (request === opening) showOpeningMessage("Could not load this question. Open it from the dock to try again.");
+        if (request === opening) showOpeningMessage("Could not load this question. Open it from the jelly page to try again.");
         console.error(e);
         return;
       }
