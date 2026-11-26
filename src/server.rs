@@ -40,14 +40,17 @@ use look::*;
 
 /// jelly's own look, for every part that is jelly's and not the jellyware.
 const JELLY_CSS: &str = include_str!("../assets/jelly.css");
-/// The runtime as browsers get it: `assets/runtime.js` carrying `assets/jelly.css`,
-/// so a view, a shared page and an exported file all have the stylesheet with it.
-static RUNTIME_JS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    include_str!("../assets/runtime.js").replace("\"__JELLY_CSS__\"", &serde_json::to_string(JELLY_CSS).expect("a string serializes").replace("</", "<\\/"))
-});
+/// A script carrying `assets/jelly.css` in place of its `"__JELLY_CSS__"`.
+fn with_css(script: &str) -> String {
+    script.replace("\"__JELLY_CSS__\"", &serde_json::to_string(JELLY_CSS).expect("a string serializes").replace("</", "<\\/"))
+}
+/// The runtime as browsers get it, and the one an exported file gets in its
+/// place: both carry the stylesheet, so a view, a shared page and an exported
+/// file all have it.
+static RUNTIME_JS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| with_css(include_str!("../assets/runtime.js")));
+static SNAPSHOT_JS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| with_css(include_str!("../assets/snapshot.js")));
 const PAGE_VIEW: &str = include_str!("../assets/page.html");
 const PAGE_VERBS: &str = include_str!("../assets/page.verbs.js");
-const SNAPSHOT_JS: &str = include_str!("../assets/snapshot.js");
 const ASK_VIEW: &str = include_str!("../assets/ask.html");
 const ASK_VERBS: &str = include_str!("../assets/ask.verbs.js");
 const ARCHIVE_AFTER_MS: u64 = 7 * 24 * 3600 * 1000;
@@ -407,7 +410,7 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
         .map(|j| json!({
             "name": j.name, "version": j.version, "view_rev": j.view_rev,
             "kept": j.kept, "made_by": j.made_by, "owner": j.owner(), "updated_ms": j.updated_ms, "about": j.about, "project": j.project(), "archived": j.archived,
-            "created_ms": if j.created_ms > 0 { j.created_ms } else { j.updated_ms },
+            "created_ms": j.created_ms,
             "open_comments": j.comments.iter().filter(|f| !f.resolved).count(),
             "replies_waiting": j.comments.iter().filter(|c| c.awaiting_person()).count(),
             "open_asks": j.asks.iter().filter(|a| a.is_open()).count(),

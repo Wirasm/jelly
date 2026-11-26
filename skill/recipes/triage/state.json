@@ -25,7 +25,7 @@
     { "id": "8", "ref": "#8", "title": "Only jelly's own pages and the CLI can talk to the daemon", "lane": "now", "agent_lane": "now",
       "reason": "Found by reading code, never tried. Confirming it is small; it may turn out not to need a fix.", "confidence": 0.45, "impact": 4, "effort": 2,
       "moved": null, "checked": null, "done": null },
-    { "id": "f2", "ref": "F2", "title": "A shared jelly has no itemsAt, onAttention or asset", "lane": "now", "agent_lane": "now",
+    { "id": "f2", "ref": "F2", "title": "A shared jelly has no onAsk or asset", "lane": "now", "agent_lane": "now",
       "reason": "A view that uses them throws in a shared file. A few lines in snapshot.js.", "confidence": 0.7, "impact": 2, "effort": 1,
       "moved": null, "checked": null, "done": null },
     { "id": "4", "ref": "#4", "title": "jelly is running whenever an agent reaches for it", "lane": "later", "agent_lane": "later",

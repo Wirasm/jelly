@@ -130,7 +130,7 @@ pub fn hook_notice(url: &str, session: &str, user_home: &Path, jelly_home: &Path
     let skill: Option<PathBuf> = setup::items(user_home).into_iter().find(|i| i.agent == "Claude Code" && i.what == "skill")
         .map(|i| (i.path.clone(), i.state())).and_then(|(path, state)| match state {
             setup::State::Stale | setup::State::Missing => Some(path),
-            setup::State::Current | setup::State::Link(_) => None,
+            setup::State::Current | setup::State::Link(_) | setup::State::Invalid => None,
         });
     let line = if let Some(skill) = skill {
         Some(format!("jelly: the jelly skill at {} is not the one this jelly ({VERSION}) comes with. Run `jelly setup`, then read the skill again before you use jelly.", skill.display()))

@@ -35,13 +35,11 @@ const PERSON_CARRY: usize = 1 << 20;
 /// How much of `events.jsonl` a backwards read takes at a time.
 const LOG_CHUNK: u64 = 64 * 1024;
 
-pub fn resolve_name<'a>(name: &str, project: &str, identities: impl IntoIterator<Item = &'a str>) -> String {
-    if name.contains(':') || name == PAGE { return name.into(); }
-    let preferred = format!("{project}:{name}");
-    let hits: Vec<&str> = identities.into_iter()
-        .filter(|id| id.split_once(':').is_some_and(|(_, short)| short == name)).collect();
-    if !project.is_empty() && hits.contains(&preferred.as_str()) { return preferred; }
-    if hits.len() == 1 { hits[0].into() } else { name.into() }
+/// The jelly a name means in `project`: a short name is that project's jelly,
+/// or the jelly with no project when `project` is "". The runtime's
+/// `jelly.other(name)` follows the same rule.
+pub fn full_name(name: &str, project: &str) -> String {
+    if name.contains(':') || name == PAGE || project.is_empty() { name.into() } else { format!("{project}:{name}") }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -51,8 +49,8 @@ pub struct Jelly {
     pub verbs: String,
     pub state: Value,
     /// Bumps when the view, verbs or state change: a verb call, a set, an undo
-    /// or a shape of the view or verbs. Comments, asks and other attention
-    /// leave it alone; an event's `seq` counts those.
+    /// or a shape of the view or verbs. Comments, asks and answers leave it
+    /// alone; an event's `seq` counts those.
     pub version: u64,
     /// Bumps when the view or verbs change; an open view reloads when it does.
     pub view_rev: u64,
@@ -62,7 +60,7 @@ pub struct Jelly {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaped_by: Option<String>,
     pub updated_ms: u64,
-    /// When the agent made it; the jelly page's stream is in this order.
+    /// When the agent made it; the jelly page shows it.
     #[serde(default)]
     pub created_ms: u64,
     /// One line from the agent on what this jelly is for, shown beside it.
@@ -521,6 +519,7 @@ impl Event {
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
+    /// The name, and the jellies elsewhere with that short name (`Store::missing`).
     NotFound(String),
     Exists(String),
     Invalid(String),
@@ -641,7 +640,19 @@ impl Store {
     }
 
     pub fn get(&self, name: &str) -> Result<&Jelly, Error> {
-        self.jellies.get(name).map(|e| &e.jelly).ok_or_else(|| Error::NotFound(name.into()))
+        self.jellies.get(name).map(|e| &e.jelly).ok_or_else(|| self.missing(name))
+    }
+
+    /// No jelly is called `name`. When jellies in other projects have its short
+    /// name, it says which, so a short name never quietly reaches another project.
+    fn missing(&self, name: &str) -> Error {
+        let short = |id: &str| id.split_once(':').map_or(id, |(_, s)| s).to_string();
+        let elsewhere: Vec<String> = self.jellies.keys().filter(|id| short(id) == short(name))
+            .map(|id| if id.contains(':') { id.clone() } else { format!("{id}, which has no project") }).collect();
+        if elsewhere.is_empty() {
+            return Error::NotFound(name.into());
+        }
+        Error::NotFound(format!("{name}; did you mean {}? A short name means a jelly of this project only", elsewhere.join(" or ")))
     }
 
     #[allow(clippy::too_many_arguments)] // one call site per caller; a struct would only rename the arguments
@@ -780,7 +791,7 @@ impl Store {
     /// steps. Only versions since the oldest kept step, and since the last undo,
     /// can be rebuilt.
     pub fn at_version(&self, name: &str, version: u64) -> Result<Past, Error> {
-        let entry = self.jellies.get(name).ok_or_else(|| Error::NotFound(name.into()))?;
+        let entry = self.jellies.get(name).ok_or_else(|| self.missing(name))?;
         let j = &entry.jelly;
         if version > j.version || version == 0 {
             return Err(Error::Invalid(format!("{name} is at v{}; there is no v{version}", j.version)));
@@ -847,7 +858,7 @@ impl Store {
         if self.jellies.contains_key(&id) {
             return Err(Error::Exists(id));
         }
-        let mut entry = self.jellies.get(name).ok_or_else(|| Error::NotFound(name.into()))?.clone();
+        let mut entry = self.jellies.get(name).ok_or_else(|| self.missing(name))?.clone();
         entry.jelly.name = id.clone();
         let previous_entry = self.jellies.insert(id.clone(), entry);
         let ev = self.commit(&id, EventKind::Move, by, None, Some(serde_json::json!({"from": name})), Vec::new(), previous_entry)?;
@@ -975,7 +986,6 @@ impl Store {
         self.commit(name, EventKind::Note, by, None, Some(Value::String(text.into())), Vec::new(), previous_entry)
     }
 
-    /// Where a project keeps its DESIGN.md.
     /// A project's folder. The name is checked first, so a request cannot reach
     /// outside the home with `..` or a path.
     pub fn project_dir(&self, project: &str) -> Result<PathBuf, Error> {
@@ -1225,7 +1235,10 @@ impl Store {
     }
 
     fn entry(&mut self, name: &str) -> Result<&mut Entry, Error> {
-        self.jellies.get_mut(name).ok_or_else(|| Error::NotFound(name.into()))
+        if !self.jellies.contains_key(name) {
+            return Err(self.missing(name));
+        }
+        Ok(self.jellies.get_mut(name).expect("checked above"))
     }
 
     /// Bumps the version if the view, verbs or state changed, saves the jelly,
@@ -1663,8 +1676,7 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
     Ok(())
 }
 
-/// Names become file names and URL segments.
-/// An ask checked as `attend` checks it, for a shared jelly: its relay numbers it.
+/// An ask checked as `Store::ask` checks it, for a shared jelly: its relay numbers it.
 pub fn ask_item(spec: &Value, by: &str) -> Result<Ask, Error> {
     ask_from(spec, String::new(), by)
 }
@@ -1674,7 +1686,7 @@ fn ask_from(spec: &Value, id: String, by: &str) -> Result<Ask, Error> {
     let seen = spec["seen"].as_bool().unwrap_or(false);
     let title = spec["title"].as_str().unwrap_or("").trim().to_string();
     if title.is_empty() {
-        return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
+        return Err(Error::Invalid("an ask needs a title: what you want from the person".into()));
     }
     let options: Vec<AskOption> = serde_json::from_value(spec.get("options").cloned().unwrap_or(Value::Array(vec![])))
         .map_err(|e| Error::Invalid(format!("{title:?}: options: {e}")))?;

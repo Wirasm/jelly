@@ -149,14 +149,13 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     // Only commands that make or open jellies need it, so git runs only for those.
     let project = || detect_project(cli.project.clone());
     // Names are unique per project: a short name means this project's jelly
-    // when there is one, and `project:name` always means exactly that jelly.
+    // only, and `project:name` always means exactly that jelly. When the short
+    // name lives in another project, the daemon's "no jelly" says where.
     let id = |name: &str| -> Result<String, String> {
         if name.contains(':') || name == store::PAGE {
             return Ok(name.into());
         }
-        let list = get(&api(""))?;
-        Ok(store::resolve_name(name, &project(), list.as_array().into_iter().flatten()
-            .filter_map(|j| j["name"].as_str())))
+        Ok(store::full_name(name, &project()))
     };
     // `show` moves the jelly page, so it reaches nobody unless that page is open.
     let show = |name: Value| -> Result<(), CommandError> {
@@ -262,7 +261,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let project = project();
             let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project});
             let ev = send("POST", &api(""), body)?;
-            // `inbox`, `ls` and `attention` show the project you run them from, so
+            // `hear`, `ls` and `waiting` show the project you run them from, so
             // from the person's repo they would never show this jelly.
             if project.is_empty() && cli.project.is_none() && !name.contains(':') {
                 eprintln!("jelly: {name} is in no project, because this folder is not in a git repo. `jelly hear` run from a repo will not show what the person does in it. Put it in one with `jelly move {name} PROJECT`, or make jellies from the repo: `jelly make {name} --from FOLDER`.");
@@ -387,9 +386,24 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Undo { name } => report(send("POST", &api(&format!("/{}/undo", id(&name)?)), json!({"by": by}))?),
         Cmd::Keep { name } => report(send("POST", &api(&format!("/{}/keep", id(&name)?)), json!({"by": by, "kept": true}))?),
         Cmd::Unkeep { name } => report(send("POST", &api(&format!("/{}/keep", id(&name)?)), json!({"by": by, "kept": false}))?),
-        Cmd::Rm { name } => report(send("DELETE", &api(&format!("/{}?by={}", id(&name)?, encode(&by))), Value::Null)?),
+        Cmd::Rm { name } => {
+            let name = id(&name)?;
+            // Read the feeds first: a refusal here comes before anything changed.
+            let home = daemon_home(&cli.url)?;
+            let mut feeds = feed::read(&home)?;
+            let ev = send("DELETE", &api(&format!("/{name}?by={}", encode(&by))), Value::Null)?;
+            let had = feeds.len();
+            feeds.retain(|f| f.jelly != name);
+            if feeds.len() < had {
+                feed::write(&home, &feeds).map_err(|e| format!("{name} is removed, but its feed is not: {e}. Run `jelly feed {name} --rm`"))?;
+            }
+            report(ev)
+        }
         Cmd::Events { name, state } => {
             let name = name.map(|n| id(&n)).transpose()?;
+            if let Some(n) = &name {
+                get(&api(&format!("/{n}/state")))?; // a wrong name would stream nothing
+            }
             let q = name.map(|n| format!("?jelly={}", encode(&n))).unwrap_or_default();
             let resp = ureq::get(&format!("{}/api/events{q}", cli.url)).call().map_err(describe)?;
             for line in BufReader::new(resp.into_reader()).lines() {
@@ -433,6 +447,9 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         Cmd::Waiting { name, all, mine } => {
             let mine = mine_name(mine, &cli.by)?;
             let one = name.map(|n| id(&n)).transpose()?;
+            if let Some(n) = &one {
+                get(&api(&format!("/{n}/state")))?; // a wrong name would say nothing is waiting
+            }
             // One jelly is asked for by its full name, whatever project you are in.
             let p = if all || one.is_some() { String::new() } else { project() };
             let wanted = |jelly: &Value| one.as_ref().is_none_or(|n| jelly == n.as_str());
@@ -497,29 +514,35 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Show { name } => show(json!(name.map(|n| id(&n)).transpose()?)),
         Cmd::Feed { name: None, .. } => {
-            let feeds = feed::read(&default_home()?)?;
+            let feeds = feed::read(&daemon_home(&cli.url)?)?;
             if feeds.is_empty() {
                 return output(format_args!("No feeds.\n"));
             }
+            // A jelly removed, or moved on the jelly page, leaves its feed behind.
+            let list = get(&api(""))?;
+            let names: Vec<&str> = list.as_array().into_iter().flatten().filter_map(|j| j["name"].as_str()).collect();
             for f in feeds {
-                output(format_args!("{}  {} · in {}\n", f.jelly, f.line(), f.cwd.display()))?;
+                let gone = if names.contains(&f.jelly.as_str()) { String::new() } else {
+                    format!(" · does not run: there is no jelly {}. `jelly feed {} --rm` removes it; feed the jelly under its new name if it moved", f.jelly, f.jelly)
+                };
+                output(format_args!("{}  {} · in {}{gone}\n", f.jelly, f.line(), f.cwd.display()))?;
             }
             Ok(())
         }
-        Cmd::Feed { name: Some(name), verb, every, stop, command } => {
-            // The file in the home is the feed: the daemon reads it and never
-            // takes a command over HTTP.
-            let home = default_home()?;
+        Cmd::Feed { name: Some(name), verb, every, rm, command } => {
+            // The file in the daemon's home is the feed: the daemon reads it
+            // and never takes a command over HTTP.
+            let home = daemon_home(&cli.url)?;
             let mut feeds = feed::read(&home)?;
             let jelly = id(&name)?;
             let had = feeds.len();
-            feeds.retain(|f| f.jelly != jelly && f.jelly != name);
-            if stop {
-                if feeds.len() == had { return Err(format!("{jelly} has no feed").into()); }
+            feeds.retain(|f| f.jelly != jelly);
+            if rm {
+                if feeds.len() == had { return Err(format!("{jelly} has no feed; `jelly feed` lists them").into()); }
                 feed::write(&home, &feeds)?;
-                return output(format_args!("{jelly}: feed stopped\n"));
+                return output(format_args!("{jelly}: feed removed\n"));
             }
-            let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --stop)")?;
+            let verb = verb.ok_or("give the verb and the command: jelly feed NAME VERB -- COMMAND (or --rm)")?;
             if command.is_empty() { return Err("give the command after `--`: jelly feed NAME VERB -- COMMAND".into()); }
             if every < feed::FASTEST { return Err(format!("--every is in seconds, {} or more", feed::FASTEST).into()); }
             get(&api(&format!("/{jelly}/state")))?; // fail on a wrong name
@@ -558,63 +581,41 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             Ok(())
         }
         Cmd::Hear { wait: true, name, timeout, since, every, .. } => {
-            let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
-                .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
-            if let Some(SequenceToken(seq)) = since {
-                let mut req = ureq::get(&format!("{}/api/wait", cli.url))
-                    .query("since", &seq.to_string()).query("by", &by);
-                if let Some(n) = &name { req = req.query("jelly", n); }
-                if let Some(preferred) = project_jelly {
-                    req = req.query("project_jelly", &preferred);
-                }
-                if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
-                if every { req = req.query("every", "true"); }
-                let resp = req.call().map_err(describe)?;
-                if resp.status() == 204 {
-                    let what = name.as_deref().unwrap_or("any jelly");
-                    eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
-                    std::process::exit(2);
-                }
-                let ev = resp.into_json().map_err(|e| e.to_string())?;
-                if json { return print(ev); }
-                output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
-                return Ok(());
-            }
-            let filter = name.as_deref().map(|n| format!("?jelly={}", encode(n))).unwrap_or_default();
-            let mut req = ureq::get(&format!("{}/api/events{filter}", cli.url));
-            if let Some(t) = timeout {
-                req = req.timeout(std::time::Duration::from_secs(t));
-            }
-            if let Some(n) = &name {
-                get(&api(&format!("/{n}/state")))?; // fail fast on a wrong name
-            }
-            let what = name.as_deref().unwrap_or("any jelly");
+            // Without --since the daemon starts the wait at its newest event.
+            let mut req = ureq::get(&format!("{}/api/wait", cli.url)).query("by", &by);
+            if let Some(SequenceToken(seq)) = since { req = req.query("since", &seq.to_string()); }
+            if let Some(n) = &name { req = req.query("jelly", n); }
+            if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
+            if every { req = req.query("every", "true"); }
             let resp = req.call().map_err(describe)?;
-            for line in BufReader::new(resp.into_reader()).lines() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                        eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
-                        std::process::exit(2);
-                    }
-                    Err(e) => return Err(e.to_string().into()),
-                };
-                let Some(data) = line.strip_prefix("data:") else { continue };
-                let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
-                if ev["by"] != by.as_str() && (every || ev["kind"] == "send") && (name.is_some() || ev["jelly"] != store::PAGE) {
-                    if json {
-                        return print(ev);
-                    }
-                    output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
-                    return Ok(());
-                }
+            if resp.status() == 204 {
+                let what = name.as_deref().unwrap_or("any jelly");
+                eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
+                std::process::exit(2);
             }
-            Err("the event stream ended".into())
+            let ev = resp.into_json().map_err(|e| e.to_string())?;
+            if json { return print(ev); }
+            output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))
         }
         Cmd::Reply { name, id: cid, text: None, .. } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Reply { name, id: cid, text: Some(text), resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),
-        Cmd::Move { name, to } => report(send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?),
+        Cmd::Move { name, to } => {
+            // Read the feeds first: a refusal here comes before anything changed.
+            let home = daemon_home(&cli.url)?;
+            let mut feeds = feed::read(&home)?;
+            let ev = send("POST", &api(&format!("/{}/move", id(&name)?)), json!({"project": to, "by": by}))?;
+            let (Some(from), Some(now)) = (ev["args"]["from"].as_str(), ev["jelly"].as_str()) else {
+                return Err("the daemon did not say which jelly moved where".into());
+            };
+            let fed = feed::follow(&mut feeds, |j| (j == from).then(|| now.to_string()));
+            if fed > 0 {
+                feed::write(&home, &feeds).map_err(|e| format!("{now} is moved, but its feed did not follow: {e}. Feed it again with `jelly feed {now} ...`"))?;
+            }
+            report(ev.clone())?;
+            if fed > 0 && !json { output(format_args!("{now}: its feed moved with it\n"))?; }
+            Ok(())
+        }
         Cmd::Project { name: None, .. } => {
             let list = get(&format!("{}/api/projects", cli.url))?;
             if json {
@@ -634,9 +635,18 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let at = format!("{}/api/projects", cli.url);
             let (done, line) = match (to, rm) {
                 (Some(to), _) => {
+                    // Read the feeds first: a refusal here comes before anything changed.
+                    let home = daemon_home(&cli.url)?;
+                    let mut feeds = feed::read(&home)?;
                     let done = send("POST", &format!("{at}/{}/move", encode(&name)), json!({"to": to, "by": by}))?;
+                    let prefix = format!("{name}:");
+                    let fed = feed::follow(&mut feeds, |j| j.strip_prefix(&prefix).map(|short| store::full_name(short, &to)));
+                    if fed > 0 {
+                        feed::write(&home, &feeds).map_err(|e| format!("the jellies of {name} are in {to}, but their feeds did not follow: {e}. Feed them again with `jelly feed`"))?;
+                    }
                     let n = done["events"].as_u64().unwrap_or(0);
                     let line = match n { 0 => format!("{name} held no jellies; it is {to} now"), 1 => format!("the 1 jelly in {name} is in {to} now, and its name starts with {to}:"), n => format!("the {n} jellies in {name} are in {to} now, and their names start with {to}:") };
+                    let line = match fed { 0 => line, 1 => format!("{line}. Its 1 feed moved with it"), n => format!("{line}. Their {n} feeds moved with them") };
                     (done, line)
                 }
                 (None, true) => (send("DELETE", &format!("{at}/{}", encode(&name)), Value::Null)?, format!("{name}: removed")),
@@ -896,7 +906,11 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
         }
         Cmd::Open { name } => {
             let url = match (name.as_deref(), project().as_str()) {
-                (Some(n), _) => format!("{}/j/{}/", cli.url, id(n)?),
+                (Some(n), _) => {
+                    let n = id(n)?;
+                    get(&api(&format!("/{n}/state")))?; // not a browser tab on a jelly that is not there
+                    format!("{}/j/{n}/", cli.url)
+                }
                 (None, "") => format!("{}/", cli.url),
                 (None, p) => format!("{}/p/{p}", cli.url),
             };
@@ -1178,6 +1192,7 @@ fn report_line(ev: &Value) -> String {
             else { ". Nobody has it on screen: tell the person, or `jelly show` it" }),
         "set" => if s(&ev["args"]["pointer"]).is_empty() { "state replaced".into() } else { format!("set {}", s(&ev["args"]["pointer"])) },
         "make" => "made".into(),
+        "keep" => if ev["args"] == false { "no longer kept".into() } else { "kept".into() },
         k => k.to_string(),
     };
     let changed: Vec<String> = ev["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from).collect();
@@ -1235,7 +1250,6 @@ fn read(p: &PathBuf) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-/// Adds files beside a jelly; `jelly` is its API address.
 /// Resolves on Ctrl-C, or SIGTERM on Unix.
 async fn stopped() {
     #[cfg(unix)]
@@ -1305,6 +1319,13 @@ fn default_home() -> Result<PathBuf, String> {
     std::env::var_os("JELLY_HOME").map(PathBuf::from)
         .or_else(|| std::env::home_dir().map(|h| h.join(".jelly")))
         .ok_or_else(|| "could not find your home directory: set --home or JELLY_HOME".into())
+}
+
+/// The home of the daemon at `url`, which holds the feeds it runs. It can differ
+/// from this CLI's own (`--url` or `JELLY_URL` naming another daemon).
+fn daemon_home(url: &str) -> Result<PathBuf, String> {
+    get(&format!("{url}/api/version"))?["home"].as_str().map(PathBuf::from).ok_or_else(|| format!(
+        "the daemon at {url} is older than this jelly and does not say where its home is, so its feeds cannot be found. Stop it, and the next jelly command starts this one"))
 }
 
 fn get(url: &str) -> Result<Value, String> {
@@ -1591,7 +1612,7 @@ mod tests {
                         "id":"a1", "kind":"ask", "title":"Q", "by":"agent", "at_ms":1,
                         "answer":{"option":"b", "text":"", "by":"person", "at_ms":2}
                     })).unwrap())),
-                    _ => panic!("unexpected attention read"),
+                    _ => panic!("unexpected ask read"),
                 }
             }).unwrap();
             assert_eq!(reads, 2);

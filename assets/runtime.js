@@ -1,6 +1,8 @@
 // Injected into every jelly view as `window.jelly`, grouped by what it is about.
 //
 // This jelly:
+//   jelly.name, jelly.about     its full name (project:name) and its about line
+//   jelly.css                   jelly's own stylesheet as text, for a shadow root: <style>${jelly.css}</style>
 //   jelly.state                 current state (read only; change it with verbs)
 //   jelly.onState(fn)           fn(state, event) now and after every change, from anyone
 //   jelly.do(verb, args)      run a verb; resolves to the event, rejects with the reason
@@ -23,6 +25,9 @@
 //   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the jelly page; returns unsubscribe
 //   jelly.person.comments       comment threads on this jelly
 //   jelly.person.answer(id, { option, text }), .comment(anchor, text), .reply(id, text), .resolve(id)
+//   jelly.person.unsent         how many things people did here since the last Send
+//   jelly.person.onUnsent(fn)   fn(count) now and whenever it changes
+//   jelly.person.send()         hand the turn back, as the Send button does: wakes `jelly hear --wait`
 //
 //   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
 //   jelly.isPerson(by)          true for "person" and "person:<name>"
@@ -770,7 +775,11 @@
   // The person works through a jelly, then hands the turn back with one press.
   // A view that draws its own marks it with data-send and calls jelly.person.send().
   let sendEl = null;
+  // The note a failed Send left, which goes once a Send gets through.
+  let sendFailure = null;
+  const clearSendFailure = () => { if (sendFailure && failEl?.textContent === sendFailure) failEl.remove(); sendFailure = null; };
   function drawSend() {
+    if (unsent === 0) clearSendFailure();
     // The jelly page is not a jelly an agent waits on: it shows no Send.
     const show = unsent > 0 && boot.name !== "page" && document.body && !agentMode && share?.can_act !== false && !document.querySelector("[data-send]");
     if (!show) { sendEl?.remove(); sendEl = null; return; }
@@ -778,7 +787,15 @@
       sendEl = document.createElement("button");
       sendEl.className = "jf-btn jf-send";
       sendEl.title = "Tell the agent you are done here for now";
-      sendEl.onclick = (e) => { e.stopPropagation(); jelly.person.send().catch(console.error); };
+      // The button stays while the count does, so a Send that did not go can be pressed again.
+      sendEl.onclick = (e) => {
+        e.stopPropagation();
+        jelly.person.send().then(clearSendFailure, (err) => {
+          console.error(err);
+          showFailure(`Send did not reach the agent (${err.message}). Press Send again.`);
+          sendFailure = failEl?.textContent;
+        });
+      };
     }
     sendEl.textContent = `${unsent} change${unsent > 1 ? "s" : ""} · Send`;
     if (!sendEl.isConnected) ui().appendChild(sendEl);
@@ -1197,11 +1214,6 @@
       else setMode(!commenting);
     });
   });
-  // A click or Tab into a jelly never reaches the page, so the jelly tells it, and
-  // the page selects it. A click into a jelly that already has focus fires no focus.
-  const focused = () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); };
-  addEventListener("focus", focused);
-  addEventListener("pointerdown", focused);
   addEventListener("mouseover", (e) => {
     if (!(commenting || e.altKey) || isOurs(e.target)) return;
     hovered?.classList.remove("jf-hover");

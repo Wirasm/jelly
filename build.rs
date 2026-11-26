@@ -1,5 +1,5 @@
 //! Embeds every file under skill/recipes in the binary, so `jelly recipes` and
-//! `jelly new --recipe` work from any directory. skill/recipes stays the source.
+//! `jelly make --recipe` work from any directory. skill/recipes stays the source.
 //! Also works out the version the binary reports, as `JELLY_VERSION`.
 
 use std::fmt::Write as _;

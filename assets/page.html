@@ -879,7 +879,10 @@
     n.onclick = () => { focus(); n.close(); if (byName(ev.jelly)) openFull(ev.jelly); else location.href = `/j/${enc(ev.jelly)}/`; };
   }
 
-  let pending = null;
+  // One refresh per burst of changes, 120 ms after the last. A jelly that never
+  // pauses (a game reporting positions) would push it back for good, so a
+  // burst refreshes at least once a second.
+  let pending = null, burstAt = 0;
   jelly.events((ev) => {
     $("live").classList.add("live");
     if (ev.jelly === "page") return;
@@ -887,7 +890,8 @@
     if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
     if (!jelly.isPerson(ev.by)) { jiggle($("logo")); unremove(ev.jelly); }
     clearTimeout(pending);
-    pending = setTimeout(refresh, 120); // one refresh per burst of changes
+    burstAt ||= Date.now();
+    pending = setTimeout(() => { burstAt = 0; refresh(); }, Math.min(120, burstAt + 1000 - Date.now()));
   });
   function applyFocus(s) {
     if (s.shown) unremove(s.shown); // an agent shows it: it is wanted

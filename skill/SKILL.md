@@ -56,10 +56,13 @@ from the repo all the same: a jelly belongs to the project you make it in, and
 `jelly hear` shows the project you run it from.
 
 - `view.html`: any page. `window.jelly` exists before your scripts run. CDN
-  imports, canvas, WebGL and fetches to public APIs all work.
+  imports, canvas, WebGL and fetches to public APIs all work. A view runs on the
+  daemon's own origin, so it and every script it loads can read and change every
+  jelly in every project, as the person or as you: load only scripts you trust
+  with that.
 - `verbs.js`: `const verbs = { add(state, args, { by, at_ms }) { … } };`. Verbs
-  are the only way state changes; a button in the view and you call the same
-  verb. Change `state` in place or return a new one; throw to refuse. A verb runs
+  are how the view and the person change state; a button in the view and you
+  call the same verb. Change `state` in place or return a new one; throw to refuse. A verb runs
   at most 1 second, with no network, files or processes. Use `const verbs = {};`
   for a page that only shows.
 - `state.json`: the starting state.
@@ -228,8 +231,16 @@ A question the person asks about a whole jelly arrives like a comment, marked
 "on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.
 
 `ask`, `do` and `shape` print `since seq:N`; pass it to `hear --wait
---since` to catch anything after your change. `hear --wait` exits 2 on timeout. In a
-script, add `--json` to any command instead of parsing its text.
+--since` to catch anything after your change. `hear --wait` exits 2 on timeout,
+with nothing on stdout. With `--json` it prints the one event that ended the
+wait: `jelly`, `kind`, `by`, and `seq` (wait again from there with `--since
+seq:N`). A Send has `kind` `send` and the number of changes it hands back in
+`args`. With `--every` it is the first change: a `do` with `verb` and `args`,
+an `answer` with `args.id`, `args.option` and `args.text`. It holds no state;
+read that with `jelly state NAME`. In a
+script, add `--json` instead of parsing text. `hear` takes it only with
+`--wait`; `feed` prints text all the same; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
+`recipes`, `open`, `relay`, `takedown`, `serve`, `setup` and `update` refuse it.
 
 **Put the decision where the code is.** When the jelly settled something about
 a pull request, post it there:
@@ -302,7 +313,7 @@ jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses ass
 jelly asset plan --rm shot.png       # remove one
 jelly note plan "Cards move next→doing→done; the person decides."   # for the next agent
 jelly feed prs refresh --every 120 -- gh pr list --json number,title   # the daemon runs it on a timer and passes the JSON to the verb
-jelly feed prs --stop            # `jelly feed` lists feeds; `jelly look prs` says how the last run went
+jelly feed prs --rm              # `jelly feed` lists feeds; `jelly look prs` says how the last run went
 jelly share plan                 # one read-only HTML file, state and assets baked in; prints where
 jelly share plan --to ana@example.com   # a live link for Ana: she uses it from her phone, you hear person:ana@example.com
 jelly share plan --link          # a live view-only link: anyone watches, nobody acts
@@ -320,8 +331,11 @@ jelly rm plan
 A jelly's full name is `project:name`; the project is the git repo you run in
 (or `--project`). The person can move a jelly to another project on the jelly
 page, which changes its name: when a name you remember is gone, `jelly find`
-it. Short names work inside the same project, in the CLI and in
-`jelly.other`. From outside, use the full name.
+it. A short name means a jelly of the project you are in, in the CLI and in
+`jelly.other`; outside a project, the jelly with no project. For any other
+jelly, use the full name; a jelly with no project is reached from a repo with
+`--project ""`. A short name that only another project has is refused with the
+full name to use.
 
 A project is only a name. You are in the one named after your repo unless you
 say otherwise, and you can work in any other:

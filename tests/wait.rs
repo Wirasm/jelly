@@ -136,7 +136,7 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
 }
 
 #[test]
-fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
+fn a_wait_without_since_starts_now_and_since_timeout_keeps_its_diagnostic() {
     let daemon = Daemon::start();
     let asked = daemon.ok(&["ask", "plan", "Which?"]);
     daemon.post("/api/jellies/test:plan/asks/a1/answer", json!({"text": "yes", "by": "person"}));
@@ -164,8 +164,7 @@ fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         let event: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(event["by"], "person");
-        assert_eq!(event.get("state").is_none(), since_mode);
-        if !since_mode { assert!(event["state"]["n"].as_u64().unwrap() > 0); }
+        assert!(event.get("state").is_none());
     }
 
     let head = daemon.log().last().unwrap()["seq"].clone();
@@ -195,39 +194,6 @@ fn historical_short_names_keep_the_current_project_after_removal() {
             daemon.post("/api/jellies", json!({"name": "plan", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
         }
         assert_eq!(daemon.wait(token(&asked))["seq"], answer["seq"]);
-    }
-}
-
-#[test]
-fn historical_short_names_still_fall_back_to_a_unique_existing_jelly() {
-    for removed_before_ask in [false, true] {
-        let daemon = Daemon::start();
-        daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-        if removed_before_ask {
-            daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-            ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
-        }
-        let asked = daemon.ok(&["ask", "remote", "Which?"]);
-        let answer = daemon.post("/api/jellies/other:remote/asks/a1/answer", json!({"text": "yes", "by": "person"}));
-        let result: Value = serde_json::from_str(&daemon.ok(&["hear", "--wait", "--every", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
-        assert_eq!(result["seq"], answer["seq"]);
-    }
-}
-
-#[test]
-fn a_later_local_jelly_cannot_redirect_a_fallback_wait() {
-    for remove_local in [false, true] {
-        let daemon = Daemon::start();
-        daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-        let asked = daemon.ok(&["ask", "remote", "Which?"]);
-        daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
-        if remove_local {
-            ureq::delete(&format!("{}/api/jellies/test:remote?by=agent", daemon.url)).call().unwrap();
-        }
-        let answer = daemon.post("/api/jellies/other:remote/asks/a1/answer", json!({"text": "yes", "by": "person"}));
-        let result: Value = serde_json::from_str(&daemon.ok(&["hear", "--wait", "--every", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
-        assert_eq!(result["seq"], answer["seq"]);
-        assert_eq!(result["jelly"], "other:remote");
     }
 }
 
@@ -262,66 +228,6 @@ fn an_unrelated_cursor_cannot_override_the_current_project() {
         assert_eq!(result["seq"], answer["seq"]);
         assert_eq!(result["jelly"], "test:remote");
     }
-}
-
-#[test]
-fn historical_names_match_cli_precedence_with_bare_and_qualified_candidates() {
-    for project in ["test", ""] {
-        for qualified_count in 0..=2 {
-            for after_answer in ["keep", "remove", "move"] {
-                let daemon = Daemon::start();
-                for project in ["", "other", "third"].into_iter().take(qualified_count + 1) {
-                    daemon.post("/api/jellies", json!({"name": "remote", "project": project, "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-                }
-                let target = if qualified_count == 1 { "other:remote" } else { "remote" };
-                let asked = daemon.command_in_project(project, &["ask", "remote", "Which?"]).output().unwrap();
-                assert!(asked.status.success());
-                let asked = String::from_utf8(asked.stdout).unwrap();
-                assert_eq!(daemon.log().last().unwrap()["jelly"], target);
-                let answer = daemon.post(&format!("/api/jellies/{target}/asks/a1/answer"), json!({"text": "yes", "by": "person"}));
-                match after_answer {
-                    "remove" => { ureq::delete(&format!("{}/api/jellies/{target}?by=agent", daemon.url)).call().unwrap(); }
-                    "move" => { daemon.post(&format!("/api/jellies/{target}/move"), json!({"project": "moved", "by": "agent"})); }
-                    _ => {}
-                }
-                daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-                daemon.post("/api/jellies/test:remote/asks", json!({"title": "Unrelated", "by": "person"}));
-                let result = daemon.command_in_project(project, &["hear", "--wait", "--every", "--json", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
-                assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-                let result: Value = serde_json::from_slice(&result.stdout).unwrap();
-                assert_eq!(result["seq"], answer["seq"], "project={project}, qualified={qualified_count}, after_answer={after_answer}");
-                assert_eq!(result["jelly"], target);
-            }
-        }
-    }
-}
-
-#[test]
-fn historical_candidates_account_for_moves_before_the_cursor() {
-    let daemon = Daemon::start();
-    daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-    daemon.post("/api/jellies/test:remote/move", json!({"project": "", "by": "agent"}));
-    let asked = daemon.ok(&["ask", "remote", "Which?"]);
-    let answer = daemon.post("/api/jellies/remote/asks/a1/answer", json!({"text": "yes", "by": "person"}));
-    daemon.post("/api/jellies", json!({"name": "remote", "project": "test", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
-    let result: Value = serde_json::from_str(&daemon.ok(&["hear", "--wait", "--every", "--json", "remote", "--since", token(&asked), "--timeout", "0"])).unwrap();
-    assert_eq!(result["seq"], answer["seq"]);
-    assert_eq!(result["jelly"], "remote");
-}
-
-#[test]
-fn historical_names_outside_a_project_keep_a_formerly_unique_candidate() {
-    let daemon = Daemon::start();
-    daemon.post("/api/jellies", json!({"name": "remote", "project": "other", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "agent"}));
-    let asked = daemon.command_in_project("", &["ask", "remote", "Which?"]).output().unwrap();
-    assert!(asked.status.success());
-    let asked = String::from_utf8(asked.stdout).unwrap();
-    let answer = daemon.post("/api/jellies/other:remote/asks/a1/answer", json!({"text": "yes", "by": "person"}));
-    daemon.post("/api/jellies", json!({"name": "remote", "project": "third", "view": "", "verbs": "const verbs = {};", "state": {}, "by": "person"}));
-    let result = daemon.command_in_project("", &["hear", "--wait", "--every", "--json", "remote", "--since", token(&asked), "--timeout", "0"]).output().unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    let result: Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(result["seq"], answer["seq"]);
 }
 
 #[test]

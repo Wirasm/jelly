@@ -24,8 +24,8 @@ other `--url` / `JELLY_URL` targets must already be running.
 `src/update.rs` holds what the daemon, `jelly update`, `jelly doctor` and
 `jelly hear --hook` share. The daemon asks `JELLY_UPDATE_URL` (default: npm's
 `jellyware/latest`; `off` never asks) at start and once a day, and answers
-`GET /api/version` with `{version, started_ms, latest, newer, install, commands,
-updating, failed}`. `install` is `npm` when the daemon's binary sits under
+`GET /api/version` with `{version, started_ms, home, latest, newer, install,
+commands, updating, failed}`. `install` is `npm` when the daemon's binary sits under
 `node_modules/@getjellyware/`, else `source`, and then `commands` are the two
 to run in the checkout. `JELLY_NPM` names another npm binary.
 `.cargo/config.toml` sets `JELLY_UPDATE_URL=off` for `cargo test` and `cargo
@@ -44,8 +44,8 @@ was last checked.
 
 When piping into `head` or `grep -q`, stdout BrokenPipe ends the command quietly.
 Finite commands finish their changes before printing. `events` and `dev`
-stop when an output write detects closure; while idle, they keep waiting. `wait`
-keeps its event selection and timeout behavior, detecting closure only when it
+stop when an output write detects closure; while idle, they keep waiting. `hear
+--wait` keeps its event selection and timeout behavior, detecting closure only when it
 prints a qualifying event. `serve` continues serving when stdout closes.
 
 ## Inbox
@@ -60,11 +60,11 @@ hook output as `jelly hear failed: ...`. Failed reads do not advance progress.
 Claude's `CLAUDE_CODE_SESSION_ID` environment variable keeps one inbox reader
 across commands and resumed conversations. JSON `session_id` identifies hook
 invocations only. To share that progress with ordinary commands, supply the same
-conversation ID through `inbox --session-id` or `JELLY_SESSION_ID` (or use the
+conversation ID through `hear --session-id` or `JELLY_SESSION_ID` (or use the
 same explicit `--as` / `JELLY_AS` name for both).
 
 Inbox identity uses explicit `--as` / `JELLY_AS` first, then
-`inbox --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
+`hear --session-id` / `JELLY_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, then
 `session_id` from hook stdin. Other agents should export a stable, distinct
 conversation token as `JELLY_SESSION_ID`. Without one, the invoking parent
 process's PID and start time identify the reader for that process's lifetime;
@@ -124,9 +124,20 @@ answers, verb calls, undos; `store::record`). A verb call the view made with
 `quiet: true`, which the daemon, the relay and the runtime all skip when they
 count. Nothing else about a quiet call changes. The runtime shows the count on its
 Send button, or a view draws its own (`data-send`, `jelly.person.send()`). `send`
-sets the count to zero and is the only event that ends `GET /api/wait` and the
-`jelly hear --wait` stream, unless `every=true` (`--every`). The relay keeps the
+sets the count to zero and is the only event that ends `GET /api/wait`, which is
+all `jelly hear --wait` does, unless `every=true` (`--every`). The wait reads
+`events.jsonl` after the `since` position, and the live bus only wakes it, so a
+reader that falls behind still hears the Send. Without `since` (no `--since`)
+the wait takes the daemon's newest event under the store lock, which every
+event is numbered and logged under, and reads from the end of the log, so it
+starts without reading history. `jelly` is a full name: the CLI resolves a
+short one in its project before it asks. The relay keeps the
 same count for a shared jelly.
+
+Two other listeners wake an agent on Send, and read Sends the same way. The
+daemon's `--wake` task (`server/wake.rs`) follows the log from its end, woken by
+the live bus. The Pi extension (`assets/pi-extension.ts`) runs one
+`jelly hear --wait --json` at a time, each `--since` the Send the last returned.
 
 ## Who is looking
 
@@ -134,8 +145,9 @@ Each open page tells the daemon, over its WebSocket, which jelly it shows and
 whether its tab is in front (`{"open": name, "visible": bool}`), on connect and
 on `visibilitychange`. Agent renders (`look`, `try`) do not. The daemon keeps
 this in memory by socket and drops it when the socket closes. `look`, `ask` and
-`show` report it; the jelly page counts for every jelly. People on a share link
-are not counted.
+`show` report it; the jelly page counts for every jelly. The page's hover
+preview of a row is a live frame of that jelly and reports itself too, but only
+ever beside the page, which already counts. People on a share link are not counted.
 
 The jelly page has a "Notify me" button while the browser has not been asked.
 Once allowed, the page shows a browser notification for an agent's ask when its
@@ -150,7 +162,8 @@ only while a jelly page is open in some tab, and not on share links.
 a few parts (`jy-bar`, `jy-chip`, `jy-btn`, `jy-action`, `jy-tag`, `jy-dot`,
 `jy-mark`). `server.rs` replaces the `"__JELLY_CSS__"` placeholder in
 `runtime.js` with the file's text, and that composed runtime is what
-`/runtime.js`, a share and an export get. The runtime adds it to the page's head
+`/runtime.js` and a share get, and does the same in `snapshot.js`, which an
+export gets in the runtime's place. The runtime adds it to the page's head
 before first paint. Tokens are set on `.jy` and `:host`: `<jelly-ui class="jy">`
 always has them, a view has them with `<html class="jy">`, and a shadow root with
 the text of `jelly.css` (`window.jelly.css`) in its own style element. The
@@ -159,8 +172,9 @@ background, so they match the page they sit on.
 
 ## Shares on the jelly page
 
-`GET /api/shares` lists every shared jelly with its people from the daemon's
-own record (`people_from` is `record`), which is what the jelly page asks for
+`GET /api/shares` lists every shared jelly with its people, and when it ends as
+the relay last said (`expires_at`), from the daemon's own record (`people_from`
+is `record`), which is what the jelly page asks for
 every 20 seconds. With `?here=true`, which the page sends only while a share's
 people are showing (its Who button), the daemon asks the relay for each share
 (`GET /api/live/<share>/people`) who holds a link, when each last opened one
@@ -181,6 +195,8 @@ the newest change on top, and `n` opens the next one at its ask. Each jelly in
 the list carries `archives_ms`: when `Store::sweep` will archive it, by the one
 rule in `Jelly::archives_ms`, or null when it will not (kept, archived, or an
 ask or comment still open). The page marks the last two days before that.
+It asks again 120 ms after the last of a burst of events, and at least once a
+second while events keep coming, so a jelly that never pauses cannot hold it back.
 
 Remove on the page takes the row away at once and sends the `DELETE` ten
 seconds later, so the person can undo it; a second remove, or leaving the page,
@@ -194,12 +210,19 @@ they differ, so a home made by an older binary gets the new page.
 
 ## Feeds
 
-`jelly feed` writes `feeds.json` in the home; the daemon reads it every second
-and never writes it, and no HTTP route touches it. A due feed's command runs
-without a shell in the folder the feed was made in, for at most 60 seconds, one
-run at a time per jelly. Its standard output, parsed as JSON, becomes the
+`jelly feed` writes `feeds.json` in the home of the daemon it talks to, which
+`/api/version` names; the daemon reads it every second and never writes it,
+and no HTTP route touches it. A feed belongs to a jelly by its full name, so
+`jelly move` and `jelly project --move` rewrite the file to take the feed
+along, dropping a feed left under the new name, and `jelly rm` removes it.
+They read the file before they change the jelly, so a file they cannot read
+stops them first. A move or removal on the jelly page cannot touch the file:
+`jelly feed` lists such a feed as not running. A due feed's command runs
+without a shell in the folder the feed was made in, for at most 60 seconds,
+one run at a time per jelly. Its standard output, parsed as JSON, becomes the
 arguments of the verb, called as `feed`. How the last run went is kept in memory
-and shown by `jelly look`. An archived jelly's feed does not run.
+and shown by `jelly look`. An archived jelly's feed does not run, and `jelly
+look` says it rests.
 
 ## Pull requests
 
@@ -289,7 +312,3 @@ python3 scripts/migrate-home-2026-11.py ~/.jelly --write
 It renames the stored fields and event kinds, rewrites old runtime names in
 views, gives the jelly page and ask pages the bundled view, and drops undo
 history, which holds views written for the old runtime.
-
-After that, a new bundled jelly page reaches an existing home with
-`jelly shape page --view assets/page.html`. This replaces the page's view and
-keeps its state.

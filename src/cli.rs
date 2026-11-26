@@ -158,7 +158,7 @@ pub enum Cmd {
     Keep { name: String },
     /// Stop keeping a jelly.
     Unkeep { name: String },
-    /// Remove a jelly and its history.
+    /// Remove a jelly, its history and its feed.
     Rm { name: String },
     /// Stream events as JSON lines, for one jelly or all.
     Events {
@@ -341,16 +341,18 @@ pub enum Cmd {
     /// The command runs without a shell, from the folder you ran `jelly feed`
     /// in; use `sh -c '...'` for a pipe. A jelly has one feed: a new one
     /// replaces it. `jelly look NAME` says when it last ran and why it failed.
-    /// The feed rests while the jelly is archived. Without a NAME, list feeds.
+    /// The feed rests while the jelly is archived, follows it through
+    /// `jelly move` and `jelly project --move`, and goes with `jelly rm`.
+    /// Without a NAME, list feeds.
     Feed {
         name: Option<String>,
         verb: Option<String>,
         /// Seconds between runs (5 or more).
         #[arg(long, default_value_t = 60)]
         every: u64,
-        /// Stop feeding NAME.
+        /// Remove NAME's feed.
         #[arg(long, requires = "name", conflicts_with_all = ["verb", "command"])]
-        stop: bool,
+        rm: bool,
         #[arg(last = true)]
         command: Vec<String>,
     },
@@ -417,7 +419,7 @@ pub enum Cmd {
     /// (`jelly unshare NAME --pin`).
     ///
     /// While a jelly is shared, the relay holds the live copy: it keeps working
-    /// while this machine sleeps, and your changes (call, set, shape, ask,
+    /// while this machine sleeps, and your changes (do, set, shape, ask,
     /// unask, reply) go there. Undo, move, rm and a new ask round wait until
     /// `jelly unshare`.
     Share {
@@ -517,7 +519,7 @@ pub enum Cmd {
         wait: bool,
         #[arg(long, conflicts_with_all = ["wait", "hook", "mine"])]
         wake: bool,
-        /// With --wait: start after this change (seq:N), replaying what was recorded since.
+        /// With --wait: start after this change (seq:N), replaying what was recorded since. Without it, start now.
         #[arg(long, requires = "wait")]
         since: Option<SequenceToken>,
         /// With --wait: give up after this many seconds (exit 2).
