@@ -15,10 +15,12 @@ thing: no aliases for commands, flags or runtime fields.
   a recommendation; the person picks, says why, or comments. Never hand the person
   an empty input field.
 
-- State changes only through a verb or `jelly set` (`Store::set_state`), and every
-  change is an event that names who made it and can be undone. Do not add a way
-  to write state that skips the event or the undo step; undo, the inbox and
-  attribution all depend on it.
+- State changes only in `Store`: a verb, `set`, `undo`, `make --replace`, or a
+  change mirrored from the relay. Every one goes through `commit` or `record`,
+  which saves it and logs an event naming who made it; verb calls and sets also
+  keep an undo step. Do not add a way to write state that skips the event, or a
+  new kind of edit that skips the undo step: undo, the inbox and attribution
+  depend on it.
 - Verbs run one at a time under the store lock in `server.rs`.
 - Shape and create refuse verbs that do not load (`verbs::check`).
 - An event's `state` field goes to live listeners only, never into `events.jsonl`.
@@ -50,7 +52,7 @@ thing: no aliases for commands, flags or runtime fields.
   command. `/api/update` runs `npm install -g jellyware@latest`, then `jelly
   setup`, and the request chooses nothing about it. `/api/wake` runs `codex
   queue --thread ID --message TEXT` once, on the next Send in the jelly or
-  project the request names. The request gives only ID, which must be letters,
+  project the request names. Of the command line, the request gives only ID, which must be letters,
   digits and `-` and not start with `-`, so it never reads as a flag; the binary
   (`codex`, or `JELLY_CODEX` in the daemon's environment) and TEXT are jelly's
   (`src/server/wake.rs`).

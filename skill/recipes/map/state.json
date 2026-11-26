@@ -582,7 +582,7 @@
   ],
   "change": {
     "title": "ef60c62: asks say so when their anchor matches nothing",
-    "note": "Three places changed. The store, the log and the views are untouched: the item and its event are the same as before."
+    "note": "Three places changed. The store, the log and the views are untouched: the ask and its event are the same as before."
   },
   "flags": [],
   "flag_seq": 0

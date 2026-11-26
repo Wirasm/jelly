@@ -144,9 +144,9 @@ A local daemon holds every jelly and serves them on 127.0.0.1 only, without
 authentication: anything that can reach the port can run verbs. It refuses
 requests from other websites. A jelly's view is not another website: the daemon
 serves it on the same origin as its API, so the view, and every script it loads
-(from a CDN too), can do what the person's own jelly page can: read every
-project's jellies, answer and comment as the person, remove jellies, restart
-the daemon. Load into a view only scripts you would trust with that.
+(from a CDN too), can use the whole API: read every project's jellies and
+send them anywhere, change or remove any jelly, answer as the person or act as
+the agent, share a jelly, restart the daemon. Load into a view only scripts you would trust with that.
 
 Verbs run one at a time in QuickJS with a 1 second, 64 MB limit and no network,
 which keeps every change attributable and undoable. Live data is pushed in from

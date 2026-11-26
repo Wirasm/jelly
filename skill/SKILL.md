@@ -57,11 +57,12 @@ from the repo all the same: a jelly belongs to the project you make it in, and
 
 - `view.html`: any page. `window.jelly` exists before your scripts run. CDN
   imports, canvas, WebGL and fetches to public APIs all work. A view runs on the
-  daemon's own origin, so it and every script it loads can do what the jelly
-  page can, in every project: load only scripts you trust with that.
+  daemon's own origin, so it and every script it loads can read and change every
+  jelly in every project, as the person or as you: load only scripts you trust
+  with that.
 - `verbs.js`: `const verbs = { add(state, args, { by, at_ms }) { … } };`. Verbs
-  are the only way state changes; a button in the view and you call the same
-  verb. Change `state` in place or return a new one; throw to refuse. A verb runs
+  are how the view and the person change state; a button in the view and you
+  call the same verb. Change `state` in place or return a new one; throw to refuse. A verb runs
   at most 1 second, with no network, files or processes. Use `const verbs = {};`
   for a page that only shows.
 - `state.json`: the starting state.
@@ -232,7 +233,7 @@ A question the person asks about a whole jelly arrives like a comment, marked
 `ask`, `do` and `shape` print `since seq:N`; pass it to `hear --wait
 --since` to catch anything after your change. `hear --wait` exits 2 on timeout. In a
 script, add `--json` instead of parsing text. `hear` takes it only with
-`--wait`; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
+`--wait`; `feed` prints text all the same; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
 `recipes`, `open`, `relay`, `takedown`, `serve`, `setup` and `update` refuse it.
 
 **Put the decision where the code is.** When the jelly settled something about
