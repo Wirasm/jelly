@@ -147,7 +147,7 @@
       "layer": "daemon",
       "label": "Broadcast channel",
       "kind": "code",
-      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket, `jelly hear --wait` over /api/wait and `jelly events` over /api/events.",
+      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket and `jelly events` over /api/events; it wakes a `jelly hear --wait` (/api/wait), which reads the event log, so a slow reader misses nothing.",
       "files": [
         "src/server.rs: App.events, serve, events",
         "src/server/hear.rs: wait",

@@ -251,9 +251,9 @@ fn creation_and_asset_uploads_finish_before_output() {
 
 #[test]
 fn streams_exit_at_the_failed_write_without_waiting_for_eof() {
-    for cmd in [&["events"][..], &["hear", "--wait", "--every"]] {
+    {
         let fixture = Fixture::new();
-        let mut child = spawn(command(&fixture.url, cmd).stdout(closed_pipe()));
+        let mut child = spawn(command(&fixture.url, &["events"]).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.path, "/api/events");
         write!(req.stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {{\"seq\":1,\"at_ms\":1,\"kind\":\"do\",\"version\":1,\"view_rev\":1,\"by\":\"person\",\"jelly\":\"probe:x\",\"state\":{{}}}}\n\n").unwrap();
@@ -346,11 +346,9 @@ fn wait_retains_its_timeout_exit_with_closed_stdout() {
     let fixture = Fixture::new();
     let mut child = spawn(command(&fixture.url, &["hear", "--wait", "--every", "--timeout", "1"]).stdout(closed_pipe()));
     let mut req = fixture.request();
-    write!(
-        req.stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
+    assert_eq!(req.path, "/api/wait?by=agent&timeout=1&every=true");
+    // The daemon's answer when nobody acted in time.
+    write!(req.stream, "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").unwrap();
     req.stream.flush().unwrap();
     let out = child.finish();
     assert_eq!(out.status.code(), Some(2), "{out:?}");
@@ -384,7 +382,7 @@ fn replay_wait_and_spec_ask_exit_quietly_with_a_closed_reader() {
         let mut child = spawn(command(&fixture.url, &args).stdout(closed_pipe()));
         let mut req = fixture.request();
         assert_eq!(req.method, "GET");
-        assert_eq!(req.path, "/api/wait?since=1&by=agent&jelly=probe%3Ax&every=true");
+        assert_eq!(req.path, "/api/wait?by=agent&since=1&jelly=probe%3Ax&every=true");
         req.reply(r#"{"seq":2,"at_ms":1,"kind":"do","version":2,"view_rev":1,"by":"person","jelly":"probe:x"}"#);
         child.quiet();
 

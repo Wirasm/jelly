@@ -783,7 +783,11 @@
       sendEl = document.createElement("button");
       sendEl.className = "jf-btn jf-send";
       sendEl.title = "Tell the agent you are done here for now";
-      sendEl.onclick = (e) => { e.stopPropagation(); jelly.person.send().catch(console.error); };
+      // The button stays while the count does, so a Send that did not go can be pressed again.
+      sendEl.onclick = (e) => {
+        e.stopPropagation();
+        jelly.person.send().catch((err) => { console.error(err); showFailure(`Send did not reach the agent (${err.message}). Press Send again.`); });
+      };
     }
     sendEl.textContent = `${unsent} change${unsent > 1 ? "s" : ""} · Send`;
     if (!sendEl.isConnected) ui().appendChild(sendEl);

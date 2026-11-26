@@ -2,7 +2,20 @@
 
 use super::*;
 
-#[derive(Deserialize, Clone)]
+/// `GET /api/wait`: what `jelly hear --wait` asks for. Without `since` the wait
+/// starts after the newest event the daemon has recorded.
+#[derive(Deserialize)]
+pub(super) struct WaitReq {
+    since: Option<u64>,
+    by: String,
+    project_jelly: Option<String>,
+    jelly: Option<String>,
+    timeout: Option<u64>,
+    #[serde(default)]
+    every: bool,
+}
+
+#[derive(Clone)]
 pub(super) struct WaitQ {
     pub(super) since: u64,
     pub(super) by: String,
@@ -12,7 +25,6 @@ pub(super) struct WaitQ {
     pub(super) timeout: Option<u64>,
     /// Return on any change. Without it only a `send` ends the wait: the
     /// person works through a jelly and says when they are done.
-    #[serde(default)]
     pub(super) every: bool,
 }
 
@@ -24,8 +36,12 @@ pub(super) async fn send(State(app): State<Shared>, Path(name): Path<String>, Js
     app.change(|s| s.send(&name, &by(r.by)?))
 }
 
-pub(super) async fn wait(State(app): State<Shared>, Query(q): Query<WaitQ>) -> Result<Response, ApiError> {
-    by(Some(q.by.clone()))?;
+pub(super) async fn wait(State(app): State<Shared>, Query(r): Query<WaitReq>) -> Result<Response, ApiError> {
+    by(Some(r.by.clone()))?;
+    // Every later event is in the log, which the wait reads, so "now" needs no
+    // lock shared with the wait itself.
+    let since = r.since.unwrap_or_else(|| app.store.lock().expect("store lock").sequence());
+    let q = WaitQ { since, by: r.by, project_jelly: r.project_jelly, jelly: r.jelly, timeout: r.timeout, every: r.every };
     match wait_since(&app, &q).await? {
         Some(ev) => Ok(Json(ev).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),

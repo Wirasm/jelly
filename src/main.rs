@@ -581,59 +581,27 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             Ok(())
         }
         Cmd::Hear { wait: true, name, timeout, since, every, .. } => {
+            // A short name with --since is resolved by the daemon against the jellies
+            // present at that change, so a jelly removed since is still heard.
             let project_jelly = name.as_ref().filter(|_| since.is_some()).filter(|n| !n.contains(':') && *n != store::PAGE)
                 .map(|n| { let p = project(); if p.is_empty() { n.clone() } else { format!("{p}:{n}") } });
             let name = name.map(|n| id(&n)).transpose()?;
-            if let Some(SequenceToken(seq)) = since {
-                let mut req = ureq::get(&format!("{}/api/wait", cli.url))
-                    .query("since", &seq.to_string()).query("by", &by);
-                if let Some(n) = &name { req = req.query("jelly", n); }
-                if let Some(preferred) = project_jelly {
-                    req = req.query("project_jelly", &preferred);
-                }
-                if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
-                if every { req = req.query("every", "true"); }
-                let resp = req.call().map_err(describe)?;
-                if resp.status() == 204 {
-                    let what = name.as_deref().unwrap_or("any jelly");
-                    eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
-                    std::process::exit(2);
-                }
-                let ev = resp.into_json().map_err(|e| e.to_string())?;
-                if json { return print(ev); }
-                output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
-                return Ok(());
-            }
-            let filter = name.as_deref().map(|n| format!("?jelly={}", encode(n))).unwrap_or_default();
-            let mut req = ureq::get(&format!("{}/api/events{filter}", cli.url));
-            if let Some(t) = timeout {
-                req = req.timeout(std::time::Duration::from_secs(t));
-            }
-            if let Some(n) = &name {
-                get(&api(&format!("/{n}/state")))?; // fail fast on a wrong name
-            }
-            let what = name.as_deref().unwrap_or("any jelly");
+            // Without --since the daemon starts the wait at its newest event.
+            let mut req = ureq::get(&format!("{}/api/wait", cli.url)).query("by", &by);
+            if let Some(SequenceToken(seq)) = since { req = req.query("since", &seq.to_string()); }
+            if let Some(n) = &name { req = req.query("jelly", n); }
+            if let Some(preferred) = project_jelly { req = req.query("project_jelly", &preferred); }
+            if let Some(t) = timeout { req = req.query("timeout", &t.to_string()); }
+            if every { req = req.query("every", "true"); }
             let resp = req.call().map_err(describe)?;
-            for line in BufReader::new(resp.into_reader()).lines() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                        eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
-                        std::process::exit(2);
-                    }
-                    Err(e) => return Err(e.to_string().into()),
-                };
-                let Some(data) = line.strip_prefix("data:") else { continue };
-                let ev: Value = serde_json::from_str(data.trim()).map_err(|e| e.to_string())?;
-                if ev["by"] != by.as_str() && (every || ev["kind"] == "send") && (name.is_some() || ev["jelly"] != store::PAGE) {
-                    if json {
-                        return print(ev);
-                    }
-                    output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))?;
-                    return Ok(());
-                }
+            if resp.status() == 204 {
+                let what = name.as_deref().unwrap_or("any jelly");
+                eprintln!("jelly: nobody {} {what} in time", if every { "changed" } else { "pressed Send in" });
+                std::process::exit(2);
             }
-            Err("the event stream ended".into())
+            let ev = resp.into_json().map_err(|e| e.to_string())?;
+            if json { return print(ev); }
+            output(format_args!("{}\n", wait_line(&store::Event::deserialize(&ev).map_err(|e| e.to_string())?)))
         }
         Cmd::Reply { name, id: cid, text: None, .. } => report(send("POST", &api(&format!("/{}/resolve", id(&name)?)), json!({"id": cid, "by": by}))?),
         Cmd::Reply { name, id: cid, text: Some(text), resolve } => report(send("POST", &api(&format!("/{}/reply", id(&name)?)), json!({"id": cid, "text": text, "resolve": resolve, "by": by}))?),

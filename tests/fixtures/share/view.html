@@ -455,10 +455,24 @@ async function loaded(image) {
     w.WebSocket = class {};
     w.fetch = async () => ({ok: true, json: async () => w.__JELLY__});
     w.eval(source);
-    readers.push({asks: ids(w.jelly.person.asks), open: ids(open(w.jelly.person.asks))});
+    // Every name a view may call on the live runtime is there in the file too.
+    const names = (o) => Object.keys(o).sort().join();
+    const other = w.jelly.other('x');
+    readers.push({asks: ids(w.jelly.person.asks), open: ids(open(w.jelly.person.asks)), css: w.jelly.css,
+      names: [names(w.jelly), names(w.jelly.person), names(other)]});
     frame.remove();
   }
-  assert(JSON.stringify(readers[0]) === JSON.stringify(readers[1]), 'live and shared attention conformance');
+  assert(readers[0].css.includes('--jy-ink'), 'the live runtime carries jelly.css');
+  assert(JSON.stringify(readers[0]) === JSON.stringify(readers[1]), `live and shared conformance: ${JSON.stringify(readers.map(r => r.names))}`);
+  step = 'send and stylesheet';
+  const token = Object.assign(document.createElement('i'), {className: 'jy'});
+  document.body.append(token);
+  assert(getComputedStyle(token).getPropertyValue('--jy-ink') !== '', 'the file carries jelly.css');
+  token.remove();
+  let told = null;
+  jelly.person.onUnsent((n) => { told = n; });
+  assert(told === 0 && jelly.person.unsent === 0, 'nothing is unsent');
+  await jelly.person.send();
   const calls = [];
   const nativeFetch = window.fetch;
   window.fetch = (...args) => { calls.push(args); return nativeFetch(...args); };

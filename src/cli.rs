@@ -519,7 +519,7 @@ pub enum Cmd {
         wait: bool,
         #[arg(long, conflicts_with_all = ["wait", "hook", "mine"])]
         wake: bool,
-        /// With --wait: start after this change (seq:N), replaying what was recorded since.
+        /// With --wait: start after this change (seq:N), replaying what was recorded since. Without it, start now.
         #[arg(long, requires = "wait")]
         since: Option<SequenceToken>,
         /// With --wait: give up after this many seconds (exit 2).
