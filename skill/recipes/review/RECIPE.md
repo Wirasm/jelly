@@ -76,7 +76,10 @@ decides whether to merge it, not whether you did what they asked.
 
 The person approves, pushes back or asks, per group. It arrives in `jelly hear`
 as `approve`, `push_back`, `question`, `take_back` and `go` calls, with comments
-on single lines (`#g-<id>-L<n>`).
+on single lines (`#g-<id>-L<n>`). Each of those calls and each comment adds one
+to the count on Send. Which change is on the stage, an open diff and an open
+composer are looking around: they stay in the page and call no verb. Keep it so
+when you change the view, or call such a verb with `{ quiet: true }`.
 
 ```bash
 # They pushed back or asked: fix it, then answer on the group. With `delta`,

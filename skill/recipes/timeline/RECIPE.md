@@ -66,6 +66,11 @@ mark to see the evidence, and reacts. It arrives in `jelly hear` as:
   with or after one of your marks. It becomes a mark with the person's `by`; link
   it to the hypotheses it bears on.
 
+Each of those calls and each comment adds one to the count on Send. The picked
+hypothesis, the open mark, zoom and pan are looking around: they stay in the
+page and call no verb. Keep it so when you change the view, or call such a verb with
+`{ quiet: true }`.
+
 ```bash
 # As you find things. A mark that arrives while they watch is shown arriving.
 jelly do timeline mark @mark.json   # {"lane","t","dur","label","kind","detail","show","when"}; with "id", revises

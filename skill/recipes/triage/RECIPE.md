@@ -54,7 +54,11 @@ What the person does arrives in `jelly hear` as calls: `keep` (you were unsure
 and right), `move` (to another lane, or to another place in an ordered lane),
 `note` (why they moved it), `accept` and `reopen` (a lane is sorted, or not
 after all) and `go`. Each moved item keeps `moved.from`, `moved.by` and
-`moved.note` in state, so `jelly state triage` shows every correction.
+`moved.note` in state, so `jelly state triage` shows every correction. Each of
+those calls and each comment adds one to the count on Send. The board or
+scatter tab, the open item and the "say why" bar are looking around: they stay
+in the page and call no verb. Keep it so when you change the view, or call such a verb with
+`{ quiet: true }`.
 
 ```bash
 # New things turned up: add them, sorted, with a reason.
