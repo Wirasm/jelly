@@ -1,0 +1,203 @@
+{
+  "about": "Every change a shared jelly's relay makes too, with the event each makes and the jelly after it. cargo test runs these against the store (src/op.rs), npm test in relay/ against relay/src/ops.ts (relay/test/ops.test.mjs). Each case starts from a jelly t:j made by agent at version 1; `jelly` names the parts that differ from an empty one. A step either makes `event` (its kind, by, verb, args, source, quiet, version and view_rev) and leaves the jelly as `jelly` says, or is refused with exactly `refused` and changes nothing. Times (at_ms) are not compared.",
+  "cases": [
+    {
+      "name": "a verb call changes the state and bumps the version",
+      "jelly": { "verbs": "const verbs = { inc(s) { s.n = (s.n || 0) + 1; }, pick(s, { id }) { s.picked = id; }, sign(s, _a, { by }) { s.by = by; }, reset() { return { fresh: true }; } }" },
+      "steps": [
+        { "change": { "op": "do", "verb": "inc", "by": "agent" },
+          "event": { "kind": "do", "by": "agent", "verb": "inc", "args": null, "version": 2, "view_rev": 1 },
+          "jelly": { "state": { "n": 1 }, "version": 2, "unsent": 0 } },
+        { "change": { "op": "do", "verb": "pick", "args": { "id": "b" }, "source": { "selector": "#b", "text": "B" }, "by": "person:ana" },
+          "event": { "kind": "do", "by": "person:ana", "verb": "pick", "args": { "id": "b" }, "source": { "selector": "#b", "text": "B" }, "version": 3, "view_rev": 1 },
+          "jelly": { "state": { "n": 1, "picked": "b" }, "version": 3, "unsent": 1 } },
+        { "change": { "op": "do", "verb": "sign", "by": "person" },
+          "event": { "kind": "do", "by": "person", "verb": "sign", "args": null, "version": 4, "view_rev": 1 },
+          "jelly": { "state": { "n": 1, "picked": "b", "by": "person" }, "unsent": 2 } },
+        { "change": { "op": "do", "verb": "reset", "args": {}, "by": "agent" },
+          "event": { "kind": "do", "by": "agent", "verb": "reset", "args": {}, "version": 5, "view_rev": 1 },
+          "jelly": { "state": { "fresh": true }, "version": 5 } }
+      ]
+    },
+    {
+      "name": "a verb that throws, is not there, or never returns changes nothing",
+      "jelly": { "verbs": "const verbs = { no() { throw new Error('not now'); }, odd() { throw 'plain'; }, spin() { for (;;) {} } }", "state": { "n": 1 } },
+      "steps": [
+        { "change": { "op": "do", "verb": "no", "by": "person:ana" }, "refused": "not now", "jelly": { "state": { "n": 1 }, "version": 1, "unsent": 0 } },
+        { "change": { "op": "do", "verb": "odd", "by": "agent" }, "refused": "plain" },
+        { "change": { "op": "do", "verb": "missing", "by": "agent" }, "refused": "no verb missing; this jelly has: no, odd, spin" },
+        { "change": { "op": "do", "verb": "toString", "by": "agent" }, "refused": "no verb toString; this jelly has: no, odd, spin" },
+        { "change": { "op": "do", "verb": "spin", "by": "agent" }, "refused": "verb ran too long and was stopped: does it loop forever?",
+          "jelly": { "state": { "n": 1 }, "version": 1, "unsent": 0 } }
+      ]
+    },
+    {
+      "name": "a person's verb calls, comments, replies and resolves count toward Send; send hands them over and starts again",
+      "jelly": { "verbs": "const verbs = { inc(s) { s.n = (s.n || 0) + 1; } }" },
+      "steps": [
+        { "change": { "op": "do", "verb": "inc", "by": "person:ana" },
+          "event": { "kind": "do", "by": "person:ana", "verb": "inc", "args": null, "version": 2, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "do", "verb": "inc", "quiet": true, "by": "person:ana" },
+          "event": { "kind": "do", "by": "person:ana", "verb": "inc", "args": null, "quiet": true, "version": 3, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "do", "verb": "inc", "by": "agent" },
+          "event": { "kind": "do", "by": "agent", "verb": "inc", "args": null, "version": 4, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "do", "verb": "inc", "by": "feed" },
+          "event": { "kind": "do", "by": "feed", "verb": "inc", "args": null, "version": 5, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "do", "verb": "inc", "by": "personal-agent" },
+          "event": { "kind": "do", "by": "personal-agent", "verb": "inc", "args": null, "version": 6, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "do", "verb": "inc", "by": "person:" },
+          "event": { "kind": "do", "by": "person:", "verb": "inc", "args": null, "version": 7, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "comment", "text": "Nice", "by": "person:ana" },
+          "event": { "kind": "comment", "by": "person:ana", "args": { "id": "c1", "anchor": null, "text": "Nice" }, "version": 7, "view_rev": 1 }, "jelly": { "unsent": 2 } },
+        { "change": { "op": "reply", "id": "c1", "text": "Thanks", "by": "agent" },
+          "event": { "kind": "reply", "by": "agent", "args": { "id": "c1", "text": "Thanks", "resolved": false, "anchor": null, "comment": "Nice" }, "version": 7, "view_rev": 1 }, "jelly": { "unsent": 2 } },
+        { "change": { "op": "reply", "id": "c1", "text": "Sure", "by": "person:bo" },
+          "event": { "kind": "reply", "by": "person:bo", "args": { "id": "c1", "text": "Sure", "resolved": false, "anchor": null, "comment": "Nice" }, "version": 7, "view_rev": 1 }, "jelly": { "unsent": 3 } },
+        { "change": { "op": "resolve", "id": "c1", "by": "person:bo" },
+          "event": { "kind": "resolve", "by": "person:bo", "args": "c1", "version": 7, "view_rev": 1 }, "jelly": { "unsent": 4 } },
+        { "change": { "op": "set", "pointer": "/n", "value": 0, "by": "person:ana" },
+          "event": { "kind": "set", "by": "person:ana", "args": { "pointer": "/n" }, "version": 8, "view_rev": 1 }, "jelly": { "unsent": 4 } },
+        { "change": { "op": "send", "by": "person:ana" },
+          "event": { "kind": "send", "by": "person:ana", "args": 4, "version": 8, "view_rev": 1 }, "jelly": { "unsent": 0 } },
+        { "change": { "op": "send", "by": "person:ana" },
+          "event": { "kind": "send", "by": "person:ana", "args": 0, "version": 8, "view_rev": 1 }, "jelly": { "unsent": 0 } },
+        { "change": { "op": "do", "verb": "inc", "by": "person:bo" },
+          "event": { "kind": "do", "by": "person:bo", "verb": "inc", "args": null, "version": 9, "view_rev": 1 }, "jelly": { "unsent": 1 } },
+        { "change": { "op": "send", "by": "agent" },
+          "event": { "kind": "send", "by": "agent", "args": 1, "version": 9, "view_rev": 1 }, "jelly": { "unsent": 0 } }
+      ]
+    },
+    {
+      "name": "set puts a value at a JSON pointer or removes what is there",
+      "jelly": { "state": { "list": [1, 2], "o": { "a/b": 1, "t~": 2 } } },
+      "steps": [
+        { "change": { "op": "set", "pointer": "/o/x", "value": 5, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/o/x" }, "version": 2, "view_rev": 1 },
+          "jelly": { "state": { "list": [1, 2], "o": { "a/b": 1, "t~": 2, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "/list/-", "value": 3, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/list/-" }, "version": 3, "view_rev": 1 },
+          "jelly": { "state": { "list": [1, 2, 3], "o": { "a/b": 1, "t~": 2, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "/list/3", "value": 4, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/list/3" }, "version": 4, "view_rev": 1 },
+          "jelly": { "state": { "list": [1, 2, 3, 4], "o": { "a/b": 1, "t~": 2, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "/list/0", "remove": true, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/list/0" }, "version": 5, "view_rev": 1 },
+          "jelly": { "state": { "list": [2, 3, 4], "o": { "a/b": 1, "t~": 2, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "/o/a~1b", "remove": true, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/o/a~1b" }, "version": 6, "view_rev": 1 },
+          "jelly": { "state": { "list": [2, 3, 4], "o": { "t~": 2, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "/o/t~0", "value": null, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/o/t~0" }, "version": 7, "view_rev": 1 },
+          "jelly": { "state": { "list": [2, 3, 4], "o": { "t~": null, "x": 5 } } } },
+        { "change": { "op": "set", "pointer": "", "value": { "fresh": true }, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "" }, "version": 8, "view_rev": 1 },
+          "jelly": { "state": { "fresh": true } } },
+        { "change": { "op": "set", "remove": true, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "" }, "version": 9, "view_rev": 1 },
+          "jelly": { "state": {}, "version": 9 } }
+      ]
+    },
+    {
+      "name": "set refuses a pointer that does not lead anywhere",
+      "jelly": { "state": { "list": [1], "n": 5, "o": {} } },
+      "steps": [
+        { "change": { "op": "set", "pointer": "list/0", "value": 1, "by": "agent" }, "refused": "\"list/0\" is not a JSON pointer; start it with /" },
+        { "change": { "op": "set", "pointer": "n", "value": 1, "by": "agent" }, "refused": "\"n\" is not a JSON pointer; start it with /" },
+        { "change": { "op": "set", "pointer": "/o/x", "remove": true, "by": "agent" }, "refused": "nothing at /o/x" },
+        { "change": { "op": "set", "pointer": "/x/y", "value": 1, "by": "agent" }, "refused": "nothing at /x" },
+        { "change": { "op": "set", "pointer": "/list/5/y", "value": 1, "by": "agent" }, "refused": "nothing at /list/5" },
+        { "change": { "op": "set", "pointer": "/n/y", "value": 1, "by": "agent" }, "refused": "/n is neither an object nor an array" },
+        { "change": { "op": "set", "pointer": "/list/2", "value": 1, "by": "agent" }, "refused": "/list/2 is past the end of the array" },
+        { "change": { "op": "set", "pointer": "/list/1", "remove": true, "by": "agent" }, "refused": "/list/1 is past the end of the array" },
+        { "change": { "op": "set", "pointer": "/list/x", "value": 1, "by": "agent" }, "refused": "\"x\" is not an array index" },
+        { "change": { "op": "set", "pointer": "/list/+0", "value": 1, "by": "agent" }, "refused": "\"+0\" is not an array index" },
+        { "change": { "op": "set", "pointer": "/list/00", "value": 1, "by": "agent" }, "refused": "\"00\" is not an array index",
+          "jelly": { "state": { "list": [1], "n": 5, "o": {} }, "version": 1 } }
+      ]
+    },
+    {
+      "name": "shape replaces the view, the verbs or the about line",
+      "steps": [
+        { "change": { "op": "shape", "about": "  The plan  ", "by": "agent" },
+          "event": { "kind": "shape", "by": "agent", "version": 1, "view_rev": 1 },
+          "jelly": { "about": "The plan", "version": 1, "view_rev": 1 } },
+        { "change": { "op": "shape", "view": "<p>two</p>", "by": "agent" },
+          "event": { "kind": "shape", "by": "agent", "version": 2, "view_rev": 2 },
+          "jelly": { "view": "<p>two</p>", "verbs": "const verbs = {}", "about": "The plan", "version": 2, "view_rev": 2 } },
+        { "change": { "op": "shape", "verbs": "const verbs = { a() {} }", "about": "", "by": "claude" },
+          "event": { "kind": "shape", "by": "claude", "version": 3, "view_rev": 3 },
+          "jelly": { "view": "<p>two</p>", "verbs": "const verbs = { a() {} }", "about": "", "version": 3, "view_rev": 3 } },
+        { "change": { "op": "shape", "by": "agent" }, "refused": "shape needs a new view, new verbs or a new about" },
+        { "change": { "op": "shape", "view": null, "verbs": null, "about": null, "by": "agent" }, "refused": "shape needs a new view, new verbs or a new about",
+          "jelly": { "version": 3, "view_rev": 3 } }
+      ]
+    },
+    {
+      "name": "an ask is numbered, answered with an option, words or a glance, and unasked",
+      "steps": [
+        { "change": { "op": "ask", "by": "agent", "item": { "id": "", "seen": false, "title": "Which?", "context": "", "anchor": null, "options": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }], "recommend": null, "why": "", "by": "agent", "at_ms": 0, "answer": null } },
+          "event": { "kind": "ask", "by": "agent", "args": { "id": "a1", "seen": false, "title": "Which?", "context": "", "anchor": null, "options": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }], "recommend": null, "why": "", "by": "agent", "at_ms": 0, "answer": null }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "answer", "id": "a1", "option": "z", "by": "person:ana" }, "refused": "\"z\" is not an option of a1" },
+        { "change": { "op": "answer", "id": "a1", "text": "   ", "by": "person:ana" }, "refused": "this ask needs an option or some text" },
+        { "change": { "op": "answer", "id": "a2", "option": "a", "by": "person:ana" }, "refused": "t:j has no ask a2" },
+        { "change": { "op": "answer", "id": "a1", "option": "a", "text": " because ", "by": "person:ana" },
+          "event": { "kind": "answer", "by": "person:ana", "args": { "id": "a1", "seen": false, "title": "Which?", "option": "a", "text": "because", "group": null }, "version": 1, "view_rev": 1 },
+          "jelly": { "unsent": 1 } },
+        { "change": { "op": "ask", "by": "agent", "item": { "id": "", "seen": true, "title": "Seen the footer?", "context": "", "anchor": { "selector": "#f" }, "options": [], "recommend": null, "why": "", "group": "g", "by": "agent", "at_ms": 0, "answer": null } },
+          "event": { "kind": "ask", "by": "agent", "args": { "id": "a2", "seen": true, "title": "Seen the footer?", "context": "", "anchor": { "selector": "#f" }, "options": [], "recommend": null, "why": "", "group": "g", "by": "agent", "at_ms": 0, "answer": null }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "answer", "id": "a2", "by": "person:bo" },
+          "event": { "kind": "answer", "by": "person:bo", "args": { "id": "a2", "seen": true, "title": "Seen the footer?", "option": null, "text": "", "group": "g" }, "version": 1, "view_rev": 1 },
+          "jelly": { "unsent": 2 } },
+        { "change": { "op": "ask", "by": "agent", "item": { "id": "", "seen": false, "title": "Still needed?", "context": "", "anchor": null, "options": [], "recommend": null, "why": "", "by": "agent", "at_ms": 0, "answer": null } },
+          "event": { "kind": "ask", "by": "agent", "args": { "id": "a3", "seen": false, "title": "Still needed?", "context": "", "anchor": null, "options": [], "recommend": null, "why": "", "by": "agent", "at_ms": 0, "answer": null }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "unask", "id": "a3", "by": "agent" },
+          "event": { "kind": "unask", "by": "agent", "args": "a3", "version": 1, "view_rev": 1 } },
+        { "change": { "op": "answer", "id": "a3", "text": "yes", "by": "person:ana" }, "refused": "a3 was unasked" },
+        { "change": { "op": "unask", "id": "a9", "by": "agent" }, "refused": "t:j has no ask a9",
+          "jelly": { "unsent": 2, "version": 1, "asks": [
+            { "id": "a1", "seen": false, "title": "Which?", "context": "", "anchor": null, "options": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }], "recommend": null, "why": "", "by": "agent", "answer": { "option": "a", "text": "because", "by": "person:ana" } },
+            { "id": "a2", "seen": true, "title": "Seen the footer?", "context": "", "anchor": { "selector": "#f" }, "options": [], "recommend": null, "why": "", "group": "g", "by": "agent", "answer": { "option": null, "text": "", "by": "person:bo" } },
+            { "id": "a3", "seen": false, "title": "Still needed?", "context": "", "anchor": null, "options": [], "recommend": null, "why": "", "by": "agent", "answer": null, "unasked": { "by": "agent" } }
+          ] } }
+      ]
+    },
+    {
+      "name": "a comment gets replies, is resolved, and opens again on a reply",
+      "steps": [
+        { "change": { "op": "comment", "anchor": { "selector": "#h", "quote": "Hi" }, "text": " Too loud ", "by": "person:ana" },
+          "event": { "kind": "comment", "by": "person:ana", "args": { "id": "c1", "anchor": { "selector": "#h", "quote": "Hi" }, "text": "Too loud" }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "comment", "text": "   ", "by": "person:ana" }, "refused": "empty comment" },
+        { "change": { "op": "comment", "by": "person:ana" }, "refused": "empty comment" },
+        { "change": { "op": "reply", "id": "c1", "text": "Fixed", "resolve": true, "by": "agent" },
+          "event": { "kind": "reply", "by": "agent", "args": { "id": "c1", "text": "Fixed", "resolved": true, "anchor": { "selector": "#h", "quote": "Hi" }, "comment": "Too loud" }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "reply", "id": "c1", "text": " ", "by": "agent" }, "refused": "empty reply" },
+        { "change": { "op": "reply", "id": "c9", "text": "x", "by": "agent" }, "refused": "t:j has no comment c9" },
+        { "change": { "op": "reply", "id": "c1", "text": "Still loud", "by": "person:ana" },
+          "event": { "kind": "reply", "by": "person:ana", "args": { "id": "c1", "text": "Still loud", "resolved": false, "anchor": { "selector": "#h", "quote": "Hi" }, "comment": "Too loud" }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "resolve", "id": "c1", "by": "agent" },
+          "event": { "kind": "resolve", "by": "agent", "args": "c1", "version": 1, "view_rev": 1 } },
+        { "change": { "op": "resolve", "id": "c9", "by": "agent" }, "refused": "t:j has no comment c9" },
+        { "change": { "op": "comment", "text": "And the rest?", "by": "person" },
+          "event": { "kind": "comment", "by": "person", "args": { "id": "c2", "anchor": null, "text": "And the rest?" }, "version": 1, "view_rev": 1 },
+          "jelly": { "unsent": 3, "comments": [
+            { "id": "c1", "anchor": { "selector": "#h", "quote": "Hi" }, "text": "Too loud", "by": "person:ana", "resolved": true,
+              "replies": [{ "text": "Fixed", "by": "agent" }, { "text": "Still loud", "by": "person:ana" }] },
+            { "id": "c2", "anchor": null, "text": "And the rest?", "by": "person", "resolved": false, "replies": [] }
+          ] } }
+      ]
+    },
+    {
+      "name": "text is trimmed of the same white space on both sides",
+      "steps": [
+        { "change": { "op": "comment", "text": "\u0085hi﻿", "by": "agent" },
+          "event": { "kind": "comment", "by": "agent", "args": { "id": "c1", "anchor": null, "text": "hi﻿" }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "comment", "text": "　 wide  ", "by": "agent" },
+          "event": { "kind": "comment", "by": "agent", "args": { "id": "c2", "anchor": null, "text": "wide" }, "version": 1, "view_rev": 1 } },
+        { "change": { "op": "shape", "about": " Plan\t", "by": "agent" },
+          "event": { "kind": "shape", "by": "agent", "version": 1, "view_rev": 1 }, "jelly": { "about": "Plan" } },
+        { "change": { "op": "comment", "text": "﻿", "by": "agent" },
+          "event": { "kind": "comment", "by": "agent", "args": { "id": "c3", "anchor": null, "text": "﻿" }, "version": 1, "view_rev": 1 } }
+      ]
+    }
+  ]
+}

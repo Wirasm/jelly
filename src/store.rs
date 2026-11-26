@@ -362,6 +362,10 @@ pub struct Event {
     /// Sent to live listeners, never written to the log.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub state: Option<Value>,
+    /// The jelly's count toward Send after this change, which the runtime's
+    /// Send button shows. Like `state`, for live listeners only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub unsent: Option<u32>,
 }
 
 /// One change as the relay of a shared jelly made it (relay/src/index.ts).
@@ -369,6 +373,8 @@ pub struct Event {
 pub struct Mirrored {
     pub seq: u64,
     pub at_ms: u64,
+    /// `Unknown` for a kind a newer relay made, so the mirror goes on.
+    #[serde(deserialize_with = "known_or_unknown")]
     pub kind: EventKind,
     pub by: String,
     #[serde(default)]
@@ -381,6 +387,14 @@ pub struct Mirrored {
     pub quiet: bool,
     pub version: u64,
     pub view_rev: u64,
+    /// The relay's count toward Send after the change.
+    #[serde(default)]
+    pub unsent: Option<u32>,
+}
+
+fn known_or_unknown<'de, D: serde::Deserializer<'de>>(d: D) -> Result<EventKind, D::Error> {
+    let kind = String::deserialize(d)?;
+    Ok(serde_json::from_value(Value::String(kind)).unwrap_or(EventKind::Unknown))
 }
 
 /// The parts of a shared jelly the relay sends after a change; the view and
@@ -393,6 +407,7 @@ pub struct MirroredDoc {
     pub about: Option<String>,
     pub comments: Option<Vec<Comment>>,
     pub asks: Option<Vec<Ask>>,
+    pub unsent: Option<u32>,
 }
 
 /// Every kind of change. Adding one means adding it here and to `describe`.
@@ -422,6 +437,9 @@ pub enum EventKind {
     Set,
     /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
     Lock,
+    /// A kind of change a newer relay made that this jelly does not know
+    /// (`Mirrored::kind`). Its mirror still applies the jelly as the relay sent it.
+    Unknown,
 }
 
 impl EventKind {
@@ -429,6 +447,13 @@ impl EventKind {
     pub fn is_for_agent(self) -> bool {
         matches!(self, EventKind::Do | EventKind::Comment | EventKind::Reply | EventKind::Resolve | EventKind::Undo | EventKind::Answer | EventKind::Send)
     }
+}
+
+/// Whether a change adds one to the jelly's count toward Send (`unsent`): a
+/// person's verb call (unless quiet), comment, reply, resolve, answer or undo.
+/// `send` sets the count back to zero. `relay/src/ops.ts` counts the same way.
+pub fn counts_toward_send(kind: EventKind, by: &str, quiet: bool) -> bool {
+    is_person(by) && kind != EventKind::Send && kind.is_for_agent() && !quiet
 }
 
 /// The person, as recorded in `by`. A person who named themselves in the
@@ -511,6 +536,7 @@ impl Event {
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
+            EventKind::Unknown => "made a kind of change this jelly does not know; `jelly update` to name it".into(),
             EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join and its room is over; people already in keep their links. `jelly share {} --pin` makes a new one",
                 a["tries"], self.jelly),
         }
@@ -559,6 +585,8 @@ pub struct Store {
     quiet: bool,
     /// When a mirrored change happened on the relay; taken by the next event.
     at_ms: Option<u64>,
+    /// The relay's count toward Send after a mirrored change; taken by the next record.
+    unsent: Option<u32>,
     #[cfg(test)]
     pub log_failure: Option<(u64, usize)>,
 }
@@ -625,7 +653,7 @@ impl Store {
         }
         // Sequence numbers continue across restarts, so an event's seq is unique.
         let (seq, recent, timestamps) = read_event_history(&dir.join("events.jsonl"))?;
-        let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, quiet: false, at_ms: None, #[cfg(test)] log_failure: None };
+        let mut store = Store { dir: dir.to_path_buf(), jellies, seq, recent, timestamps, trims: 0, source: None, quiet: false, at_ms: None, unsent: None, #[cfg(test)] log_failure: None };
         // Without the log, numbering would restart below what readers have
         // already committed, and they would never hear the new events (#69).
         store.seq = store.inbox_cursors()?.iter().filter_map(|c| match c.position {
@@ -1065,14 +1093,21 @@ impl Store {
         Ok(out)
     }
 
-    /// Puts an ask in front of the person: `{"title", "seen"?, "context"?,
-    /// "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
+    /// `ask_item` and `put_ask` in one, as the tests ask.
+    #[cfg(test)]
     pub fn ask(&mut self, name: &str, spec: Value, by: &str) -> Result<Event, Error> {
-        let n = self.get(name)?.asks.len();
-        let item = ask_from(&spec, format!("a{}", n + 1), by)?;
-        let args = serde_json::to_value(&item).expect("serializes");
+        self.put_ask(name, ask_item(&spec, by)?, by)
+    }
+
+    /// Puts an ask in front of the person, numbered after the jelly's last
+    /// one. `ask_item` builds it from an agent's spec: `{"title", "seen"?,
+    /// "context"?, "anchor"?, "options"?, "recommend"?, "why"?, "group"?}`.
+    pub fn put_ask(&mut self, name: &str, mut item: Ask, by: &str) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
-        self.entry(name)?.jelly.asks.push(item);
+        let asks = &mut self.entry(name)?.jelly.asks;
+        item.id = format!("a{}", asks.len() + 1);
+        let args = serde_json::to_value(&item).expect("serializes");
+        asks.push(item);
         self.commit(name, EventKind::Ask, by, None, Some(args), Vec::new(), previous_entry)
     }
 
@@ -1092,7 +1127,6 @@ impl Store {
         let exists = self.jellies.contains_key(&id);
         let round = if exists { self.get(&id)?.state["round"].as_u64().unwrap_or(0) + 1 } else { 1 };
         let group = format!("round-{round}");
-        let start = if exists { self.get(&id)?.asks.len() } else { 0 };
         // Validate every question before touching anything.
         let mut items = Vec::new();
         for (i, q) in questions.iter().enumerate() {
@@ -1101,7 +1135,7 @@ impl Store {
             q["title"] = q.get("question").cloned().or_else(|| q.get("title").cloned()).unwrap_or(Value::Null);
             q["group"] = group.clone().into();
             q["anchor"] = serde_json::json!({"selector": format!("#q-{qid}")});
-            items.push(ask_from(&q, format!("a{}", start + i + 1), by)?);
+            items.push(ask_item(&q, by)?);
         }
         let mut events = Vec::new();
         let result = (|| -> Result<(), Error> {
@@ -1117,10 +1151,7 @@ impl Store {
             let setup = serde_json::json!({"title": title, "context": spec["context"], "round": round});
             events.push(self.do_verb(&id, "setup", setup, by)?);
             for item in items {
-                let args = serde_json::to_value(&item).expect("serializes");
-                let previous_entry = self.jellies.get(&id).cloned();
-                self.entry(&id)?.jelly.asks.push(item);
-                events.push(self.commit(&id, EventKind::Ask, by, None, Some(args), Vec::new(), previous_entry)?);
+                events.push(self.put_ask(&id, item, by)?);
             }
             Ok(())
         })();
@@ -1231,6 +1262,8 @@ impl Store {
         self.source = ev.source.clone();
         self.quiet = ev.quiet;
         self.at_ms = Some(ev.at_ms);
+        // A relay from before events carried the count may still send it with the jelly.
+        self.unsent = ev.unsent.or(doc.and_then(|d| d.unsent));
         self.record(name, ev.kind, &ev.by, ev.verb.clone(), ev.args.clone(), changed, previous_entry)
     }
 
@@ -1282,10 +1315,12 @@ impl Store {
         if !fed {
             entry.jelly.updated_ms = now_ms();
         }
-        if kind == EventKind::Send {
-            entry.jelly.unsent = 0;
-        } else if is_person(by) && kind.is_for_agent() && !quiet {
-            entry.jelly.unsent += 1;
+        // A shared jelly's relay keeps its count; anywhere else it is counted here.
+        match self.unsent.take() {
+            Some(n) => entry.jelly.unsent = n,
+            None if kind == EventKind::Send => entry.jelly.unsent = 0,
+            None if counts_toward_send(kind, by, quiet) => entry.jelly.unsent += 1,
+            None => {}
         }
         if kind != EventKind::Archive && !fed {
             entry.jelly.archived = false;
@@ -1309,6 +1344,7 @@ impl Store {
             return Err(error);
         }
         ev.state = Some(jelly.state);
+        ev.unsent = Some(jelly.unsent);
         Ok(ev)
     }
 
@@ -1335,6 +1371,7 @@ impl Store {
             version: j.version,
             view_rev: j.view_rev,
             state: None,
+            unsent: None,
         }
     }
 
@@ -1655,7 +1692,7 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
         *root = value.unwrap_or_else(|| Value::Object(Default::default()));
         return Ok(());
     }
-    let (parent, last) = pointer.rsplit_once('/').ok_or_else(|| format!("{pointer:?} is not a JSON pointer; start it with /"))?;
+    let (parent, last) = pointer.rsplit_once('/').filter(|_| pointer.starts_with('/')).ok_or_else(|| format!("{pointer:?} is not a JSON pointer; start it with /"))?;
     let key = last.replace("~1", "/").replace("~0", "~");
     match root.pointer_mut(parent).ok_or_else(|| format!("nothing at {}", if parent.is_empty() { "/" } else { parent }))? {
         Value::Object(m) => match value {
@@ -1663,7 +1700,9 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
             None => { m.remove(&key).ok_or_else(|| format!("nothing at {pointer}"))?; }
         },
         Value::Array(a) => {
-            let i = if key == "-" { a.len() } else { key.parse::<usize>().map_err(|_| format!("{key:?} is not an array index"))? };
+            // An index as RFC 6901 writes it, as `pointer_mut` reads the ones before it: no sign, no leading zero.
+            let index = (key == "0" || !key.starts_with(['0', '+'])).then(|| key.parse::<usize>().ok()).flatten();
+            let i = if key == "-" { a.len() } else { index.ok_or_else(|| format!("{key:?} is not an array index"))? };
             match value {
                 Some(v) if i < a.len() => a[i] = v,
                 Some(v) if i == a.len() => a.push(v),
@@ -1676,13 +1715,9 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
     Ok(())
 }
 
-/// An ask checked as `Store::ask` checks it, for a shared jelly: its relay numbers it.
+/// Builds an ask from an agent's spec, checking it. `Store::put_ask`, or the
+/// relay of a shared jelly, numbers it.
 pub fn ask_item(spec: &Value, by: &str) -> Result<Ask, Error> {
-    ask_from(spec, String::new(), by)
-}
-
-/// Builds an ask from an agent's spec, checking it.
-fn ask_from(spec: &Value, id: String, by: &str) -> Result<Ask, Error> {
     let seen = spec["seen"].as_bool().unwrap_or(false);
     let title = spec["title"].as_str().unwrap_or("").trim().to_string();
     if title.is_empty() {
@@ -1717,7 +1752,7 @@ fn ask_from(spec: &Value, id: String, by: &str) -> Result<Ask, Error> {
     }
     let text = |k: &str| spec[k].as_str().unwrap_or("").to_string();
     Ok(Ask {
-        id,
+        id: String::new(),
         seen,
         title,
         context: text("context"),
@@ -2122,7 +2157,7 @@ mod tests {
             damaged.push(record.to_string());
         }
         let mut unknown_kind = valid.clone();
-        unknown_kind["kind"] = json!("unknown");
+        unknown_kind["kind"] = json!("frobnicate");
         damaged.push(unknown_kind.to_string());
         for record in damaged {
             fs::write(s.events_path(), format!("{valid}\n{record}\n")).unwrap();
@@ -2718,6 +2753,35 @@ mod tests {
         // The next change is not quiet just because the one before it was.
         assert!(!s.comment("p:j", json!(null), "hi", "person").unwrap().quiet);
         assert_eq!(s.get("p:j").unwrap().unsent, 2);
+    }
+
+    /// The relay counts toward Send for a shared jelly, so the local page shows
+    /// what the link pages show, and a kind of change this jelly does not know
+    /// yet still lands, with the jelly as the relay sent it.
+    #[test]
+    fn a_mirrored_change_takes_the_relays_count_and_may_be_of_a_kind_not_known_here() {
+        let (dir, mut s) = store();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        s.comment("p:j", json!(null), "before the share", "person").unwrap();
+        let ev = |seq: u64, kind: &str, unsent: Option<u32>| -> Mirrored {
+            serde_json::from_value(json!({"seq": seq, "at_ms": now_ms(), "kind": kind, "by": "person:ana", "version": 1, "view_rev": 1, "unsent": unsent})).unwrap()
+        };
+        let doc: MirroredDoc = serde_json::from_value(json!({"state": {"labels": {}, "waved": true}})).unwrap();
+        let waved = s.mirror("p:j", &ev(1, "wave", Some(4)), Some(&doc)).unwrap();
+        assert_eq!((waved.kind, waved.unsent), (EventKind::Unknown, Some(4)));
+        assert_eq!(s.get("p:j").unwrap().state, json!({"labels": {}, "waved": true}));
+        assert_eq!(waved.describe(), "made a kind of change this jelly does not know; `jelly update` to name it");
+        // A relay from before events carried the count sends it with the jelly only.
+        let doc: MirroredDoc = serde_json::from_value(json!({"unsent": 7})).unwrap();
+        s.mirror("p:j", &ev(2, "resolve", None), Some(&doc)).unwrap();
+        assert_eq!(s.get("p:j").unwrap().unsent, 7);
+        // With neither, the change counts here as any other.
+        s.mirror("p:j", &ev(3, "resolve", None), None).unwrap();
+        assert_eq!(s.get("p:j").unwrap().unsent, 8);
+        let logged = fs::read_to_string(s.events_path()).unwrap();
+        assert!(logged.contains("\"kind\":\"unknown\"") && !logged.contains("\"unsent\""), "the count goes to live listeners only");
+        drop(s);
+        Store::open(dir.path()).expect("a log with a change of an unknown kind opens");
     }
 
     #[test]

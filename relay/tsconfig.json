@@ -7,6 +7,8 @@
     "types": ["./worker-configuration.d.ts"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
   "include": ["src", "worker-configuration.d.ts"]

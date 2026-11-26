@@ -212,8 +212,8 @@ impl Relay {
     }
 
     /// One change; returns the batch with its event.
-    pub fn change(&self, share: &str, op: &Value) -> Result<Value, Fail> {
-        self.json(self.at("POST", share, "/op"), Some(op))
+    pub fn change(&self, share: &str, change: &crate::op::Change) -> Result<Value, Fail> {
+        self.json(self.at("POST", share, "/op"), Some(&serde_json::to_value(change).expect("a change serializes")))
     }
 
     /// Ends the share; returns the events after `seq` it had not sent yet.

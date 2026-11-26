@@ -77,7 +77,9 @@ fn answers_completed_before_wait_are_replayed_in_all_attention_forms() {
         let id = asked["args"]["id"].as_str().unwrap();
         let answered = daemon.post(&format!("/api/jellies/test:plan/asks/{id}/answer"), answer);
         let mut expected = answered.clone();
+        // What a live listener gets and the log does not.
         expected.as_object_mut().unwrap().remove("state");
+        expected.as_object_mut().unwrap().remove("unsent");
         assert_eq!(daemon.wait(token(&output)), expected);
         let line = daemon.ok(&["hear", "--wait", "--every", "plan", "--since", token(&output), "--timeout", "0"]);
         assert!(line.starts_with(&format!("test:plan v{}: person answered {id} ", expected["version"])), "{line}");
@@ -86,7 +88,7 @@ fn answers_completed_before_wait_are_replayed_in_all_attention_forms() {
         assert_eq!(timeout.status.code(), Some(2));
         assert!(timeout.stdout.is_empty());
     }
-    assert!(daemon.log().iter().all(|ev| ev.get("state").is_none()));
+    assert!(daemon.log().iter().all(|ev| ev.get("state").is_none() && ev.get("unsent").is_none()));
 }
 
 #[test]
@@ -180,7 +182,7 @@ fn a_wait_without_since_starts_now_and_since_timeout_keeps_its_diagnostic() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert_eq!(String::from_utf8(output.stderr).unwrap().trim(), "jelly: nobody changed test:plan in time");
-    assert!(daemon.log().iter().all(|ev| ev.get("state").is_none()));
+    assert!(daemon.log().iter().all(|ev| ev.get("state").is_none() && ev.get("unsent").is_none()));
 }
 
 #[test]

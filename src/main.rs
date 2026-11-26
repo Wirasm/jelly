@@ -5,6 +5,7 @@ mod design;
 mod disk;
 mod doctor;
 mod feed;
+mod op;
 mod pr;
 mod recipes;
 mod relay;

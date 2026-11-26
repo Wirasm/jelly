@@ -28,7 +28,10 @@
 // DELETE /api/live/<share id> takes a share down for good.
 
 import { DurableObject } from "cloudflare:workers";
-import { engine, run, Refusal } from "./verbs";
+import { engine } from "./engine";
+import { run, Refusal } from "./verbs.ts";
+import * as ops from "./ops.ts";
+import { trim, type Doc, type Ev, type Json, type Op } from "./ops.ts";
 import { shell, MADE, MADE_CSS } from "./shell";
 import { joinPage } from "./join";
 import * as counting from "./counts";
@@ -46,12 +49,6 @@ interface Env {
 /** The origin links are made on, when it is not the one the daemon publishes to. */
 const shareOrigin = (env: Env) => (env.SHARE_ORIGIN ? new URL(env.SHARE_ORIGIN).origin : undefined);
 
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-interface Comment { id: string; anchor: Json; text: string; by: string; at_ms: number; resolved: boolean; replies: { text: string; by: string; at_ms: number }[] }
-interface Ask { id: string; seen?: boolean; title: string; options?: { id: string }[]; group?: string | null; answer?: Json; unasked?: Json; [k: string]: Json | undefined }
-interface Doc { name: string; about: string; view: string; verbs: string; state: Json; version: number; view_rev: number; comments: Comment[]; asks: Ask[]; unsent?: number }
-interface Ev { seq: number; at_ms: number; kind: string; by: string; verb?: string; args?: Json; source?: Json; quiet?: true; version: number; view_rev: number }
-type Op = { op: string; by?: string; [k: string]: any };
 /** A jelly in the PIN's room: its share, its name, and what its button says on a link page. */
 interface InRoom { share: string; name: string; label: string }
 /** Who a socket belongs to: the owner's daemon, or a link. */
@@ -135,34 +132,6 @@ async function authorized(req: Request, env: Env): Promise<boolean> {
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
-/** `src/store.rs` set_at: put `value` at a JSON pointer, or remove what is there. */
-function setAt(root: Json, pointer: string, value: Json | undefined): Json {
-  if (pointer === "") return value === undefined ? {} : value;
-  const cut = pointer.lastIndexOf("/");
-  if (cut < 0) throw new Refusal(`${JSON.stringify(pointer)} is not a JSON pointer; start it with /`);
-  const parentPath = pointer.slice(0, cut);
-  const key = pointer.slice(cut + 1).replaceAll("~1", "/").replaceAll("~0", "~");
-  let parent: Json = root;
-  for (const raw of parentPath.split("/").slice(1)) {
-    const k = raw.replaceAll("~1", "/").replaceAll("~0", "~");
-    parent = Array.isArray(parent) ? (/^(0|[1-9]\d*)$/.test(k) ? parent[Number(k)] : undefined) as Json
-      : parent && typeof parent === "object" && Object.hasOwn(parent, k) ? parent[k] : (undefined as unknown as Json);
-    if (parent === undefined) throw new Refusal(`nothing at ${parentPath || "/"}`);
-  }
-  if (Array.isArray(parent)) {
-    const i = key === "-" ? parent.length : /^\d+$/.test(key) ? Number(key) : NaN;
-    if (Number.isNaN(i)) throw new Refusal(`${JSON.stringify(key)} is not an array index`);
-    if (value !== undefined && i <= parent.length) parent[i] = value;
-    else if (value === undefined && i < parent.length) parent.splice(i, 1);
-    else throw new Refusal(`${pointer} is past the end of the array`);
-  } else if (parent && typeof parent === "object") {
-    if (value !== undefined) parent[key] = value;
-    else if (Object.hasOwn(parent, key)) delete parent[key];
-    else throw new Refusal(`nothing at ${pointer}`);
-  } else throw new Refusal(`${parentPath} is neither an object nor an array`);
-  return root;
-}
-
 export class Live extends DurableObject<Env> {
   private doc: Doc | undefined;
   private seq = 0;
@@ -231,91 +200,8 @@ export class Live extends DurableObject<Env> {
    *  is what makes verbs run one at a time, as the daemon's store lock does. */
   private apply(mod: Awaited<ReturnType<typeof engine>>, op: Op, by: string, full: number): { events: Ev[]; doc: Partial<Doc> } {
     const d = this.doc!;
-    const now = Date.now();
-    let args: Json | undefined, verb: string | undefined, source: Json | undefined;
-    let bump = false;
-    const ask = (id: string) => d.asks.find((a) => a.id === id) ?? (() => { throw new Refusal(`${d.name} has no ask ${id}`); })();
-    const comment = (id: string) => d.comments.find((c) => c.id === id) ?? (() => { throw new Refusal(`${d.name} has no comment ${id}`); })();
-    switch (op.op) {
-      case "do":
-        d.state = run(mod, d.verbs, op.verb, d.state, op.args, by, now) as Json;
-        verb = op.verb; args = op.args ?? null; source = op.source ?? undefined; bump = true;
-        break;
-      case "set":
-        d.state = setAt(structuredClone(d.state), op.pointer ?? "", op.remove ? undefined : op.value);
-        args = { pointer: op.pointer ?? "" }; bump = true;
-        break;
-      case "shape": {
-        if (op.view == null && op.verbs == null && op.about == null) throw new Refusal("shape needs a new view, new verbs or a new about");
-        if (op.about != null) d.about = String(op.about).trim();
-        if (op.view != null || op.verbs != null) {
-          d.view = op.view ?? d.view; d.verbs = op.verbs ?? d.verbs;
-          d.view_rev++; bump = true;
-        }
-        break;
-      }
-      case "ask": {
-        const item: Ask = { ...op.item, id: `a${d.asks.length + 1}` };
-        d.asks.push(item);
-        args = item as Json;
-        break;
-      }
-      case "unask":
-        ask(op.id).unasked = { by, at_ms: now };
-        args = op.id;
-        break;
-      case "answer": {
-        const item = ask(op.id);
-        if (item.unasked) throw new Refusal(`${op.id} was unasked`);
-        const option: string | null = op.option ?? null;
-        if (option !== null && !item.options?.some((o) => o.id === option)) throw new Refusal(`${JSON.stringify(option)} is not an option of ${op.id}`);
-        const t = String(op.text ?? "").trim();
-        if (!item.seen && option === null && !t) throw new Refusal("this ask needs an option or some text");
-        item.answer = { option, text: t, by, at_ms: now };
-        args = { id: op.id, seen: !!item.seen, title: item.title, option, text: t, group: item.group ?? null };
-        break;
-      }
-      case "comment": {
-        const t = String(op.text ?? "").trim();
-        if (!t) throw new Refusal("empty comment");
-        const id = `c${d.comments.length + 1}`;
-        d.comments.push({ id, anchor: op.anchor ?? null, text: t, by, at_ms: now, resolved: false, replies: [] });
-        args = { id, anchor: op.anchor ?? null, text: t };
-        break;
-      }
-      case "reply": {
-        const t = String(op.text ?? "").trim();
-        if (!t) throw new Refusal("empty reply");
-        const c = comment(op.id);
-        c.replies.push({ text: t, by, at_ms: now });
-        c.resolved = op.resolve === true;
-        args = { id: op.id, text: t, resolved: c.resolved, anchor: c.anchor, comment: c.text };
-        break;
-      }
-      case "resolve":
-        comment(op.id).resolved = true;
-        args = op.id;
-        break;
-      case "send":
-        args = d.unsent ?? 0;
-        break;
-      case "lock":
-        args = { tries: op.tries };
-        break;
-      default:
-        throw new Refusal(`no such change: ${op.op}`);
-    }
-    if (bump) d.version++;
-    // What people did since they last pressed Send, as the daemon counts it.
-    // A quiet verb call (`jelly.do(verb, args, { quiet: true })`) does not count.
-    const quiet = op.op === "do" && op.quiet === true;
-    if (op.op === "send") d.unsent = 0;
-    else if (by.startsWith("person") && PERSON_OPS.includes(op.op) && !quiet) d.unsent = (d.unsent ?? 0) + 1;
-    const ev: Ev = { seq: ++this.seq, at_ms: now, kind: op.op, by, version: d.version, view_rev: d.view_rev };
-    if (verb !== undefined) ev.verb = verb;
-    if (args !== undefined) ev.args = args;
-    if (source !== undefined) ev.source = source;
-    if (quiet) ev.quiet = true;
+    const made = ops.apply(d, op, by, Date.now(), (src, verb, state, args, by, at) => run(mod, src, verb, state, args, by, at) as Json);
+    const ev: Ev = { seq: ++this.seq, ...made };
     const saved = JSON.stringify(d);
     if (full !== Infinity && size(saved) > full && size(saved) > size(this.get("doc")!)) {
       throw new Refusal("This jelly is full, so it takes nothing more from links. Tell whoever shared it.");
@@ -458,12 +344,12 @@ export class Live extends DurableObject<Env> {
     if (!msg.op || !PERSON_OPS.includes(msg.op)) return reply(false, undefined, `a link cannot ${msg.op}`);
     if (size(message) > LINK_MESSAGE) return reply(false, undefined, `This change is too big: a link sends at most ${LINK_MESSAGE / 1024} KB at a time.`);
     const what = ({ comment: "A comment", reply: "A reply", answer: "An answer" } as Record<string, string>)[msg.op];
-    const chars = [...String(msg.body?.text ?? "").trim()].length;
+    const chars = [...trim(msg.body?.text)].length;
     if (what && chars > LINK_TEXT) {
       return reply(false, undefined, `${what} holds at most ${LINK_TEXT.toLocaleString("en")} characters; this one has ${chars.toLocaleString("en")}. Shorten it or split it.`);
     }
     try {
-      const { events, doc } = await this.change({ ...msg.body, op: msg.op }, `person:${seat.who}`, LINK_FULL);
+      const { events, doc } = await this.change({ ...msg.body, op: msg.op } as Op, `person:${seat.who}`, LINK_FULL);
       reply(true, { ...events[0], state: doc.state });
     } catch (e) {
       reply(false, undefined, e instanceof Refusal ? e.message : String(e));
@@ -546,7 +432,7 @@ export class Live extends DurableObject<Env> {
         return new Response(null, { status: 204 });
       }
       if (path === "op" && req.method === "POST") {
-        const op = await json<Op>();
+        const op = await json<Op & { by?: string }>();
         if (!op.by) return text("say who is making this change: by\n", 400);
         return Response.json(await this.change(op, op.by));
       }

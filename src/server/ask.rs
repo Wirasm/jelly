@@ -34,16 +34,10 @@ pub(super) struct AskReq {
 }
 
 pub(super) async fn ask(State(app): State<Shared>, Path(name): Path<String>, headers: axum::http::HeaderMap, Json(r): Json<AskReq>) -> Result<Json<Value>, ApiError> {
-    let by = r.spec["by"].as_str().map(String::from);
+    let by = self::by(r.spec["by"].as_str().map(String::from))?;
     let asked = now_ms();
-    let Json(ev) = match app.live(&name) {
-        Some(live) => {
-            let by = self::by(by)?;
-            let item = crate::store::ask_item(&r.spec, &by)?;
-            share::forward(&app, &live, json!({"op": "ask", "item": item, "by": by})).await?
-        }
-        None => app.change(|s| s.ask(&name, r.spec, &self::by(by)?))?,
-    };
+    let item = crate::store::ask_item(&r.spec, &by)?;
+    let Json(ev) = apply(&app, &name, Change { by, op: Op::Ask { item: Box::new(item) } }).await?;
     let mut out = json!(ev);
     out["visible"] = json!(app.visible(&name));
     out["notified"] = json!(app.notifies());
@@ -106,17 +100,11 @@ pub(super) struct AnswerReq {
 }
 
 pub(super) async fn answer(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<AnswerReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "answer", "id": id, "option": r.option, "text": r.text, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.answer(&name, &id, r.option.as_deref(), &r.text, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Answer { id, option: r.option, text: r.text } }).await
 }
 
 pub(super) async fn unask(State(app): State<Shared>, Path((name, id)): Path<(String, String)>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "unask", "id": id, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.unask(&name, &id, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Unask { id } }).await
 }
 
 #[derive(Deserialize)]

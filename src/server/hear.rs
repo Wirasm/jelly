@@ -19,10 +19,7 @@ pub(super) struct WaitQ {
 
 /// The person hands the turn back (the view's Send button).
 pub(super) async fn send(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ByReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "send", "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.send(&name, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Send }).await
 }
 
 pub(super) async fn wait(State(app): State<Shared>, Query(q): Query<WaitQ>) -> Result<Response, ApiError> {

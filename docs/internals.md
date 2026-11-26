@@ -118,12 +118,17 @@ then return them in sequence order, even when the wall clock moves backwards.
 
 ## Send and waiting
 
-A jelly counts what people did since the last `send` in `unsent` (comments,
-answers, verb calls, undos; `store::record`). A verb call the view made with
-`jelly.do(verb, args, { quiet: true })` is left out: its `do` event carries
-`quiet: true`, which the daemon, the relay and the runtime all skip when they
-count. Nothing else about a quiet call changes. The runtime shows the count on its
-Send button, or a view draws its own (`data-send`, `jelly.person.send()`). `send`
+A jelly counts what people did since the last `send` in `unsent`: a person's
+verb calls, comments, replies, resolves, answers and undos
+(`store::counts_toward_send`). A person is `by` "person" or "person:<name>". A
+verb call the view made with `jelly.do(verb, args, { quiet: true })` is left
+out: its `do` event carries `quiet: true`. Nothing else about a quiet call
+changes. While a jelly is shared its relay counts instead (`countsTowardSend`
+in `relay/src/ops.ts`, the same rule), and the mirror takes the relay's count.
+Every event a live listener gets carries the count after it (`unsent`, like
+`state` never written to the log), and the runtime shows that number on its
+Send button, or a view draws its own (`data-send`, `jelly.person.send()`). The
+runtime counts nothing itself. `send`
 sets the count to zero and is the only event that ends `GET /api/wait`, which is
 all `jelly hear --wait` does, unless `every=true` (`--every`). The wait reads
 `events.jsonl` after the `since` position, and the live bus only wakes it, so a
@@ -131,8 +136,7 @@ reader that falls behind still hears the Send. Without `since` (no `--since`)
 the wait takes the daemon's newest event under the store lock, which every
 event is numbered and logged under, and reads from the end of the log, so it
 starts without reading history. `jelly` is a full name: the CLI resolves a
-short one in its project before it asks. The relay keeps the
-same count for a shared jelly.
+short one in its project before it asks.
 
 Two other listeners wake an agent on Send, and read Sends the same way. The
 daemon's `--wake` task (`server/wake.rs`) follows the log from its end, woken by
@@ -169,6 +173,26 @@ always has them, a view has them with `<html class="jy">`, and a shadow root wit
 the text of `jelly.css` (`window.jelly.css`) in its own style element. The
 runtime forces `jy-dark` or `jy-light` on its own parts from the view's
 background, so they match the page they sit on.
+
+## Shared jellies
+
+While a jelly is shared, the copy on the relay (`relay/`) is the live one.
+Every change the relay can make too is an `op::Change` (`src/op.rs`): `do`,
+`set`, `shape`, `ask`, `unask`, `answer`, `comment`, `reply`, `resolve` and
+`send`, with who makes it. Handlers build one and call `server::apply`, which
+makes it in the store, or, for a shared jelly, sends it as it is to the
+relay (`POST /api/live/<share>/op`, `share::forward`). The relay makes it
+with `relay/src/ops.ts`, the same changes written again for the Worker. The
+two are kept the same by `tests/ops.json`: sequences of changes with the event
+and the jelly each must make, and the exact words of each refusal. `cargo
+test` runs it against the store, `npm test` in `relay/` against `ops.ts`. A
+new kind of change, or a change to what one does, goes into that file first.
+
+The relay sends every change back over the daemon's WebSocket to the share,
+and `Store::mirror` records it here as it happened there, with the relay's
+count toward Send. A kind of change this daemon does not know is mirrored as
+`unknown`, with the jelly as the relay sent it, so a relay deployed before the
+daemon cannot stall the mirror.
 
 ## Shares on the jelly page
 
