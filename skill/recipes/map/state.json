@@ -49,10 +49,10 @@
       "kind": "code",
       "what": "One binary. Every command but `serve` is an HTTP request to the daemon (ureq), and most print one line.",
       "files": [
-        "src/main.rs: run, report, placement, inbox, detect_project"
+        "src/main.rs: run, report, shown, inbox, detect_project"
       ],
       "touched": {
-        "note": "placement turns `anchor` into the sentence the agent reads."
+        "note": "shown turns `anchor` into the sentence the agent reads."
       }
     },
     {
@@ -60,9 +60,9 @@
       "layer": "surfaces",
       "label": "runtime.js",
       "kind": "code",
-      "what": "`window.jelly` in every view: call, onState, comments, question cards, and the text snapshot for `jelly look`.",
+      "what": "`window.jelly` in every view: do, onState, comments, the stack of questions, and the text snapshot for `jelly look`.",
       "files": [
-        "assets/runtime.js: jelly.do, apply, drawAttention, placeAfter, deadAnchors, postSnapshot"
+        "assets/runtime.js: jelly.do, apply, drawAsks, askReport, postSnapshot"
       ],
       "risk": "One WebSocket per page. An EventSource per view would hit the browser's six-per-host limit."
     },
@@ -85,7 +85,7 @@
       "what": "The internal jelly, id `page`, that lays out the others. Each jelly on it is an iframe of /j/<id>/.",
       "files": [
         "assets/page.html",
-        "assets/page.verbs.js: focus, seen",
+        "assets/page.verbs.js: show, seen",
         "src/store.rs: PAGE"
       ],
       "risk": "It is a jelly too: its own verb calls are events like any other."
@@ -95,9 +95,9 @@
       "layer": "daemon",
       "label": "Screens",
       "kind": "store",
-      "what": "What a browser last showed of each jelly, as text, with page errors and dead anchors. Memory only.",
+      "what": "What a browser last showed of each jelly, as text, with page errors and how each open ask shows. Memory only.",
       "files": [
-        "src/server.rs: App.screens, Screen, put_screen"
+        "src/server/look.rs: Screen, put_screen"
       ],
       "risk": "Gone on restart, and the last poster wins: an open view and a headless render both write here."
     },
@@ -108,11 +108,12 @@
       "kind": "code",
       "what": "Renders a jelly in headless Chrome and reads back what the page says is on screen. `jelly look` prints it; an ask with --at uses it to check its anchor.",
       "files": [
-        "src/server.rs: look, render, anchor_place, RENDER_LIMIT, ANCHOR_CHECK"
+        "src/server/look.rs: look, render, RENDER_LIMIT",
+        "src/server/ask.rs: ask_shown, ANCHOR_CHECK"
       ],
-      "risk": "Headless Chrome often posts its snapshot and then does not exit. anchor_place answers when the snapshot is in; look still waits for the browser (issue #6).",
+      "risk": "Headless Chrome often posts its snapshot and then does not exit. ask_shown answers once the snapshot is in.",
       "touched": {
-        "note": "anchor_place is new; render takes a time limit."
+        "note": "ask_shown is new; render takes a time limit."
       }
     },
     {
@@ -122,11 +123,12 @@
       "kind": "code",
       "what": "The axum router: one handler per thing you can do to a jelly. Listens on 127.0.0.1 only, with no login.",
       "files": [
-        "src/server.rs: serve, call, set_state, shape, attend, comment"
+        "src/server.rs: serve, call, set_state, shape, comment",
+        "src/server/ask.rs: ask"
       ],
       "risk": "Anything that can reach the port can run verbs.",
       "touched": {
-        "note": "attend checks the anchor after the item is made, and adds `anchor` to its reply."
+        "note": "ask checks the anchor after the ask is made, and adds `anchor` to its reply."
       }
     },
     {
@@ -145,10 +147,11 @@
       "layer": "daemon",
       "label": "Broadcast channel",
       "kind": "code",
-      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket; `jelly hear --wait` and `jelly events` hear it over /api/events.",
+      "what": "A tokio broadcast channel of events, 1024 deep. Browsers hear it over the WebSocket, `jelly hear --wait` over /api/wait and `jelly events` over /api/events.",
       "files": [
         "src/server.rs: App.events, serve, events",
-        "src/main.rs: Cmd::Wait, Cmd::Events"
+        "src/server/hear.rs: wait",
+        "src/main.rs: Cmd::Hear, Cmd::Events"
       ],
       "risk": "A listener that falls behind is told to resync (the page reloads)."
     },
@@ -181,7 +184,7 @@
       "kind": "code",
       "what": "Every jelly in memory, behind one Mutex. Each change bumps the version, saves the jelly and returns an event.",
       "files": [
-        "src/store.rs: Store, call_from, set_state, shape, commit, event"
+        "src/store.rs: Store, do_verb_from, set_state, shape, commit, event"
       ],
       "risk": "State changes only here. Undo, events and attribution all hang off commit."
     },
@@ -201,7 +204,7 @@
       "layer": "store",
       "label": "Undo",
       "kind": "store",
-      "what": "A call, set or shape keeps what it takes to go back: the changed lines of state, and the view or verbs it replaced. 100 deep, within twice the state.",
+      "what": "A verb call, set or shape keeps what it takes to go back: the changed lines of state, and the view or verbs it replaced. 100 deep, within twice the state.",
       "files": [
         "src/store.rs: Step, push_step, undo, UNDO_DEPTH"
       ],
@@ -210,11 +213,11 @@
     {
       "id": "beside",
       "layer": "store",
-      "label": "Attention and comments",
+      "label": "Asks and comments",
       "kind": "store",
-      "what": "Asks, looks and comment threads live on the jelly beside its state, not in it. Undo does not touch them.",
+      "what": "Asks and comment threads live on the jelly beside its state, not in it. Undo does not touch them.",
       "files": [
-        "src/store.rs: Attention, Comment, attend, answer, comment, reply"
+        "src/store.rs: Ask, Comment, ask, answer, comment, reply"
       ]
     },
     {
@@ -224,16 +227,16 @@
       "kind": "process",
       "what": "Whatever Chrome, Chromium, Edge or Brave is installed, run with --headless=new on /j/<id>/?agent=1.",
       "files": [
-        "src/server.rs: chrome, render"
+        "src/server/look.rs: chrome, run_browser_at"
       ],
-      "risk": "Shares one profile in the temp dir; it can linger after it is done."
+      "risk": "Each render gets a fresh profile in the temp dir; the browser can linger after it is done."
     },
     {
       "id": "file",
       "layer": "disk",
       "label": "jellies/<id>.json",
       "kind": "file",
-      "what": "One file per jelly: view, verbs, state, attention, comments and its undo history. Written whole, atomically.",
+      "what": "One file per jelly: view, verbs, state, asks, comments and its undo history. Written whole, atomically.",
       "files": [
         "src/store.rs: commit, write_atomic, Store::open"
       ]
@@ -246,7 +249,7 @@
       "what": "Every event, one JSON line each, appended and trimmed past 8 MiB, keeping the person's events. Inbox reads use sequence cursors to read from the end, or indexed byte ranges for timestamp windows. `jelly look` uses recent history kept in memory during startup, append and trim.",
       "files": [
         "src/store.rs: Store::log, trim_events, events_back, events_since, recent_events",
-        "src/server.rs: inbox"
+        "src/server/hear.rs: inbox"
       ],
       "risk": "An event's `state` goes to live listeners only, never into this file."
     },
@@ -291,7 +294,7 @@
     {
       "from": "runtime",
       "to": "routes",
-      "label": "POST /api/jellies/<id>/call"
+      "label": "POST /api/jellies/<id>/do"
     },
     {
       "from": "cli",
@@ -321,7 +324,7 @@
     {
       "from": "store",
       "to": "beside",
-      "label": "attend, answer, comment"
+      "label": "ask, answer, comment"
     },
     {
       "from": "store",
@@ -386,7 +389,7 @@
     {
       "from": "bus",
       "to": "cli",
-      "label": "/api/events: jelly hear --wait, jelly events"
+      "label": "/api/wait, /api/events: jelly hear --wait, jelly events"
     }
   ],
   "traces": [
@@ -419,8 +422,8 @@
         },
         {
           "at": "store",
-          "say": "call_from finds the jelly and gives the verb its state.",
-          "cite": "src/store.rs: Store::call_from"
+          "say": "do_verb_from finds the jelly and gives the verb its state.",
+          "cite": "src/store.rs: Store::do_verb_from"
         },
         {
           "at": "verbs",
@@ -489,13 +492,13 @@
         },
         {
           "at": "cli",
-          "say": "The CLI turns the flags into one item: kind, title, options, anchor.selector.",
+          "say": "The CLI turns the flags into one ask: title, options, anchor.selector.",
           "cite": "src/main.rs: Cmd::Ask"
         },
         {
           "at": "routes",
-          "say": "POST /api/jellies/<id>/attention reaches attend.",
-          "cite": "src/server.rs: attend"
+          "say": "POST /api/jellies/<id>/asks reaches the ask route.",
+          "cite": "src/server/ask.rs: ask"
         },
         {
           "at": "change",
@@ -504,38 +507,38 @@
         },
         {
           "at": "store",
-          "say": "attend checks the item and gives it the next id: a1, a2, …",
-          "cite": "src/store.rs: Store::attend, attention_from"
+          "say": "Store::ask checks it and gives it the next id: a1, a2, …",
+          "cite": "src/store.rs: Store::ask, ask_from"
         },
         {
           "at": "beside",
-          "say": "It is pushed onto the jelly's attention list. That list sits beside state, so undo never removes a question.",
-          "cite": "src/store.rs: Store::attend"
+          "say": "It is pushed onto the jelly's asks. They sit beside state, so undo never removes a question.",
+          "cite": "src/store.rs: Store::ask"
         },
         {
           "at": "log",
-          "say": "commit saves the jelly and logs an `attention` event.",
+          "say": "commit saves the jelly and logs an `ask` event.",
           "cite": "src/store.rs: commit"
         },
         {
           "at": "bus",
-          "say": "The event is broadcast, so open views draw the card at once.",
+          "say": "The event is broadcast, so open views show the question at once.",
           "cite": "src/server.rs: App::change"
         },
         {
           "at": "see",
-          "say": "New in ef60c62. The ask has an anchor, so attend goes on to anchor_place.",
-          "cite": "src/server.rs: attend, anchor_place"
+          "say": "New in ef60c62. The ask has an anchor, so the route goes on to ask_shown.",
+          "cite": "src/server/ask.rs: ask, ask_shown"
         },
         {
           "at": "chrome",
           "say": "It renders the page once, headless, and gives it 8 seconds.",
-          "cite": "src/server.rs: render, ANCHOR_CHECK"
+          "cite": "src/server/ask.rs: ask_shown, ANCHOR_CHECK"
         },
         {
           "at": "runtime",
-          "say": "In that page the runtime places the card, lists the open questions whose anchor matches nothing, and posts what is on screen.",
-          "cite": "assets/runtime.js: placeAfter, deadAnchors, postSnapshot",
+          "say": "In that page the runtime puts the question in jelly's stack, pins it to its anchor when that matches, and posts what is on screen with how each open ask shows.",
+          "cite": "assets/runtime.js: drawAsks, askReport, postSnapshot",
           "show": {
             "kind": "image",
             "compare": "side",
@@ -545,28 +548,28 @@
             ],
             "before": "assets/card-good.png",
             "after": "assets/card-dead.png",
-            "caption": "The card lands below its anchor, or at the top when nothing matches."
+            "caption": "The card sits in the stack either way; only a matched anchor gets a pin."
           }
         },
         {
           "at": "screens",
           "say": "put_screen keeps that snapshot in memory.",
-          "cite": "src/server.rs: put_screen, Screen.missing"
+          "cite": "src/server/look.rs: put_screen, Screen.asks"
         },
         {
           "at": "see",
-          "say": "anchor_place answers as soon as a snapshot of this version is in, and drops the browser without waiting for it to exit.",
-          "cite": "src/server.rs: anchor_place"
+          "say": "ask_shown answers as soon as a snapshot of this version is in, and drops the browser without waiting for it to exit.",
+          "cite": "src/server/ask.rs: ask_shown"
         },
         {
           "at": "cli",
-          "say": "The reply now says the anchor is missing, and placement turns it into a sentence.",
-          "cite": "src/main.rs: report, placement",
+          "say": "The reply now says the anchor is missing, and shown turns it into a sentence.",
+          "cite": "src/main.rs: report, shown",
           "show": {
             "kind": "terminal",
-            "before": "asked a1 \"Which order?\"; it shows on the page below #nope",
-            "after": "asked a1 \"Which order?\"; #nope matches nothing on the page, so it shows at the top",
-            "caption": "Before, the reply named a place the card never went."
+            "before": "asked a1 \"Which order?\"; it shows in jelly's stack of questions, with a pin on #nope",
+            "after": "asked a1 \"Which order?\"; #nope matches nothing on the page, so it has no pin; it shows in jelly's stack of questions",
+            "caption": "Before, the reply named a pin the page never drew."
           }
         },
         {

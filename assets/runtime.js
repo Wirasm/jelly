@@ -1,6 +1,8 @@
 // Injected into every jelly view as `window.jelly`, grouped by what it is about.
 //
 // This jelly:
+//   jelly.name, jelly.about     its full name (project:name) and its about line
+//   jelly.css                   jelly's own stylesheet as text, for a shadow root: <style>${jelly.css}</style>
 //   jelly.state                 current state (read only; change it with verbs)
 //   jelly.onState(fn)           fn(state, event) now and after every change, from anyone
 //   jelly.do(verb, args)      run a verb; resolves to the event, rejects with the reason
@@ -23,6 +25,9 @@
 //   jelly.person.onOpen(fn)     fn(ask) when the person opens an ask from the jelly page; returns unsubscribe
 //   jelly.person.comments       comment threads on this jelly
 //   jelly.person.answer(id, { option, text }), .comment(anchor, text), .reply(id, text), .resolve(id)
+//   jelly.person.unsent         how many things people did here since the last Send
+//   jelly.person.onUnsent(fn)   fn(count) now and whenever it changes
+//   jelly.person.send()         hand the turn back, as the Send button does: wakes `jelly hear --wait`
 //
 //   jelly.who(by)               "you" for this browser, a person's name, or the agent's name
 //   jelly.isPerson(by)          true for "person" and "person:<name>"
@@ -1197,11 +1202,6 @@
       else setMode(!commenting);
     });
   });
-  // A click or Tab into a jelly never reaches the page, so the jelly tells it, and
-  // the page selects it. A click into a jelly that already has focus fires no focus.
-  const focused = () => { if (embedded) parent.postMessage({ type: "jelly:focus", name: boot.name }, location.origin); };
-  addEventListener("focus", focused);
-  addEventListener("pointerdown", focused);
   addEventListener("mouseover", (e) => {
     if (!(commenting || e.altKey) || isOurs(e.target)) return;
     hovered?.classList.remove("jf-hover");

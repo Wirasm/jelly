@@ -51,8 +51,8 @@ pub struct Jelly {
     pub verbs: String,
     pub state: Value,
     /// Bumps when the view, verbs or state change: a verb call, a set, an undo
-    /// or a shape of the view or verbs. Comments, asks and other attention
-    /// leave it alone; an event's `seq` counts those.
+    /// or a shape of the view or verbs. Comments, asks and answers leave it
+    /// alone; an event's `seq` counts those.
     pub version: u64,
     /// Bumps when the view or verbs change; an open view reloads when it does.
     pub view_rev: u64,
@@ -62,7 +62,7 @@ pub struct Jelly {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaped_by: Option<String>,
     pub updated_ms: u64,
-    /// When the agent made it; the jelly page's stream is in this order.
+    /// When the agent made it; the jelly page shows it.
     #[serde(default)]
     pub created_ms: u64,
     /// One line from the agent on what this jelly is for, shown beside it.
@@ -975,7 +975,6 @@ impl Store {
         self.commit(name, EventKind::Note, by, None, Some(Value::String(text.into())), Vec::new(), previous_entry)
     }
 
-    /// Where a project keeps its DESIGN.md.
     /// A project's folder. The name is checked first, so a request cannot reach
     /// outside the home with `..` or a path.
     pub fn project_dir(&self, project: &str) -> Result<PathBuf, Error> {
@@ -1663,8 +1662,7 @@ fn set_at(root: &mut Value, pointer: &str, value: Option<Value>) -> Result<(), S
     Ok(())
 }
 
-/// Names become file names and URL segments.
-/// An ask checked as `attend` checks it, for a shared jelly: its relay numbers it.
+/// An ask checked as `Store::ask` checks it, for a shared jelly: its relay numbers it.
 pub fn ask_item(spec: &Value, by: &str) -> Result<Ask, Error> {
     ask_from(spec, String::new(), by)
 }
@@ -1674,7 +1672,7 @@ fn ask_from(spec: &Value, id: String, by: &str) -> Result<Ask, Error> {
     let seen = spec["seen"].as_bool().unwrap_or(false);
     let title = spec["title"].as_str().unwrap_or("").trim().to_string();
     if title.is_empty() {
-        return Err(Error::Invalid("attention needs a title: what you want from the person".into()));
+        return Err(Error::Invalid("an ask needs a title: what you want from the person".into()));
     }
     let options: Vec<AskOption> = serde_json::from_value(spec.get("options").cloned().unwrap_or(Value::Array(vec![])))
         .map_err(|e| Error::Invalid(format!("{title:?}: options: {e}")))?;

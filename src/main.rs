@@ -262,7 +262,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
             let project = project();
             let body = json!({"name": name, "view": view, "verbs": verbs, "state": state, "by": by, "replace": replace, "about": about, "project": project});
             let ev = send("POST", &api(""), body)?;
-            // `inbox`, `ls` and `attention` show the project you run them from, so
+            // `hear`, `ls` and `waiting` show the project you run them from, so
             // from the person's repo they would never show this jelly.
             if project.is_empty() && cli.project.is_none() && !name.contains(':') {
                 eprintln!("jelly: {name} is in no project, because this folder is not in a git repo. `jelly hear` run from a repo will not show what the person does in it. Put it in one with `jelly move {name} PROJECT`, or make jellies from the repo: `jelly make {name} --from FOLDER`.");
@@ -1235,7 +1235,6 @@ fn read(p: &PathBuf) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-/// Adds files beside a jelly; `jelly` is its API address.
 /// Resolves on Ctrl-C, or SIGTERM on Unix.
 async fn stopped() {
     #[cfg(unix)]
@@ -1591,7 +1590,7 @@ mod tests {
                         "id":"a1", "kind":"ask", "title":"Q", "by":"agent", "at_ms":1,
                         "answer":{"option":"b", "text":"", "by":"person", "at_ms":2}
                     })).unwrap())),
-                    _ => panic!("unexpected attention read"),
+                    _ => panic!("unexpected ask read"),
                 }
             }).unwrap();
             assert_eq!(reads, 2);

@@ -15,8 +15,10 @@ thing: no aliases for commands, flags or runtime fields.
   a recommendation; the person picks, says why, or comments. Never hand the person
   an empty input field.
 
-- State changes only through verbs. Do not add an API that writes state directly;
-  undo, events and attribution all depend on it.
+- State changes only through a verb or `jelly set` (`Store::set_state`), and every
+  change is an event that names who made it and can be undone. Do not add a way
+  to write state that skips the event or the undo step; undo, the inbox and
+  attribution all depend on it.
 - Verbs run one at a time under the store lock in `server.rs`.
 - Shape and create refuse verbs that do not load (`verbs::check`).
 - An event's `state` field goes to live listeners only, never into `events.jsonl`.
@@ -40,11 +42,18 @@ thing: no aliases for commands, flags or runtime fields.
   is `project+name`, because `:` is not allowed in a file name (`disk::name`). Views are
   served at `/j/<id>/` so `assets/<file>` resolves; keep that trailing slash.
 - Never put network access in verbs. Live data is pushed in with `jelly do`, or by a feed.
-- The daemon runs commands only from `feeds.json` in the home, which the CLI writes
-  to disk (`jelly feed`). Never add an HTTP route that sets or changes a feed: the
-  port has no authentication, so that route would let any page run a command.
-  `/api/update` is the one route that starts a command, and the request chooses
-  nothing about it: `npm install -g jellyware@latest`, then `jelly setup`.
+- No request chooses a command. The daemon runs the person's own commands only
+  as feeds, from `feeds.json` in the home, which the CLI writes to disk (`jelly
+  feed`). Never add an HTTP route that sets or changes a feed: the port has no
+  authentication, so that route would let any page run a command. Besides the
+  daemon's own restart and the browser for renders, two routes start a fixed
+  command. `/api/update` runs `npm install -g jellyware@latest`, then `jelly
+  setup`, and the request chooses nothing about it. `/api/wake` runs `codex
+  queue --thread ID --message TEXT` once, on the next Send in the jelly or
+  project the request names. The request gives only ID, which must be letters,
+  digits and `-` and not start with `-`, so it never reads as a flag; the binary
+  (`codex`, or `JELLY_CODEX` in the daemon's environment) and TEXT are jelly's
+  (`src/server/wake.rs`).
 - A change by `feed` is not someone using the jelly: it leaves `updated_ms` and
   `archived` alone, so a fed jelly nobody opens still goes quiet.
 - `send` is the person handing the turn back. `jelly hear --wait` returns on it and
