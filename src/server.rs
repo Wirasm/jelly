@@ -274,7 +274,7 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/set", post(set_state))
         .route("/api/jellies/{name}/undo", post(undo))
         .route("/api/jellies/{name}/keep", post(keep))
-        .route("/api/jellies/{name}/move", post(move_project))
+        .route("/api/jellies/{name}/move", post(move_jelly))
         .route("/api/jellies/{name}/restore", post(restore))
         .route("/api/jellies/{name}/archive", post(archive))
         .route("/api/jellies/{name}/assets", get(list_assets))
@@ -295,7 +295,7 @@ fn router(app: Shared) -> Router {
         .route("/api/tries/{token}/do", post(trial_call))
         .route("/api/projects", get(projects).post(make_project))
         .route("/api/projects/{project}", axum::routing::delete(remove_project))
-        .route("/api/projects/{project}/move", post(move_whole_project))
+        .route("/api/projects/{project}/move", post(move_project))
         .route("/api/projects/{project}/design", get(get_design).put(put_design))
         .route("/p/{project}/DESIGN.md", get(get_design))
         .route("/p/{project}/design.css", get(design_css))
@@ -589,7 +589,7 @@ struct ProjectReq {
     by: Option<String>,
 }
 
-async fn move_project(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
+async fn move_jelly(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ProjectReq>) -> Result<Json<Event>, ApiError> {
     app.not_shared(&name, "move")?;
     app.change(|s| s.set_project(&name, &r.project, &by(r.by)?))
 }
@@ -622,8 +622,8 @@ struct MoveProjectReq {
 }
 
 /// Renames a project or merges it into another: each of its jellies moves, so
-/// none of them may be shared, as for `move_project` on one jelly.
-async fn move_whole_project(State(app): State<Shared>, Path(project): Path<String>, Json(r): Json<MoveProjectReq>) -> Result<Json<Value>, ApiError> {
+/// none of them may be shared, as for `move_jelly`.
+async fn move_project(State(app): State<Shared>, Path(project): Path<String>, Json(r): Json<MoveProjectReq>) -> Result<Json<Value>, ApiError> {
     let by = by(r.by)?;
     let names: Vec<String> = app.store.lock().expect("store lock").list().filter(|j| j.project() == project).map(|j| j.name.clone()).collect();
     for name in &names {

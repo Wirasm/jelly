@@ -912,7 +912,14 @@ impl Store {
             }
         }
         if from_dir.exists() {
-            let moved = if to_dir.exists() { fs::remove_dir_all(&from_dir) } else { fs::create_dir_all(self.dir.join("projects")).and_then(|()| fs::rename(&from_dir, &to_dir)) };
+            let (design, kept) = (from_dir.join("DESIGN.md"), to_dir.join("DESIGN.md"));
+            let moved = if !to_dir.exists() {
+                fs::create_dir_all(self.dir.join("projects")).and_then(|()| fs::rename(&from_dir, &to_dir))
+            } else if design.exists() && !kept.exists() {
+                fs::rename(&design, &kept).and_then(|()| fs::remove_dir_all(&from_dir))
+            } else {
+                fs::remove_dir_all(&from_dir)
+            };
             if let Err(e) = moved {
                 return Err(BatchError { events, error: Error::Invalid(format!("the jellies moved, but the folder of {from} did not: {e}")) });
             }
@@ -2491,12 +2498,17 @@ mod tests {
         assert_eq!(s.assets("launch:plan"), ["shot.png"], "assets move with their jelly");
         assert_eq!(s.projects(), BTreeMap::from([("launch".to_string(), 2)]), "demo is gone, folder and all");
         assert!(!d.path().join("projects/demo").exists());
-        assert!(!d.path().join("projects/launch/DESIGN.md").exists(), "launch had a folder, so it keeps its own design: none");
+        assert_eq!(fs::read_to_string(d.path().join("projects/launch/DESIGN.md")).unwrap(), "demo design", "launch had none, so it gets demo's");
 
-        // A rename to a new name carries the design along.
-        fs::write(d.path().join("projects/launch/DESIGN.md"), "launch design").unwrap();
+        // A rename to a new name carries the design along; a merge into a project with its own keeps that one.
         s.move_project("launch", "shipped", "person").unwrap();
-        assert_eq!(fs::read_to_string(d.path().join("projects/shipped/DESIGN.md")).unwrap(), "launch design");
+        assert_eq!(fs::read_to_string(d.path().join("projects/shipped/DESIGN.md")).unwrap(), "demo design");
+        s.make("old", "".into(), VERBS.into(), json!({}), "agent", false, "", "past").unwrap();
+        fs::create_dir_all(d.path().join("projects/past")).unwrap();
+        fs::write(d.path().join("projects/past/DESIGN.md"), "past design").unwrap();
+        s.move_project("past", "shipped", "person").unwrap();
+        assert_eq!(fs::read_to_string(d.path().join("projects/shipped/DESIGN.md")).unwrap(), "demo design");
+        s.remove("shipped:old", "person").unwrap();
         assert!(s.move_project("launch", "x", "person").is_err(), "launch is gone");
 
         s.remove("shipped:plan", "person").unwrap();

@@ -636,7 +636,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 (Some(to), _) => {
                     let done = send("POST", &format!("{at}/{}/move", encode(&name)), json!({"to": to, "by": by}))?;
                     let n = done["events"].as_u64().unwrap_or(0);
-                    let line = format!("{name} is now {to}: {}", match n { 0 => "it held no jellies".into(), 1 => format!("1 jelly moved, and its name now starts with {to}:"), n => format!("{n} jellies moved, and their names now start with {to}:") });
+                    let line = match n { 0 => format!("{name} held no jellies; it is {to} now"), 1 => format!("the 1 jelly in {name} is in {to} now, and its name starts with {to}:"), n => format!("the {n} jellies in {name} are in {to} now, and their names start with {to}:") };
                     (done, line)
                 }
                 (None, true) => (send("DELETE", &format!("{at}/{}", encode(&name)), Value::Null)?, format!("{name}: removed")),
