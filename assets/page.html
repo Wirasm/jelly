@@ -57,7 +57,7 @@
   .listwrap { position: relative; min-height: 0; display: grid; }
   .list { overflow-y: auto; min-height: 0; padding: 22px 28px 30vh; }
   .list > * { max-width: 1120px; margin-left: auto; margin-right: auto; }
-  section { margin-bottom: 34px; }
+  .list section { margin-bottom: 34px; }
   h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 4px 8px; display: flex; gap: 8px; align-items: center; font-weight: 600; }
   h2 .n { letter-spacing: 0; text-transform: none; font-weight: 400; }
   h2 .sp { flex: 1; }
@@ -202,8 +202,10 @@
     .rail h2, .rail a .ct { display: none; }
     .rail a, .rail .padd, .rail .pin { flex: none; margin-top: 0; }
     .rail .pin { width: 180px; }
-    .top .keys { display: none; }
-    .find { margin-left: 6px; }
+    .top { gap: 6px; padding: 0 10px; }
+    .top .keys, .top .sp, .word { display: none; }
+    .find { margin-left: 0; }
+    .top .me { flex: none; }
     .list { padding: 16px 12px 30vh; }
     .cols { columns: 1; }
     .row .open span, .row .when, .sh-top .open span { display: none; }
@@ -224,7 +226,7 @@
     <span class="sp"></span>
     <button class="me" id="notify" hidden title="Show a notification when an agent asks you something and this tab is not in front">Notify me</button>
     <button class="me" id="me" title="Your name on what you do here, so others can tell who did what"></button>
-    <span class="keys"><span><kbd>n</kbd> next for you</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span></span>
+    <span class="keys"><span><kbd>n</kbd> next for you</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span></span>
   </div>
   <nav class="rail" id="rail" aria-label="Projects"></nav>
   <div class="listwrap">
@@ -365,7 +367,7 @@
     }).join("")}</div></section>`;
   }
 
-  let drawn = { rail: "", list: "" };
+  let drawn = { rail: "", list: "" }, redrawing = false;
   function render() {
     const scope = jellies.filter((j) => inScope(j) && !removing.has(j.name));
     const found = scope.filter(matches), live = found.filter((j) => !j.archived);
@@ -395,14 +397,18 @@
     // Rows are plain markup, so a redraw is cheap; skipping an unchanged one keeps focus and the hover preview still.
     for (const [key, next] of [["rail", rail], ["list", html]]) {
       if (drawn[key] === next) continue;
+      // What had focus has it again afterwards, a field with its caret where it was. Nothing else is given focus.
       const active = document.activeElement, id = $(key).contains(active) ? active.id || active.closest("[id]")?.id : null, wasOpen = active?.classList?.contains("open");
+      const caret = active?.classList?.contains("pin") ? [active.selectionStart, active.selectionEnd] : null;
       drawn[key] = next;
+      redrawing = true;
       $(key).innerHTML = next;
       const again = id && $(id);
       if (again) (wasOpen ? again.querySelector(".open") || again : again).focus();
+      if (again && caret) again.setSelectionRange(...caret);
+      redrawing = false;
     }
-    const edit = ui.edit && $(ui.edit.kind === "new" ? "newproject" : "rename");
-    if (edit && document.activeElement !== edit) { edit.focus(); edit.select(); }
+    if (menuFor && !byName(menuFor)) closeMenu();
     $("fnext").hidden = !full || !waiting().some((j) => j.name !== full);
     $("fnext").textContent = `Next for you · ${waiting().filter((j) => j.name !== full).length}`;
   }
@@ -662,7 +668,7 @@
     if (!r.ok) alert((await r.json().catch(() => ({}))).error || "That did not work.");
     return r.ok;
   }
-  const keep = (name) => { const j = byName(name); return j.archived ? act(`/api/jellies/${enc(name)}/restore`, {}) : act(`/api/jellies/${enc(name)}/keep`, { kept: !j.kept }); };
+  const keep = (name) => { const j = byName(name); if (!j) return; return j.archived ? act(`/api/jellies/${enc(name)}/restore`, {}) : act(`/api/jellies/${enc(name)}/keep`, { kept: !j.kept }); };
 
   // Remove takes the jelly off the list at once and deletes it ten seconds
   // later, so a slip can be taken back. A second remove, or leaving the page,
@@ -681,16 +687,21 @@
     clearTimeout(removing.get(name));
     $("toast").hidden = true;
     // The row stays hidden until the list comes back without it; if the daemon refuses, it returns.
-    await act(removeUrl(name), null, "DELETE");
+    // A jelly that was moved meanwhile has another name now, and stays.
+    if (byName(name)) await act(removeUrl(name), null, "DELETE");
     removing.delete(name);
     refresh();
   }
-  $("toast").addEventListener("click", (e) => {
-    if (e.target.id !== "unremove") return;
-    for (const [name, timer] of removing) { clearTimeout(timer); removing.delete(name); }
+  // Takes a remove back: the person pressed Undo, or an agent touched the jelly
+  // while it waited, and what the agent just did must not be deleted.
+  function unremove(name) {
+    if (!removing.has(name)) return;
+    clearTimeout(removing.get(name));
+    removing.delete(name);
     $("toast").hidden = true;
     render();
-  });
+  }
+  $("toast").addEventListener("click", (e) => { if (e.target.id === "unremove") for (const name of [...removing.keys()]) unremove(name); });
   addEventListener("pagehide", () => { for (const name of removing.keys()) fetch(removeUrl(name), { method: "DELETE", keepalive: true }); });
 
   // The ··· on a row: what is done on purpose, so one step further away than copy.
@@ -769,12 +780,25 @@
     if (e.key === "Enter") finishEdit(e.target);
     if (e.key === "Escape") { e.stopPropagation(); ui.edit = null; render(); }
   });
-  $("rail").addEventListener("click", (e) => { if (e.target.id === "addproject") { ui.edit = { kind: "new", value: "" }; render(); } });
+  // A field takes focus once, when it opens, and goes when focus leaves it.
+  function startEdit(edit) {
+    ui.edit = edit;
+    render();
+    const field = $(edit.kind === "new" ? "newproject" : "rename");
+    field.focus();
+    field.select();
+  }
+  $("app").addEventListener("focusout", (e) => {
+    if (redrawing || !ui.edit || !e.target.classList.contains("pin")) return;
+    ui.edit = null;
+    render();
+  });
+  $("rail").addEventListener("click", (e) => { if (e.target.id === "addproject") startEdit({ kind: "new", value: "" }); });
 
   $("list").addEventListener("click", async (e) => {
     const t = (sel) => e.target.closest(sel);
     if (t("[data-arch]")) { ui.archived.add(t("[data-arch]").dataset.arch); return render(); }
-    if (t("[data-rename]")) { const p = t("[data-rename]").dataset.rename; ui.edit = { kind: "rename", project: p, value: p }; return render(); }
+    if (t("[data-rename]")) { const p = t("[data-rename]").dataset.rename; return startEdit({ kind: "rename", project: p, value: p }); }
     if (t("[data-rmproject]")) { const p = t("[data-rmproject]").dataset.rmproject; if (await act(projectAt(p), null, "DELETE")) { if (PROJECT === p) location.href = "/"; else refresh(); } return; }
     if (t("#shared")) return shareClick(e);
     if (t("a, input")) return;
@@ -784,6 +808,7 @@
     if (b?.dataset.act === "copy") return copyText(reference(byName(name)), b);
     if (b?.dataset.act === "menu") return openMenu(name, b);
     openFull(name);
+    if (t("#waiting")) attend(name, openAsks.find((a) => a.jelly === name)?.id);
   });
   document.querySelector(".fbar").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]");
@@ -867,11 +892,12 @@
     if (ev.jelly === "page") return;
     notify(ev);
     if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
-    if (!jelly.isPerson(ev.by)) jiggle($("logo"));
+    if (!jelly.isPerson(ev.by)) { jiggle($("logo")); unremove(ev.jelly); }
     clearTimeout(pending);
     pending = setTimeout(refresh, 120); // one refresh per burst of changes
   });
   function applyFocus(s) {
+    if (s.shown) unremove(s.shown); // an agent shows it: it is wanted
     if (s.shown && s.shown !== full) openFull(s.shown, true);
     if (!s.shown && full) closeFull(true);
   }
