@@ -231,7 +231,13 @@ A question the person asks about a whole jelly arrives like a comment, marked
 "on the whole jelly"; answer it with `jelly reply`, and they read it in that jelly's header.
 
 `ask`, `do` and `shape` print `since seq:N`; pass it to `hear --wait
---since` to catch anything after your change. `hear --wait` exits 2 on timeout. In a
+--since` to catch anything after your change. `hear --wait` exits 2 on timeout,
+with nothing on stdout. With `--json` it prints the one event that ended the
+wait: `jelly`, `kind`, `by`, and `seq` (wait again from there with `--since
+seq:N`). A Send has `kind` `send` and the number of changes it hands back in
+`args`. With `--every` it is the first change: a `do` with `verb` and `args`,
+an `answer` with `args.id`, `args.option` and `args.text`. It holds no state;
+read that with `jelly state NAME`. In a
 script, add `--json` instead of parsing text. `hear` takes it only with
 `--wait`; `feed` prints text all the same; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
 `recipes`, `open`, `relay`, `takedown`, `serve`, `setup` and `update` refuse it.
