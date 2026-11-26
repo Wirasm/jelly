@@ -227,7 +227,21 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
 
 - Each shared jelly is one Durable Object. It holds the view, verbs, state,
   comments and asks, runs verbs in QuickJS (the daemon's engine, as
-  WebAssembly) with the same 1 s limit, and keeps an event log.
+  WebAssembly), and keeps an event log.
+- The daemon stops a verb after 1 s. A Worker's clock stands still while code
+  runs, so the relay counts steps instead: a verb gets about 50 million
+  (calls and loop turns), which an empty loop uses in a fraction of a second.
+  Work inside a builtin such as `JSON.stringify` does not count, so a loop
+  that does a lot of it each turn runs until Cloudflare's CPU limit (30 s)
+  resets the jelly's object; its pages and the daemon reconnect.
+- What a link sends is limited, so one person cannot fill the jelly: a
+  comment, reply or answer holds at most 10,000 characters, one change at most
+  256 KB (a verb's args, say), and a change from a link that would take the
+  jelly past 4 MB is refused ("This jelly is full"). The jelly is one SQLite
+  row, which holds 8 MB, so the rest stays for you: changes from your daemon
+  are not limited.
+- The event log is what the daemon catches up from. Each time it reconnects
+  the relay forgets the events it says it has mirrored, keeping the newest.
 - While shared, the relay's copy is the live one. The daemon forwards local
   changes (`call`, `set`, `shape`, `ask`, `withdraw`, `reply`, `resolve`) to
   it, and mirrors every change back over a WebSocket, so `inbox`, `wait` and
@@ -239,7 +253,7 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   under the view, in the relay's page: the view cannot remove or restyle it,
   and it covers nothing in the view. Pages on your own daemon do not have it.
 
-`npm test` runs the relay locally and checks what it counts; `npm run check`
+`npm test` runs the relay locally and checks it; `npm run check`
 typechecks it. Neither deploys anything.
 
 ## What it guarantees

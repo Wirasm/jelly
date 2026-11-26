@@ -63,8 +63,16 @@ const ASSET = new RegExp(`^/a/(${SHARE})/assets/([^/]+)$`);
 const OWNER = new RegExp(`^/api/live/(${SHARE})(/.*)?$`);
 /** What a link that may act can do. Everything else is the owner's. */
 const PERSON_OPS = ["do", "comment", "reply", "resolve", "answer", "send"];
-/** SQLite rows hold at most 2 MB, so assets are kept in parts. */
+/** Assets are kept in parts, so no row comes near SQLite's 8 MB row limit. */
 const PART = 1 << 20;
+/** The jelly is one row, so links may fill only part of it: a change from a
+ *  link that would take the saved jelly past this is refused, and the rest of
+ *  the row stays for the owner's daemon. */
+const LINK_FULL = 4 << 20;
+/** The most a link sends in one change (a verb's args, a comment's anchor), and
+ *  the longest comment, reply or answer it can write. The owner is not limited. */
+const LINK_MESSAGE = 256 * 1024;
+const LINK_TEXT = 10_000;
 const MAX_DAYS = 365;
 const MAX_HOURS = 24;
 /** Wrong tries, by anyone, before every live PIN locks. With one PIN live, a
@@ -90,6 +98,9 @@ const notFound = () =>
 <div><p>This link has expired or was never shared.</p>${MADE}</div></body>`,
     { status: 404, headers: { "Content-Type": "text/html; charset=utf-8", ...HEADERS } },
   );
+
+/** Bytes in `s` as UTF-8, as SQLite stores it. */
+const size = (s: string) => new TextEncoder().encode(s).length;
 
 const hex = (d: ArrayBuffer) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
@@ -170,7 +181,10 @@ export class Live extends DurableObject<Env> {
     this.seq = sql.exec<{ s: number | null }>("SELECT MAX(seq) AS s FROM events").one().s ?? 0;
   }
 
-  /** Columns added after the first relay: shares made before them get them here. */
+  /** Columns added after the first relay: shares made before them get them here.
+   *  `opened_ms` came on 21 November 2026, and a share lasts at most 365 days
+   *  unless the daemon extends it, which wakes it and runs this, so by
+   *  22 November 2027 no share can lack it and this can go. */
   private columns() {
     const sql = this.ctx.storage.sql;
     if (!sql.exec("SELECT 1 FROM pragma_table_info('people') WHERE name = 'opened_ms'").toArray().length) {
@@ -214,7 +228,7 @@ export class Live extends DurableObject<Env> {
    *  Object lets other requests in at every await, so reading the jelly, running
    *  the verb and saving the result must happen in one synchronous stretch. That
    *  is what makes verbs run one at a time, as the daemon's store lock does. */
-  private apply(mod: Awaited<ReturnType<typeof engine>>, op: Op, by: string): { events: Ev[]; doc: Partial<Doc> } {
+  private apply(mod: Awaited<ReturnType<typeof engine>>, op: Op, by: string, full: number): { events: Ev[]; doc: Partial<Doc> } {
     const d = this.doc!;
     const now = Date.now();
     let args: Json | undefined, verb: string | undefined, source: Json | undefined;
@@ -301,9 +315,13 @@ export class Live extends DurableObject<Env> {
     if (args !== undefined) ev.args = args;
     if (source !== undefined) ev.source = source;
     if (quiet) ev.quiet = true;
+    const saved = JSON.stringify(d);
+    if (full !== Infinity && size(saved) > full && size(saved) > size(this.get("doc")!)) {
+      throw new Refusal("This jelly is full, so it takes nothing more from links. Tell whoever shared it.");
+    }
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("INSERT INTO events (seq, ev) VALUES (?, ?)", ev.seq, JSON.stringify(ev));
-      this.put("doc", JSON.stringify(d));
+      this.put("doc", saved);
     });
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(JSON.stringify({ type: "events", events: [ev], doc: this.part(d, ev.kind, this.seat(ws).owner) })); } catch { /* closing */ }
@@ -312,28 +330,31 @@ export class Live extends DurableObject<Env> {
   }
 
   /** Runs `op` from a link or the owner: everything that can fail before the
-   *  change is awaited first, then the change itself runs without a break. */
-  private async change(op: Op, by: string) {
+   *  change is awaited first, then the change itself runs without a break.
+   *  `full` is the most the saved jelly may grow to: LINK_FULL for a link. */
+  private async change(op: Op, by: string, full = Infinity) {
     const mod = await engine();
     if (!this.doc) throw new Refusal("this jelly is no longer shared");
     try {
-      return this.apply(mod, op, by);
+      return this.apply(mod, op, by, full);
     } catch (e) {
-      // Refusals come before any change; a failed save (a jelly over 2 MB) does not.
+      // A verb, a full jelly or a failed save can refuse after the jelly in memory changed.
       this.doc = JSON.parse(this.get("doc")!);
       this.seq = this.ctx.storage.sql.exec<{ s: number | null }>("SELECT MAX(seq) AS s FROM events").one().s ?? 0;
       throw e;
     }
   }
 
-  /** Ends the share: everyone's socket closes and the storage is gone. */
+  /** Ends the share: everyone's socket closes and the storage is gone. It is
+   *  over before the first await, so a change that arrives meanwhile is
+   *  refused instead of landing and then being deleted unheard. */
   private async end(code: number, reason: string) {
-    for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
-    await this.env.PINS.getByName("pins").leave(this.share);
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
     this.doc = undefined;
     this.seq = 0;
+    for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
+    // Deletes the alarm too (compatibility date 2026-02-24 and later).
+    await this.ctx.storage.deleteAll();
+    await this.env.PINS.getByName("pins").leave(this.share);
   }
 
   async alarm() {
@@ -431,8 +452,14 @@ export class Live extends DurableObject<Env> {
     const reply = (ok: boolean, value?: unknown, error?: string) => ws.send(JSON.stringify({ type: "reply", ref: msg.ref, ok, value, error }));
     if (!seat.can_act) return reply(false, undefined, "This link is view only.");
     if (!msg.op || !PERSON_OPS.includes(msg.op)) return reply(false, undefined, `a link cannot ${msg.op}`);
+    if (message.length > LINK_MESSAGE) return reply(false, undefined, `This change is too big: a link sends at most ${LINK_MESSAGE / 1024} KB at a time.`);
+    const what = ({ comment: "A comment", reply: "A reply", answer: "An answer" } as Record<string, string>)[msg.op];
+    const text = String(msg.body?.text ?? "").trim();
+    if (what && text.length > LINK_TEXT) {
+      return reply(false, undefined, `${what} holds at most ${LINK_TEXT.toLocaleString("en")} characters; this one has ${text.length.toLocaleString("en")}. Shorten it or split it.`);
+    }
     try {
-      const { events, doc } = await this.change({ ...msg.body, op: msg.op }, `person:${seat.who}`);
+      const { events, doc } = await this.change({ ...msg.body, op: msg.op }, `person:${seat.who}`, LINK_FULL);
       reply(true, { ...events[0], state: doc.state });
     } catch (e) {
       reply(false, undefined, e instanceof Refusal ? e.message : String(e));
@@ -524,8 +551,13 @@ export class Live extends DurableObject<Env> {
         const [client, server] = Object.values(new WebSocketPair());
         this.ctx.acceptWebSocket(server, ["owner"]);
         server.serializeAttachment({ owner: true, who: "", can_act: true } satisfies Seat);
+        // The daemon has mirrored, and saved its place after, every event up
+        // to `since`, and only it reads events: those it has go. The newest
+        // stays, so the seq counts on when the object wakes.
+        const since = Number(url.searchParams.get("since")) || 0;
+        sql.exec("DELETE FROM events WHERE seq <= ? AND seq < ?", since, this.seq);
         // Catch up from where the daemon left off, then every change as it happens.
-        server.send(JSON.stringify(this.since(Number(url.searchParams.get("since")) || 0)));
+        server.send(JSON.stringify(this.since(since)));
         return new Response(null, { status: 101, webSocket: client });
       }
       const asset = path.match(/^assets\/([^/]+)$/);
@@ -557,9 +589,7 @@ export class Live extends DurableObject<Env> {
 export class Pins extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // `pins` held one PIN per share, before a PIN opened a room.
-    ctx.storage.sql.exec(`DROP TABLE IF EXISTS pins;
-      CREATE TABLE IF NOT EXISTS pin (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pin (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, misses INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS room (share TEXT PRIMARY KEY, name TEXT NOT NULL, label TEXT NOT NULL, at_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS misses (ip TEXT NOT NULL, at_ms INTEGER NOT NULL);`);
     counting.tables(ctx.storage.sql);
@@ -609,20 +639,18 @@ export class Pins extends DurableObject<Env> {
     const sql = this.ctx.storage.sql;
     const now = Date.now();
     const live = this.live(now);
-    let pin: string | null = null;
-    let expires_at = now + hours * 3_600_000;
-    if (live) {
-      expires_at = Math.max(live.expires_at, expires_at);
-      sql.exec("UPDATE pin SET expires_at = ?", expires_at);
-    } else {
-      pin = String(below(1_000_000)).padStart(6, "0");
-      sql.exec("INSERT INTO pin (hash, expires_at, misses) VALUES (?, ?, 0)", await this.hash(pin), expires_at);
-    }
+    const pin = live ? null : String(below(1_000_000)).padStart(6, "0");
+    const hash = pin && (await this.hash(pin));
+    const expires_at = Math.max(live?.expires_at ?? 0, now + hours * 3_600_000);
     // Added again, it is the newest: where people who type the PIN now land.
+    const room = [...this.room().filter((r) => r.share !== jelly.share), jelly];
+    // The room is told before anything is stored: when telling fails, the
+    // owner gets an error and no PIN is left working that they never saw.
+    await this.tell(room.map((r) => r.share), room, expires_at);
+    if (hash) sql.exec("INSERT INTO pin (hash, expires_at, misses) VALUES (?, ?, 0)", hash, expires_at);
+    else sql.exec("UPDATE pin SET expires_at = ?", expires_at);
     sql.exec("INSERT INTO room (share, name, label, at_ms) VALUES (?, ?, ?, ?) ON CONFLICT(share) DO UPDATE SET name = excluded.name, label = excluded.label, at_ms = excluded.at_ms",
       jelly.share, jelly.name, jelly.label, now);
-    const room = this.room();
-    await this.tell(room.map((r) => r.share), room, expires_at);
     return { pin, expires_at, room };
   }
 
