@@ -41,36 +41,55 @@ pub(super) async fn add(State(app): State<Shared>, Json(r): Json<WakeReq>) -> Re
 }
 
 /// Watches for a Send by anyone but an agent and wakes whoever asked for it.
+/// It reads Sends from the event log, as a wait does, and the live channel only
+/// wakes it, so a burst that overflows the channel cannot drop one.
 pub(super) fn start(app: &Shared) {
     let mut events = app.events.subscribe();
+    let (mut q, mut history) = {
+        let store = app.store.lock().expect("store lock");
+        let q = hear::WaitQ { since: Some(store.sequence()), by: "agent".into(), jelly: None, timeout: None, every: false };
+        match hear::History::at_end(&store) {
+            Ok(history) => (q, history),
+            Err(e) => { eprintln!("jelly: --wake cannot read the event log: {e}"); return; }
+        }
+    };
+    let app = app.clone();
     tokio::spawn(async move {
         loop {
-            let ev = match events.recv().await {
-                Ok(ev) => ev,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return,
-            };
-            if ev.kind != crate::store::EventKind::Send || ev.by == "agent" {
-                continue;
-            }
-            let project = ev.jelly.split_once(':').map_or("", |(p, _)| p);
-            let due: Vec<Wake> = {
-                let mut wakes = WAKES.lock().expect("wakes lock");
-                let (due, rest) = std::mem::take(&mut *wakes).into_iter()
-                    .partition(|w| w.jelly.as_ref().map_or(w.project == project, |j| *j == ev.jelly));
-                *wakes = rest;
-                due
-            };
-            for wake in due {
-                let jelly = ev.jelly.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = queue(&wake.codex_thread, &jelly).await {
-                        eprintln!("jelly: could not wake Codex session {}: {e}", wake.codex_thread);
-                    }
-                });
+            if let Err(broadcast::error::RecvError::Closed) = events.recv().await { return; }
+            loop {
+                let next = history.next_change(&app.store.lock().expect("store lock"), &q);
+                let ev = match next {
+                    Ok(Some(ev)) => ev,
+                    Ok(None) => break,
+                    // Tried again on the next event.
+                    Err(e) => { eprintln!("jelly: --wake could not read the event log: {e}"); break; }
+                };
+                q.since = Some(ev.seq);
+                wake(ev);
             }
         }
     });
+}
+
+/// Wakes the sessions waiting on this Send's jelly or project.
+fn wake(ev: Event) {
+    let project = ev.jelly.split_once(':').map_or("", |(p, _)| p);
+    let due: Vec<Wake> = {
+        let mut wakes = WAKES.lock().expect("wakes lock");
+        let (due, rest) = std::mem::take(&mut *wakes).into_iter()
+            .partition(|w| w.jelly.as_ref().map_or(w.project == project, |j| *j == ev.jelly));
+        *wakes = rest;
+        due
+    };
+    for wake in due {
+        let jelly = ev.jelly.clone();
+        tokio::spawn(async move {
+            if let Err(e) = queue(&wake.codex_thread, &jelly).await {
+                eprintln!("jelly: could not wake Codex session {}: {e}", wake.codex_thread);
+            }
+        });
+    }
 }
 
 async fn queue(thread: &str, jelly: &str) -> Result<(), String> {

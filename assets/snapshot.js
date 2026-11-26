@@ -2,6 +2,12 @@
 // nothing can change it. Views render exactly as they did when it was shared.
 (() => {
   const boot = window.__JELLY__;
+  // jelly's own look (assets/jelly.css), put here by the daemon as in runtime.js:
+  // in the head before first paint, and for a view's shadow roots as `jelly.css`.
+  const JELLY_CSS = "__JELLY_CSS__";
+  const jellyStyle = document.createElement("style");
+  jellyStyle.textContent = JELLY_CSS;
+  document.head?.appendChild(jellyStyle);
   const assets = new Map(boot.assets);
   const stylesheets = new Map();
   const assetBase = new URL("assets/", document.baseURI);
@@ -283,6 +289,7 @@
   window.jelly = {
     name: boot.name,
     about: boot.about,
+    css: JELLY_CSS,
     get state() { return boot.state; },
     onState(fn) { fn(boot.state, null); },
     do: readOnly,
@@ -301,6 +308,10 @@
       comment: readOnly,
       reply: readOnly,
       resolve: readOnly,
+      // Nobody waits on a file: nothing is ever unsent, and Send has no one to tell.
+      unsent: 0,
+      onUnsent(fn) { fn(0); },
+      send: () => Promise.resolve(),
     },
     who: (by) => (by === "person" ? "you" : String(by).startsWith("person:") ? by.slice(7) : by),
     isPerson: (by) => by === "person" || String(by).startsWith("person:"),

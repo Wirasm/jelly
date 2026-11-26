@@ -110,7 +110,7 @@ fn agent_commands_print_one_line_per_item_and_json_on_request() {
     assert!(line.starts_with("p:w v") && line.ends_with(": person click {}\n") && line.lines().count() == 1, "{line}");
     let full = parse(daemon.wait(&client, &["w", "--json"]));
     assert_eq!((full["jelly"].as_str(), full["verb"].as_str()), (Some("p:w"), Some("click")));
-    assert!(full["state"]["clicks"].as_u64().unwrap() > 0, "{full}");
+    assert!(full.get("state").is_none(), "{full}");
 }
 
 #[test]

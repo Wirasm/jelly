@@ -775,7 +775,11 @@
   // The person works through a jelly, then hands the turn back with one press.
   // A view that draws its own marks it with data-send and calls jelly.person.send().
   let sendEl = null;
+  // The note a failed Send left, which goes once a Send gets through.
+  let sendFailure = null;
+  const clearSendFailure = () => { if (sendFailure && failEl?.textContent === sendFailure) failEl.remove(); sendFailure = null; };
   function drawSend() {
+    if (unsent === 0) clearSendFailure();
     // The jelly page is not a jelly an agent waits on: it shows no Send.
     const show = unsent > 0 && boot.name !== "page" && document.body && !agentMode && share?.can_act !== false && !document.querySelector("[data-send]");
     if (!show) { sendEl?.remove(); sendEl = null; return; }
@@ -783,7 +787,15 @@
       sendEl = document.createElement("button");
       sendEl.className = "jf-btn jf-send";
       sendEl.title = "Tell the agent you are done here for now";
-      sendEl.onclick = (e) => { e.stopPropagation(); jelly.person.send().catch(console.error); };
+      // The button stays while the count does, so a Send that did not go can be pressed again.
+      sendEl.onclick = (e) => {
+        e.stopPropagation();
+        jelly.person.send().then(clearSendFailure, (err) => {
+          console.error(err);
+          showFailure(`Send did not reach the agent (${err.message}). Press Send again.`);
+          sendFailure = failEl?.textContent;
+        });
+      };
     }
     sendEl.textContent = `${unsent} change${unsent > 1 ? "s" : ""} · Send`;
     if (!sendEl.isConnected) ui().appendChild(sendEl);

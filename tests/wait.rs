@@ -136,7 +136,7 @@ fn mutation_tokens_and_spec_rounds_refer_to_their_own_events() {
 }
 
 #[test]
-fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
+fn a_wait_without_since_starts_now_and_since_timeout_keeps_its_diagnostic() {
     let daemon = Daemon::start();
     let asked = daemon.ok(&["ask", "plan", "Which?"]);
     daemon.post("/api/jellies/test:plan/asks/a1/answer", json!({"text": "yes", "by": "person"}));
@@ -164,8 +164,7 @@ fn ordinary_wait_remains_live_only_and_since_timeout_keeps_its_diagnostic() {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         let event: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(event["by"], "person");
-        assert_eq!(event.get("state").is_none(), since_mode);
-        if !since_mode { assert!(event["state"]["n"].as_u64().unwrap() > 0); }
+        assert!(event.get("state").is_none());
     }
 
     let head = daemon.log().last().unwrap()["seq"].clone();

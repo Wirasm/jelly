@@ -124,9 +124,20 @@ answers, verb calls, undos; `store::record`). A verb call the view made with
 `quiet: true`, which the daemon, the relay and the runtime all skip when they
 count. Nothing else about a quiet call changes. The runtime shows the count on its
 Send button, or a view draws its own (`data-send`, `jelly.person.send()`). `send`
-sets the count to zero and is the only event that ends `GET /api/wait` and the
-`jelly hear --wait` stream, unless `every=true` (`--every`). The relay keeps the
+sets the count to zero and is the only event that ends `GET /api/wait`, which is
+all `jelly hear --wait` does, unless `every=true` (`--every`). The wait reads
+`events.jsonl` after the `since` position, and the live bus only wakes it, so a
+reader that falls behind still hears the Send. Without `since` (no `--since`)
+the wait takes the daemon's newest event under the store lock, which every
+event is numbered and logged under, and reads from the end of the log, so it
+starts without reading history. `jelly` is a full name: the CLI resolves a
+short one in its project before it asks. The relay keeps the
 same count for a shared jelly.
+
+Two other listeners wake an agent on Send, and read Sends the same way. The
+daemon's `--wake` task (`server/wake.rs`) follows the log from its end, woken by
+the live bus. The Pi extension (`assets/pi-extension.ts`) runs one
+`jelly hear --wait --json` at a time, each `--since` the Send the last returned.
 
 ## Who is looking
 
@@ -134,8 +145,9 @@ Each open page tells the daemon, over its WebSocket, which jelly it shows and
 whether its tab is in front (`{"open": name, "visible": bool}`), on connect and
 on `visibilitychange`. Agent renders (`look`, `try`) do not. The daemon keeps
 this in memory by socket and drops it when the socket closes. `look`, `ask` and
-`show` report it; the jelly page counts for every jelly. People on a share link
-are not counted.
+`show` report it; the jelly page counts for every jelly. The page's hover
+preview of a row is a live frame of that jelly and reports itself too, but only
+ever beside the page, which already counts. People on a share link are not counted.
 
 The jelly page has a "Notify me" button while the browser has not been asked.
 Once allowed, the page shows a browser notification for an agent's ask when its
@@ -150,7 +162,8 @@ only while a jelly page is open in some tab, and not on share links.
 a few parts (`jy-bar`, `jy-chip`, `jy-btn`, `jy-action`, `jy-tag`, `jy-dot`,
 `jy-mark`). `server.rs` replaces the `"__JELLY_CSS__"` placeholder in
 `runtime.js` with the file's text, and that composed runtime is what
-`/runtime.js`, a share and an export get. The runtime adds it to the page's head
+`/runtime.js` and a share get, and does the same in `snapshot.js`, which an
+export gets in the runtime's place. The runtime adds it to the page's head
 before first paint. Tokens are set on `.jy` and `:host`: `<jelly-ui class="jy">`
 always has them, a view has them with `<html class="jy">`, and a shadow root with
 the text of `jelly.css` (`window.jelly.css`) in its own style element. The
@@ -182,6 +195,8 @@ the newest change on top, and `n` opens the next one at its ask. Each jelly in
 the list carries `archives_ms`: when `Store::sweep` will archive it, by the one
 rule in `Jelly::archives_ms`, or null when it will not (kept, archived, or an
 ask or comment still open). The page marks the last two days before that.
+It asks again 120 ms after the last of a burst of events, and at least once a
+second while events keep coming, so a jelly that never pauses cannot hold it back.
 
 Remove on the page takes the row away at once and sends the `DELETE` ten
 seconds later, so the person can undo it; a second remove, or leaving the page,

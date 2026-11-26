@@ -25,7 +25,7 @@ pub(super) async fn share(State(app): State<Shared>, Path(name): Path<String>) -
     let marker = format!("jelly-snapshot-{}", marker_bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
     let boot = json!({"name": j.name, "about": j.about, "state": j.state, "asks": j.asks, "assets": assets, "rootMarker": marker})
         .to_string().replace("</", "<\\/");
-    let inject = format!("<script>window.__JELLY__={boot};</script><script>{SNAPSHOT_JS}</script>");
+    let inject = format!("<script>window.__JELLY__={boot};</script><script>{}</script>", SNAPSHOT_JS.as_str());
     let mut base_href = None;
     lol_html::rewrite_str(&j.view, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
@@ -285,7 +285,7 @@ mod share_tests {
             }).collect::<String>())
             .replace("__TEST_RESULT__", &callback)
             .replace("__LIVE_RUNTIME__", &serde_json::to_string(RUNTIME_JS.as_str()).unwrap().replace("</", "<\\/"))
-            .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS).unwrap().replace("</", "<\\/"));
+            .replace("__SNAPSHOT_RUNTIME__", &serde_json::to_string(SNAPSHOT_JS.as_str()).unwrap().replace("</", "<\\/"));
         let (dir, app) = fixture(&view);
         {
             let mut store = app.store.lock().unwrap();
