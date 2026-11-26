@@ -7,71 +7,97 @@
 <meta name="jelly-comment" content="off">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2040%2040%22%3E%3Cpath%20d%3D%22M8%2030%20C4%2022%206%2010%2020%209%20C34%2010%2036%2022%2032%2030%20C29%2035%2011%2035%208%2030Z%22%20fill%3D%22%23ff4f8b%22/%3E%3Cellipse%20cx%3D%2215%22%20cy%3D%2216%22%20rx%3D%224%22%20ry%3D%222.4%22%20fill%3D%22%23fff%22%20opacity%3D%22.7%22/%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2224%22%20r%3D%221.9%22%20fill%3D%22%233b0a1e%22/%3E%3Ccircle%20cx%3D%2224%22%20cy%3D%2224%22%20r%3D%221.9%22%20fill%3D%22%233b0a1e%22/%3E%3C/svg%3E">
 <style>
-  /* Berry by day, Night jelly by night: the blob logo's own colours. The --dark-*
-     names are the kept panel and chrome, whichever theme is on. */
+  /* Berry by day, Night jelly by night: the blob logo's own colours. */
   :root {
     --page: var(--jy-page); --card: var(--jy-card); --ink: var(--jy-ink); --muted: var(--jy-muted); --line: var(--jy-line); --line-2: var(--jy-line-2);
-    --bar: var(--jy-bar); --bar-ink: var(--jy-ink); --bar-muted: #80626f; --bar-line: var(--jy-bar-line); --chip-on: var(--jy-on); --chip-on-ink: var(--jy-on-ink);
-    --dark: #fdf0f4; --dark-2: #ffffff; --dark-3: #f8e6ec; --dark-line: #f0dfe5;
-    --dark-ink: #2a1620; --dark-muted: #7d606c; --dark-faint: #80626f;
-    --brand: var(--jy-brand); --brand-ink: #ffffff; --brand-soft: var(--jy-brand-soft); --brand-soft-ink: var(--jy-brand-soft-ink); --brand-glow: var(--jy-glow);
+    --bar: var(--jy-bar); --bar-ink: var(--jy-ink); --bar-muted: var(--jy-muted); --bar-line: var(--jy-bar-line); --chip-on: var(--jy-on); --chip-on-ink: var(--jy-on-ink);
+    --brand: var(--jy-brand); --brand-soft: var(--jy-brand-soft); --brand-soft-ink: var(--jy-brand-soft-ink); --brand-glow: var(--jy-glow);
     --sun: var(--jy-sun); --sun-ink: var(--jy-sun-ink); --sun-soft: var(--jy-sun-soft);
-    --accent: var(--brand); --accent-ink: var(--brand-soft-ink); --warm: var(--sun);
-    --panel: rgba(42,22,32,.82); --panel-ink: #ffffff;
+    --accent: var(--brand); --accent-ink: var(--brand-soft-ink);
     --shadow: var(--jy-shadow);
     color-scheme: light;
     font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
-  @media (prefers-color-scheme: dark) { :root {
-    --bar-muted: #8a809e;
-    --dark: #0e0c14; --dark-2: #1d1928; --dark-3: #2a2438; --dark-line: #2e2740;
-    --dark-ink: #f1ecf7; --dark-muted: #a79dbb; --dark-faint: #9087a3;
-    --brand-ink: #ffffff;
-    --panel: rgba(29,25,40,.84); --panel-ink: #ffffff;
-    color-scheme: dark;
-  } }
+  @media (prefers-color-scheme: dark) { :root { color-scheme: dark; } }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink); overflow: hidden; }
-  button { font: inherit; color: inherit; }
-  .app { display: grid; grid-template-rows: 44px 1fr; grid-template-columns: 1fr 320px; height: 100%; }
-  .app.nokept { grid-template-columns: 1fr 0; }
+  button, input { font: inherit; color: inherit; }
+  .app { display: grid; grid-template-rows: 44px 1fr; grid-template-columns: 220px minmax(0, 1fr); height: 100%; }
 
   /* top bar */
   .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: var(--bar); color: var(--bar-ink); border-bottom: 1px solid var(--bar-line); }
-  .top b { font-size: 15px; letter-spacing: -.01em; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dark-faint); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); flex: none; }
   .dot.live { background: var(--accent); box-shadow: 0 0 0 3px var(--brand-glow); }
-  .top .count { color: var(--dark-faint); font-size: 12px; }
-  .projects { display: flex; gap: 2px; margin-left: 10px; overflow-x: auto; min-width: 0; }
-  /* More projects past the edge: fade it, so the hidden ones read as "scroll for more". */
-  .projects.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
-  .projects a { color: var(--bar-muted); text-decoration: none; font-size: 12.5px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
-  .projects a:hover { color: var(--bar-ink); background: var(--brand-soft); }
-  .projects a.on { color: var(--chip-on-ink); background: var(--chip-on); }
-  .projects a span { color: inherit; margin-left: 5px; font-variant-numeric: tabular-nums; }
-  .top .me { margin-left: auto; border: 1px solid var(--bar-line); background: none; color: var(--bar-muted); border-radius: 7px; padding: 3px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .find { position: relative; flex: 1; max-width: 420px; margin-left: 14px; }
+  .find input { width: 100%; padding: 5px 30px 5px 10px; border-radius: 8px; border: 1px solid var(--bar-line); background: var(--card); outline: none; }
+  .find input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--brand-glow); }
+  .find kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
+  .top .me { border: 1px solid var(--bar-line); background: none; color: var(--bar-muted); border-radius: 7px; padding: 3px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
   .top .me:hover { color: var(--bar-ink); background: var(--brand-soft); }
-  .top .keys { margin-left: 10px; color: var(--dark-faint); font-size: 11px; display: flex; gap: 10px; }
-  kbd { font: 10.5px ui-monospace, monospace; border: 1px solid var(--dark-line); border-radius: 4px; padding: 0 4px; color: var(--dark-muted); }
+  .top .sp { flex: 1; }
+  .top .keys { color: var(--bar-muted); font-size: 11px; display: flex; gap: 10px; white-space: nowrap; }
+  kbd { font: 10.5px ui-monospace, monospace; border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; color: var(--muted); }
 
-  /* stream */
-  .streamwrap { position: relative; min-height: 0; display: grid; }
-  .stream { overflow-y: auto; min-height: 0; }
-  .col { max-width: 1040px; margin: 0 auto; padding: 24px 28px 40vh; display: flex; flex-direction: column; gap: 28px; }
-  .entry { scroll-margin-top: 16px; }
-  .entry header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; margin-bottom: 10px; }
-  .av { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font: 600 12px -apple-system, sans-serif; background: var(--brand-soft); color: var(--brand-soft-ink); grid-row: span 2; }
-  .av.person { background: var(--sun-soft); color: var(--sun-ink); }
+  /* projects, down the side */
+  .rail { overflow-y: auto; min-height: 0; padding: 18px 10px 24px 14px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); }
+  .rail h2 { margin: 0 8px 8px; }
+  .rail a { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; color: var(--ink); text-decoration: none; min-width: 0; }
+  .rail a:hover { background: var(--card); }
+  .rail a.on { background: var(--chip-on); color: var(--chip-on-ink); font-weight: 600; }
+  .rail a .pn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail a .ct { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 400; }
+  .rail a.on .ct { color: inherit; }
+  .rail .padd { text-align: left; color: var(--muted); border: 1px dashed var(--line-2); background: none; border-radius: 8px; padding: 5px 8px; margin-top: 8px; cursor: pointer; }
+  .rail .padd:hover { color: var(--ink); border-color: var(--ink); }
+  .pin { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--accent); background: var(--card); outline: none; box-shadow: 0 0 0 3px var(--brand-glow); }
+  .rail .pin { width: 100%; margin-top: 8px; }
+  .rail .hint { color: var(--muted); font-size: 11.5px; padding: 4px 8px; }
+
+  /* the list */
+  .listwrap { position: relative; min-height: 0; display: grid; }
+  .list { overflow-y: auto; min-height: 0; padding: 22px 28px 30vh; }
+  .list > * { max-width: 1120px; margin-left: auto; margin-right: auto; }
+  section { margin-bottom: 34px; }
+  h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 4px 8px; display: flex; gap: 8px; align-items: center; font-weight: 600; }
+  h2 .n { letter-spacing: 0; text-transform: none; font-weight: 400; }
+  h2 .sp { flex: 1; }
+  h2.proj { font-size: 16px; letter-spacing: -.01em; text-transform: none; color: var(--ink); font-weight: 700; margin-bottom: 10px; }
+  h2.proj a { color: inherit; text-decoration: none; }
+  h2.proj a:hover { color: var(--accent-ink); }
+  h2.proj .n { font-size: 12px; color: var(--muted); }
+  h2.proj .pin { font-size: 14px; font-weight: 400; width: 240px; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 6px; }
+  .box.hot { border-color: var(--accent); box-shadow: 0 0 0 3px var(--brand-glow); }
+  .sub { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 10px 4px; font-weight: 600; }
+  .sub:first-child { margin-top: 6px; }
+  .cols { columns: 2; column-gap: 14px; }
+  .cols .row { break-inside: avoid; }
+  .none { color: var(--muted); padding: 8px 10px; }
+  .none code, .empty code { font: 11.5px ui-monospace, monospace; background: var(--line); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
+  .empty { max-width: 460px; margin: 18vh auto 0; text-align: center; color: var(--muted); }
+  .empty b { display: block; color: var(--ink); font-size: 18px; margin-bottom: 8px; }
+
+  /* one jelly, one line */
+  .row { display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; border-radius: 9px; cursor: pointer; min-height: 38px; }
+  .row:hover, .row:focus-within { background: var(--page); }
+  .row .fresh { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .row .fresh.new { background: var(--brand); }
+  .row .fresh.updated { box-shadow: inset 0 0 0 2px var(--brand); }
+  .row .open { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: baseline; text-align: left; border: 0; background: none; padding: 9px 0; cursor: pointer; font-size: 13.5px; }
+  .row .open:focus-visible { outline: none; }
+  .row:has(.open:focus-visible) { box-shadow: inset 0 0 0 2px var(--accent); }
+  .row .open b { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .row .open span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .row.arch .open b { font-weight: 500; color: var(--muted); }
+  .row .when { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; min-width: 52px; text-align: right; }
+  .row .chip { flex: none; color: var(--muted); font-size: 12px; text-decoration: none; white-space: nowrap; border-radius: 6px; padding: 1px 6px; }
+  .row .chip:hover { background: var(--brand-soft); color: var(--brand-soft-ink); }
+  .tag { flex: none; font: 600 10.5px -apple-system, sans-serif; border-radius: 999px; padding: 1px 8px; background: var(--sun); color: var(--sun-ink); white-space: nowrap; }
+  .tag.soft, .tag.work { background: var(--brand-soft); color: var(--brand-soft-ink); }
+  .tag.share { background: none; color: var(--ink); box-shadow: inset 0 0 0 1px var(--jy-good); }
+  .tag.soon { background: none; color: var(--ink); box-shadow: inset 0 0 0 1px var(--jy-warn); }
   .who { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
-  .who b { color: var(--ink); font-weight: 600; }
   .who code { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); }
-  .who .last { color: var(--accent-ink); }
-  .entry header .who { overflow-wrap: anywhere; }
-  .entry h2 { overflow-wrap: anywhere; grid-column: 2; font-size: 16px; line-height: 1.3; margin: 1px 0 0; font-weight: 600; letter-spacing: -.01em; }
-  .tag { font: 600 10.5px -apple-system, sans-serif; border-radius: 999px; padding: 1px 8px; background: var(--sun); color: var(--sun-ink); }
-  .tag.soft { background: var(--brand-soft); color: var(--brand-soft-ink); }
-  .acts { grid-row: 1 / span 2; grid-column: 3; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
-  .entry:hover .acts, .entry.sel .acts, .acts:focus-within, .acts:has(.on), .acts:has(.has) { opacity: 1; }
   .btn { font-size: 12.5px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
   .btn:hover { border-color: var(--line-2); }
   .btn.on { background: var(--sun); border-color: var(--sun); color: var(--sun-ink); }
@@ -79,10 +105,47 @@
   .btn.quiet:hover { background: var(--card); border-color: var(--line); color: var(--ink); }
   .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .btn.waiting { background: var(--brand-soft); border-color: var(--brand-soft); color: var(--brand-soft-ink); }
-  /* Copy reference: a small icon beside the jelly's name. */
-  .cp { display: inline-flex; align-items: center; gap: 4px; align-self: center; border: 0; background: none; color: var(--muted); padding: 2px 4px; border-radius: 5px; cursor: pointer; font-size: 11px; }
-  .cp:hover, .cp.ok { color: var(--ink); background: var(--brand-soft); }
-  .cp:focus-visible { outline: 2px solid var(--accent); }
+  h2 .btn { font-weight: 400; letter-spacing: 0; text-transform: none; }
+  /* Copy reference and the ··· menu: there on hover, on focus and on a phone. */
+  .cp, .dots { flex: none; display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--muted); padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+  .dots { font: 700 14px/1 -apple-system, sans-serif; letter-spacing: 1px; padding: 3px 7px 7px; }
+  .row .cp, .row .dots { opacity: 0; }
+  .row:hover .cp, .row:hover .dots, .row:focus-within .cp, .row:focus-within .dots, .cp.ok, .dots.on { opacity: 1; }
+  @media (hover: none) { .row .cp, .row .dots { opacity: 1; } }
+  .cp:hover, .cp.ok, .dots:hover, .dots.on { color: var(--ink); background: var(--brand-soft); }
+  .cp:focus-visible, .dots:focus-visible { outline: 2px solid var(--accent); }
+
+  /* what is shared */
+  .share { border-radius: 9px; padding: 2px 6px 2px 10px; }
+  .share + .share { border-top: 1px solid var(--line); border-radius: 0; }
+  .sh-top { display: flex; align-items: center; gap: 10px; min-height: 38px; }
+  .sh-top .open { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: baseline; text-align: left; border: 0; background: none; padding: 9px 0; cursor: pointer; font-size: 13.5px; }
+  .sh-top .open b { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-top .open span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-top .left { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+  .sh-top .left.low { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--jy-warn); text-underline-offset: 3px; }
+  .sh-p { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0 4px 14px; }
+  .sh-p .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex-wrap: nowrap; }
+  .sh-p .ap-done { margin-right: auto; white-space: nowrap; }
+
+  /* the ··· menu, the hover preview, the undo */
+  #menu { position: fixed; z-index: 30; min-width: 200px; max-height: 70vh; overflow-y: auto; padding: 5px; border-radius: 11px; background: var(--card); border: 1px solid var(--line-2); box-shadow: 0 18px 40px -18px var(--shadow); }
+  #menu[hidden], #peek[hidden], #toast[hidden] { display: none; }
+  #menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px; border-radius: 7px; cursor: pointer; }
+  #menu button:hover, #menu button:focus-visible { background: var(--page); outline: none; }
+  #menu .mh { font: 11px ui-monospace, monospace; color: var(--muted); padding: 5px 10px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+  #menu .ms { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+  #menu .bad { box-shadow: inset 2px 0 0 var(--jy-bad); border-radius: 0 7px 7px 0; }
+  #peek { position: fixed; z-index: 20; width: 404px; padding: 10px; border-radius: 12px; background: var(--card); border: 1px solid var(--line-2); box-shadow: 0 24px 60px -18px var(--shadow); pointer-events: none; }
+  #peek .shot { width: 384px; height: 240px; border-radius: 8px; overflow: hidden; background: var(--page); }
+  #peek iframe { width: 1280px; height: 800px; border: 0; transform: scale(.3); transform-origin: 0 0; }
+  #peek img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  #peek .cap { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font: 11px ui-monospace, monospace; color: var(--muted); }
+  #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 40; display: flex; gap: 14px; align-items: center; background: var(--ink); color: var(--page); border-radius: 12px; padding: 9px 10px 11px 16px; box-shadow: 0 18px 44px -16px var(--shadow); overflow: hidden; max-width: calc(100vw - 32px); }
+  #toast button { font-weight: 600; border: 0; border-radius: 8px; padding: 4px 12px; background: var(--page); color: var(--ink); cursor: pointer; }
+  #toast i { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--brand); transform-origin: left; animation: drain 10s linear forwards; }
+  @keyframes drain { to { transform: scaleX(0); } }
+
   /* Ask about the whole jelly: its threads and a field for a new question. */
   .askpop { position: fixed; z-index: 25; display: grid; gap: 8px; overflow-y: auto; background: var(--card); color: var(--ink); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 18px 40px -18px var(--shadow); padding: 10px; }
   .ap-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -94,73 +157,12 @@
   .ap-m.agent b { color: var(--accent-ink); }
   .ap-done { color: var(--muted); font-size: 12px; }
   .ap-reply { display: flex; gap: 6px; }
-  /* What is shared: who holds a link, whether they opened it, and a way to stop it. */
-  #shares:not([hidden]) + .me, #notify:not([hidden]) ~ .me { margin-left: 0; }
-  #shares .dot { display: inline-block; margin-right: 6px; vertical-align: 1px; }
-  #sharepop { top: 50px; right: 12px; width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 70px); }
-  .sh-j { font-weight: 600; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-right: auto; }
-  .sh-j:hover { color: var(--brand); }
-  .sh-p { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .sh-p .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .sh-p .ap-done { margin-right: auto; white-space: nowrap; }
-  .askpop textarea, .ap-reply input { font: inherit; color: var(--ink); background: var(--page); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+  .askpop textarea, .ap-reply input { color: var(--ink); background: var(--page); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; min-width: 0; }
   .ap-reply input { flex: 1; }
   .askpop textarea { resize: vertical; min-height: 64px; }
   .askpop textarea:focus, .ap-reply input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .ap-row { display: flex; align-items: center; gap: 8px; }
   .ap-row span { flex: 1; color: var(--muted); font-size: 12px; }
-  .frame { position: relative; border-radius: 12px; overflow: hidden; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px -18px rgba(16,24,23,.25); transition: box-shadow .2s, border-color .2s; }
-  .entry.sel .frame { border-color: var(--line-2); box-shadow: 0 0 0 3px var(--brand-glow), 0 12px 32px -18px var(--shadow); }
-  .entry.pulse .frame { animation: pulse 1.2s ease-out; }
-  @keyframes pulse { from { box-shadow: 0 0 0 4px var(--brand-glow); } }
-  .entry.arrive { animation: arrive .45s cubic-bezier(.2,.8,.3,1); }
-  @keyframes arrive { from { opacity: 0; transform: translateY(14px); } }
-  .frame.tall { max-height: 760px; }
-  .frame .more { display: none; }
-  .frame.tall .more { display: flex; position: absolute; left: 0; right: 0; bottom: 0; height: 110px; align-items: flex-end; justify-content: center; padding-bottom: 16px; gap: 8px;
-    background: linear-gradient(transparent, var(--card) 70%); }
-  .frame iframe { display: block; width: 100%; height: 520px; border: 0; background: var(--card); }
-  .end { color: var(--muted); text-align: center; font-size: 12px; padding: 4px 0; }
-  .arch { margin: 12px auto 0; max-width: 720px; display: grid; gap: 4px; text-align: left; }
-  .ar { display: grid; grid-template-columns: 160px 1fr auto auto; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
-  .ar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .empty code { font: 11.5px ui-monospace, monospace; background: var(--line); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
-  .empty { max-width: 460px; margin: 18vh auto 0; text-align: center; color: var(--muted); }
-  .empty h2 { color: var(--ink); font-size: 18px; margin: 0 0 8px; }
-  .newpill { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 5; max-width: 80%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--dark); color: var(--dark-ink); border: 0; border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; box-shadow: 0 10px 24px -8px rgba(0,0,0,.5); }
-
-  /* kept panel */
-  aside { background: var(--dark); color: var(--dark-ink); border-left: 1px solid var(--dark-line); overflow-y: auto; min-height: 0; padding: 4px 12px 16px; }
-  .nokept aside { display: none; }
-  @media (max-width: 900px) {
-    .top .keys { display: none; }
-    .col { padding: 16px 14px 40vh; }
-    .entry header { grid-template-columns: 28px minmax(0, 1fr); }
-    .entry header .acts { grid-column: 1 / -1; grid-row: 3; margin-top: 8px; flex-wrap: wrap; opacity: 1; }
-  }
-  .group { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--dark-faint); padding: 14px 4px 8px; display: flex; gap: 6px; }
-  .group .n { color: var(--dark-muted); }
-  .tag.work { background: var(--brand-soft); color: var(--brand-soft-ink); }
-  .tile { display: block; width: 100%; text-align: left; background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 10px; padding: 0; cursor: pointer; margin-bottom: 10px; overflow: hidden; }
-  .thumb { position: relative; height: 168px; overflow: hidden; background: var(--page); }
-  .thumb iframe { position: absolute; left: 0; top: 0; width: 1000px; height: 568px; border: 0; transform: scale(.296); transform-origin: 0 0; pointer-events: none; }
-  .tile .cap { padding: 8px 11px 9px; }
-  .tile .cap b { display: flex; gap: 6px; align-items: center; }
-  .tile .cap .n { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--warm); }
-  .tile .cap div { color: var(--dark-muted); font-size: 12px; margin-top: 1px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .quiet-note { color: var(--dark-faint); font-size: 12px; padding: 0 4px; }
-  @media (max-width: 900px) {
-    /* No room beside the stream: kept jellies become a row of names above it.
-       Tap one to open it; its full view has Stop keeping. */
-    .app, .app.nokept { grid-template-columns: minmax(0, 1fr); grid-template-rows: 44px auto 1fr; }
-    aside { grid-row: 2; display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 8px 14px; border-left: 0; border-bottom: 1px solid var(--dark-line); }
-    aside:not(:has(.tile)) { display: none; }
-    .streamwrap { grid-row: 3; }
-    aside .group { flex: none; padding: 0; }
-    .tile { flex: none; width: auto; max-width: 70vw; margin: 0; }
-    .tile .thumb, .tile .cap div { display: none; }
-    .tile .cap { padding: 7px 11px; white-space: nowrap; }
-  }
 
   /* full size */
   .full { position: fixed; inset: 44px 0 0 0; z-index: 10; display: flex; flex-direction: column; background: var(--page); animation: open .18s ease-out; }
@@ -170,17 +172,14 @@
   .fbar .title { flex: 1; min-width: 0; }
   .fbar h1 { font-size: 15px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fbar .who { overflow-wrap: anywhere; }
+  .fbar .who b { color: var(--ink); font-weight: 600; }
   .factions { display: flex; align-items: center; gap: 12px; flex: none; }
-  @media (max-width: 900px) {
-    .fbar { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 12px; }
-    .factions { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
-  }
   .full iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--card); }
   /* A shaped jelly's next version draws here, unseen, at the old frame's size. */
   iframe.next { position: fixed !important; left: 0 !important; top: 0 !important; width: var(--w) !important; height: var(--h) !important; opacity: 0; pointer-events: none; }
 
-  /* ---- brand and motion: calm base, jelly physics at key moments ---- */
-  .logo { flex: none; transform-origin: 50% 90%; cursor: pointer; }
+  /* the blob */
+  .logo { flex: none; transform-origin: 50% 90%; }
   .logo.jig { animation: jig .7s cubic-bezier(.3,1.6,.5,1); }
   .logo.happy { animation: hop 1s cubic-bezier(.3,1.6,.5,1); }
   .logo .eyes { transform-origin: 20px 24px; animation: blink 6s infinite; }
@@ -188,75 +187,57 @@
   @keyframes hop { 0% { transform: none; } 30% { transform: translateY(-8px) scale(.9,1.12); } 60% { transform: translateY(0) scale(1.15,.85); } }
   @keyframes blink { 0%, 96%, 100% { transform: scaleY(1); } 98% { transform: scaleY(.1); } }
   .word { font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
-  .entry.arrive { animation: drop .9s cubic-bezier(.3,1.5,.5,1); transform-origin: 50% 0; }
-  @keyframes drop { 0% { opacity: 0; transform: translateY(-28px) scale(.96,1.06); } 55% { opacity: 1; transform: translateY(0) scale(1.01,.98); } 80% { transform: scale(.998,1.004); } }
-  .badge-new { font: 700 10.5px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; background: #d81b60; color: #fff; animation: jig .8s cubic-bezier(.3,1.6,.5,1) both; }
-  .badge-upd { font: 700 10.5px -apple-system, sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; background: #ffe1ec; color: #b0124f; }
-  .entry.unseen .frame { border-color: #ffb3cf; box-shadow: 0 0 0 3px var(--brand-glow), 0 12px 32px -18px var(--shadow); }
-
-  /* ---- dock: what waits on the person: draggable, expands to hold every item ---- */
-  .dock { position: fixed; z-index: 20; right: 24px; bottom: 24px; }
-  .dock-btn { width: 42px; height: 42px; border: 0; border-radius: 46% 54% 50% 50% / 52% 48% 52% 48%; background: radial-gradient(circle at 35% 30%, #ffb3cf, #ff4f8b 60%, #d81b60); box-shadow: 0 14px 28px -10px rgba(216,27,96,.6), inset 0 -6px 12px rgba(0,0,0,.18); color: #fff; cursor: grab; display: grid; place-items: center; touch-action: none; }
-  .dock-btn:active { cursor: grabbing; }
-  .dock-btn.calm { background: radial-gradient(circle at 35% 30%, #fff, #f3d7e2 60%, #e2bccb); color: #a3134c; box-shadow: 0 10px 20px -10px var(--shadow); opacity: .9; }
-  .dock-btn.jig { animation: jig .8s cubic-bezier(.3,1.6,.5,1); }
-  .dock-n { font: 800 15px -apple-system, sans-serif; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
-  .dock-panel { position: absolute; right: 0; bottom: 50px; width: 270px; max-height: min(60vh, 460px); overflow-y: auto; background: var(--panel); -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2); color: var(--dark-ink); border: 1px solid rgba(255,255,255,.08); border-radius: 14px; box-shadow: 0 18px 40px -18px rgba(0,0,0,.55); padding: 6px; transform-origin: 100% 100%; animation: pop .3s cubic-bezier(.3,1.5,.5,1); }
-  .dock.below .dock-panel { bottom: auto; top: 48px; transform-origin: 100% 0; }
-  .dock.left .dock-panel { right: auto; left: 0; }
-  .dock-h { padding: 4px 6px 6px !important; } .dock-h b { font-size: 12.5px; }
-  .ditem { display: grid; grid-template-columns: 8px 1fr auto; gap: 8px; align-items: center; width: 100%; text-align: left; background: none; border: 0; color: var(--dark-ink); border-radius: 9px; padding: 7px 8px; cursor: pointer; font-size: 12.5px; }
-  .ditem:hover { background: rgba(255,255,255,.08); }
-  .ditem i { width: 8px; height: 8px; border-radius: 50%; background: #ff4f8b; }
-  .ditem i.reply { background: #ffcf3f; }
-  .ditem .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ditem .tt small { display: block; color: var(--dark-faint); font: 11px ui-monospace, monospace; }
-  .ditem .pg { color: var(--dark-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  @keyframes pop { from { opacity: 0; transform: scale(.85); } }
-  .dock-h { display: flex; gap: 8px; align-items: center; padding: 4px 4px 8px; }
-  .dock-h span { color: var(--dark-faint); font-size: 12px; flex: 1; }
-  .dock-h .btn { color: var(--dark-muted); }
-  .dock-list { display: grid; gap: 8px; }
-  .dock-empty { color: var(--dark-faint); font-size: 13px; padding: 14px 6px; text-align: center; }
-  .party { position: fixed; inset: 0; pointer-events: none; z-index: 30; }
-  .drop { position: absolute; width: 10px; height: 10px; border-radius: 50% 50% 50% 0; animation: fall 1.4s cubic-bezier(.2,.6,.4,1) forwards; }
-  @keyframes fall { from { transform: translate(0,0) rotate(0); opacity: 1; } to { transform: translate(var(--dx), var(--dy)) rotate(260deg); opacity: 0; } }
-  /* a newer jelly: a quiet card in the corner of the stream */
+  /* a newer jelly: a quiet card in the corner of the list */
   .update { position: absolute; left: 16px; bottom: 16px; z-index: 5; max-width: min(420px, calc(100% - 32px)); padding: 10px 12px; display: grid; gap: 8px; font-size: 12.5px; color: var(--muted); }
   .update[hidden] { display: none; }
   .update b { color: var(--ink); font-weight: 600; }
   .update code { display: block; margin-top: 4px; font: 11px ui-monospace, Menlo, monospace; color: var(--ink); overflow-wrap: anywhere; }
-  .update .row { display: flex; gap: 8px; align-items: center; }
-  .hl-target { outline: 3px solid #e8336f !important; outline-offset: 4px; border-radius: 6px; transition: outline-color .3s; }
-  @media (prefers-reduced-motion: reduce) { .logo, .logo .eyes, .entry.arrive, .badge-new, .dock-btn, .dock-panel, .need.melt, .drop { animation: none !important; } }
+  .update .row { display: flex; gap: 8px; align-items: center; padding: 0; min-height: 0; cursor: default; }
+  .update .row:hover { background: none; }
+
+  @media (max-width: 900px) {
+    /* No room beside the list: the projects become a strip above it. */
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 44px auto 1fr; }
+    .rail { flex-direction: row; align-items: center; overflow-x: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+    .rail h2, .rail a .ct { display: none; }
+    .rail a, .rail .padd, .rail .pin { flex: none; margin-top: 0; }
+    .rail .pin { width: 180px; }
+    .top .keys { display: none; }
+    .find { margin-left: 6px; }
+    .list { padding: 16px 12px 30vh; }
+    .cols { columns: 1; }
+    .row .open span, .row .when, .sh-top .open span { display: none; }
+    .row .open b { flex: 1; max-width: none; }
+    h2 { flex-wrap: wrap; }
+    .find { min-width: 90px; }
+    .fbar { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 12px; }
+    .factions { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .logo, .logo .eyes, #toast i, .full { animation: none !important; } }
 </style>
 </head>
 <body>
 <div class="app" id="app">
   <div class="top">
-    <svg class="logo" id="logo" width="28" height="28" viewBox="0 0 40 40" aria-label="jelly"><defs><radialGradient id="lg" cx="35%" cy="30%"><stop offset="0" stop-color="#ffb3cf"/><stop offset=".55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#d81b60"/></radialGradient></defs><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="url(#lg)"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><g class="eyes"><circle cx="16" cy="24" r="1.7" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.7" fill="#3b0a1e"/></g><path class="mouth" d="M18 27.5 Q20 29.3 22 27.5" stroke="#3b0a1e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg><b class="word">jelly</b><span class="dot" id="live" title="Connected"></span><nav class="projects" id="projects" aria-label="Projects"></nav>
+    <svg class="logo" id="logo" width="28" height="28" viewBox="0 0 40 40" aria-label="jelly"><defs><radialGradient id="lg" cx="35%" cy="30%"><stop offset="0" stop-color="#ffb3cf"/><stop offset=".55" stop-color="#ff4f8b"/><stop offset="1" stop-color="#d81b60"/></radialGradient></defs><path d="M8 30 C4 22 6 10 20 9 C34 10 36 22 32 30 C29 35 11 35 8 30Z" fill="url(#lg)"/><ellipse cx="15" cy="16" rx="4" ry="2.4" fill="#fff" opacity=".7"/><g class="eyes"><circle cx="16" cy="24" r="1.7" fill="#3b0a1e"/><circle cx="24" cy="24" r="1.7" fill="#3b0a1e"/></g><path class="mouth" d="M18 27.5 Q20 29.3 22 27.5" stroke="#3b0a1e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg><b class="word">jelly</b><span class="dot" id="live" title="Connected"></span>
+    <label class="find"><input id="q" placeholder="Find a jelly by name or what it is for" autocomplete="off" aria-label="Find a jelly"><kbd>/</kbd></label>
+    <span class="sp"></span>
     <button class="me" id="notify" hidden title="Show a notification when an agent asks you something and this tab is not in front">Notify me</button>
-    <button class="me" id="shares" hidden title="What you are sharing, who opened it, and stop sharing"></button>
     <button class="me" id="me" title="Your name on what you do here, so others can tell who did what"></button>
-    <span class="keys"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span><span><kbd>p</kbd> kept</span><span><kbd>a</kbd> asks</span></span>
+    <span class="keys"><span><kbd>n</kbd> next for you</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>c</kbd> comment</span></span>
   </div>
-  <div class="streamwrap">
-    <main class="stream" id="stream"><div class="col" id="col"></div></main>
-    <button class="newpill" id="newpill" hidden></button>
+  <nav class="rail" id="rail" aria-label="Projects"></nav>
+  <div class="listwrap">
+    <main class="list" id="list"></main>
     <div class="update jy-card" id="update" role="status" hidden></div>
   </div>
-  <aside id="board" aria-label="Kept jellies"></aside>
-  <div class="dock" id="dock" hidden>
-    <button class="dock-btn" id="dock-btn" title="Attention: drag to move, click to open (a)"><span class="dock-n" id="dock-n">0</span></button>
-    <div class="dock-panel" id="dock-panel" hidden><div class="dock-h"><b>Attention</b><span id="dock-sub"></span><button class="btn quiet" id="dock-close" title="Close (Esc)">✕</button></div><div class="dock-list" id="dock-list"></div></div>
-  </div>
-  <div class="party" id="party" aria-hidden="true"></div>
 </div>
 <section class="full" id="full" hidden>
   <div class="fbar">
-    <button class="btn" id="back" title="Back to the stream (Esc)">← Back</button>
+    <button class="btn" id="back" title="Back to the list (Esc)">← Back</button>
     <div class="title"><h1 id="ftitle"></h1><div class="who" id="fmeta"></div></div>
     <div class="factions">
+      <button class="btn quiet" id="fnext" hidden title="The next jelly that waits on you (n)"></button>
       <span id="fask"></span>
       <button class="btn" id="fcomment" title="Pin a comment to any part (c)">Comment</button>
       <button class="btn quiet" id="fundo">Undo</button>
@@ -265,19 +246,26 @@
     </div>
   </div>
 </section>
+<div id="menu" role="menu" aria-label="More for this jelly" hidden></div>
+<div id="peek" aria-hidden="true" hidden></div>
+<div id="toast" role="status" hidden></div>
 <script>
-  // The stream: every jelly that is not kept in the order agents made them, each with
-  // the agent's line of why. Beside it: the jellies the person kept.
+  // The jelly page: every jelly as one line, under its project. What waits on
+  // the person is first, then what is shared and what is about to be archived.
+  // A jelly opens full size, where the person comments, answers and asks.
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const enc = encodeURIComponent;
-  let jellies = [];
+  const slug = (n) => n.replace(/[^a-z0-9_-]/g, "-");
+  const DAY = 86400000;
+  let jellies = [];    // every jelly but the page itself, archived ones too
+  let projects = [];   // [{name, jellies}], empty projects too
+  let openAsks = [];   // open asks across this page's jellies
+  let shares = [];     // what is shared, from the daemon's record or the relay
   const byName = (n) => jellies.find((j) => j.name === n);
-  const entries = new Map();   // name -> stream <article>
-  const tiles = new Map();     // name -> kept tile
-  const lastEvent = new Map(); // name -> {text, by, at}
-  let sel = null, full = null, booted = false;
-  let archived = [], showArchived = false; // jellies hidden after a quiet week
+  let full = null, booted = false;
+  // What the person is in the middle of on this page; none of it is state anyone else needs.
+  const ui = { q: "", archived: new Set(), edit: null, share: null };
   // /p/<project> is this same page showing one project's jellies; / shows all.
   const PROJECT = location.pathname.startsWith("/p/") ? decodeURIComponent(location.pathname.slice(3)) : null;
   if (PROJECT) document.title = `${PROJECT} · jelly`;
@@ -289,309 +277,137 @@
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
   }
-  // On a project page names show without their project; on All they show in full.
-  const short = (n) => (PROJECT && n.startsWith(PROJECT + ":") ? n.slice(PROJECT.length + 1) : n);
+  // How long until `ms`: "3d", "5h 10m", "12m".
+  function left(ms) {
+    const m = Math.max(0, Math.round((ms - Date.now()) / 60000));
+    return m >= 1440 ? `${Math.floor(m / 1440)}d` : m >= 60 ? `${Math.floor(m / 60)}h${m < 600 && m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`;
+  }
+  const tail = (n) => n.slice(n.indexOf(":") + 1);
   const who = (by) => (by ? jelly.who(by) : "?");
-  let openAsks = []; // open asks across this page's jellies
-  function flags(j) {
-    const out = [];
-    if (j.working) out.push(`<span class="tag work">${esc(who(j.working.by))} is working</span>`);
-    if (j.open_asks) out.push(`<span class="tag">${j.open_asks} for you</span>`);
-    if (j.replies_waiting) out.push(`<span class="tag soft">${j.replies_waiting} repl${j.replies_waiting > 1 ? "ies" : "y"} for you</span>`);
-    else if (j.open_comments) out.push(`<span>${j.open_comments} open comment${j.open_comments > 1 ? "s" : ""}</span>`);
-    return out.join("");
-  }
-
-  // ---- stream ---------------------------------------------------------------
-
-  // Same origin, so the stream reads each view's height and gives it all the
-  // room it needs: one scrollbar for the whole stream, none inside entries.
-  // A view that fills its window (height: 100%) keeps the default height.
-  function autosize(f) {
-    f.addEventListener("load", () => {
-      const doc = f.contentDocument;
-      if (!doc?.body) return;
-      const fit = () => {
-        const cs = getComputedStyle(doc.body);
-        // Comment popovers float outside the body's flow; make room for them too.
-        const pops = [...doc.querySelectorAll(".jf-pop")].map((p) => p.getBoundingClientRect().bottom + 12);
-        const h = Math.max(doc.body.scrollHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom), ...pops);
-        f.style.height = Math.max(140, Math.min(h, 6000)) + "px";
-        // A long jelly folds so the stream stays a stream; Show all unfolds it.
-        const frame = f.parentElement;
-        if (frame.classList.contains("frame") && !frame.dataset.open) frame.classList.toggle("tall", h > 900);
-      };
-      new ResizeObserver(fit).observe(doc.body);
-      new MutationObserver(fit).observe(doc.body, { childList: true });
-      fit();
-    });
-  }
+  const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
+  const waits = (j) => (j.open_asks || 0) + (j.replies_waiting || 0);
+  // The daemon says when a jelly will be archived; the last two days of that get a mark.
+  const soon = (j) => j.archives_ms && j.archives_ms - Date.now() < 2 * DAY;
+  const shared = (n) => shares.some((s) => s.jelly === n);
+  const byChange = (a, b) => b.updated_ms - a.updated_ms;
+  const inScope = (j) => !PROJECT || j.project === PROJECT;
+  const matches = (j) => ui.q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => `${j.name} ${j.about || ""}`.toLowerCase().includes(w));
+  // The order `n` walks: what waits on the person, the one that changed last first.
+  const waiting = () => jellies.filter((j) => inScope(j) && waits(j) && !removing.has(j.name)).sort(byChange);
 
   // What the person has looked at, per jelly version, kept in the page's own state.
   const seenVersion = (n) => jelly.state.seen?.[n] || 0;
   function freshness(j) {
+    if (j.archived) return "";
     const v = seenVersion(j.name);
     if (!v) return "new";
     return j.version > v && !jelly.isPerson(j.made_by) ? "updated" : "";
   }
-  function entryHead(j) {
-    const last = lastEvent.get(j.name);
-    return `<span class="av ${jelly.isPerson(j.made_by) ? "person" : ""}">${esc(who(j.made_by)[0].toUpperCase())}</span>
-      <div class="who"><b>${esc(who(j.made_by))}</b><span>${ago(j.created_ms)}</span><code>${esc(short(j.name))}</code>${COPY}${{ new: '<span class="badge-new">New</span>', updated: '<span class="badge-upd">Updated</span>' }[freshness(j)] || ""}${flags(j)}
-        ${last ? `<span class="last">· ${esc(who(last.by))} ${esc(last.text)} ${ago(last.at)}</span>` : ""}</div>
-      <h2>${esc(j.about || j.name)}</h2>
-      <div class="acts">
-        ${askButton(j)}
-        <button class="btn" data-act="comment">Comment</button>
-        <button class="btn quiet" data-act="open" title="Open full size (↵)">Open</button>
-        <button class="btn quiet" data-act="keep" title="Keep it beside the stream">Keep</button>
-        <button class="btn quiet" data-act="rm">Remove</button>
-      </div>`;
-  }
-
-  function makeEntry(j) {
-    const a = document.createElement("article");
-    a.className = "entry";
-    a.dataset.name = j.name;
-    a.innerHTML = `<header></header><div class="frame"></div>`;
-    a.querySelector("header").innerHTML = entryHead(j);
-    const f = document.createElement("iframe");
-    f.src = `/j/${enc(j.name)}/`;
-    f.title = j.name;
-    f.dataset.jellySwap = "";
-    autosize(f);
-    a.querySelector(".frame").appendChild(f);
-    a.querySelector(".frame").insertAdjacentHTML("beforeend", `<div class="more"><button class="btn" data-act="unfold">Show all</button><button class="btn quiet" data-act="open">Open full size</button></div>`);
-    return a;
-  }
-
-  function renderStream() {
-    // Newest first: what an agent just made is at the top.
-    const list = jellies.filter((j) => !j.kept).sort((a, b) => b.created_ms - a.created_ms);
-    const col = $("col");
-    for (const [name, el] of entries) if (!list.some((j) => j.name === name)) { el.remove(); entries.delete(name); }
-    const fresh = [];
-    // Insert new entries where they belong without moving old ones: moving an
-    // iframe reloads it.
-    let prev = null;
-    for (const j of list) {
-      let el = entries.get(j.name);
-      if (!el) {
-        el = makeEntry(j);
-        entries.set(j.name, el);
-        if (prev) prev.after(el); else col.prepend(el);
-        if (booted) { el.classList.add("arrive"); fresh.push(el); }
-      } else {
-        const head = el.querySelector("header");
-        const on = head.querySelector('[data-act="comment"].on'); // keep comment mode across a re-render
-        head.innerHTML = entryHead(j);
-        if (on) setCommenting(head.querySelector('[data-act="comment"]'), true);
-      }
-      prev = el;
-    }
-    col.querySelector(".end")?.remove();
-    col.querySelector(".empty")?.remove();
-    col.insertAdjacentHTML("beforeend", list.length
-      ? `<div class="end">Agents add jellies here as they work. Kept ones move to the side. Quiet ones archive after a week.${archivedNote()}</div>`
-      : jellies.some((j) => j.kept)
-        // Everything here is kept, so the stream is empty but the project is not.
-        ? `<div class="empty"><h2>Everything${PROJECT ? ` in ${esc(PROJECT)}` : ""} is kept</h2>Kept jellies are under Kept. New ones agents make appear here.${archivedNote()}</div>`
-        : (PROJECT ? `<div class="empty"><h2>Nothing in ${esc(PROJECT)} yet</h2>Agents working in that repo put their jellies here. Move one in with <code>jelly move NAME ${esc(PROJECT)}</code>.</div>` : `<div class="empty"><h2>Nothing in the stream</h2>Agents put things here as they work. Ask one to show you something, or run <code>jelly ask</code>.</div>`));
-    if (fresh.length) arrived(fresh[0]);
-    watchSeen();
-  }
-
-  // A jelly counts as seen once most of it has been on screen for a moment.
-  const timers = new Map();
-  const io = new IntersectionObserver((list) => {
-    for (const e of list) {
-      const name = e.target.dataset.name;
-      if (e.isIntersecting && e.intersectionRatio > .35) {
-        if (!timers.has(name)) timers.set(name, setTimeout(() => markSeen(name), 1500));
-      } else { clearTimeout(timers.get(name)); timers.delete(name); }
-    }
-  }, { threshold: [0, .35, .6] });
-  function watchSeen() {
-    for (const [name, el] of entries) {
-      el.classList.toggle("unseen", freshness(byName(name) || {}) === "new");
-      if (!el.dataset.watched) { el.dataset.watched = 1; io.observe(el); }
-    }
-  }
   function markSeen(name) {
-    timers.delete(name);
     const j = byName(name);
     if (j && seenVersion(name) < j.version && !document.hidden) jelly.do("seen", { name, version: j.version }).catch(() => {});
   }
-
-  function archivedNote() {
-    if (!archived.length) return "";
-    const list = showArchived ? `<div class="arch">${archived.map((j) => `<div class="ar"><code>${esc(short(j.name))}</code><span>${esc(j.about)}</span><span>${ago(j.updated_ms)}</span><button class="btn quiet" data-restore="${esc(j.name)}">Restore</button></div>`).join("")}</div>` : "";
-    return ` <button class="btn quiet" data-toggle-arch>${showArchived ? "Hide" : "Show"} ${archived.length} archived</button>${list}`;
+  function tags(j, wide) {
+    const out = [];
+    if (j.working) out.push(`<span class="tag work">${esc(who(j.working.by))} is working</span>`);
+    if (j.open_asks) out.push(`<span class="tag">${j.open_asks} for you</span>`);
+    if (j.replies_waiting) out.push(`<span class="tag soft">${plural(j.replies_waiting, "reply", "replies")} for you</span>`);
+    else if (wide && j.open_comments) out.push(`<span>${plural(j.open_comments, "open comment")}</span>`);
+    if (shared(j.name)) out.push(`<span class="tag share">shared</span>`);
+    if (soon(j)) out.push(`<span class="tag soon" title="Nobody keeps it and it has been quiet. Keep it to stop this.">archives in ${left(j.archives_ms)}</span>`);
+    return out.join("");
   }
 
-  function arrived(el) {
-    const s = $("stream");
-    jiggle($("logo"));
-    if (s.scrollTop < 300) return select(el.dataset.name, true);
-    const pill = $("newpill");
-    pill.textContent = `↑ New: ${byName(el.dataset.name)?.about || el.dataset.name}`;
-    pill.hidden = false;
-    pill.onclick = () => { pill.hidden = true; select(el.dataset.name, true); };
+  // ---- the list ---------------------------------------------------------------
+
+  // One jelly on one line. `sec` keeps ids apart where a jelly shows in two
+  // sections; `chip` names its project where the section mixes projects.
+  function row(j, sec, chip) {
+    const f = freshness(j);
+    return `<div class="row${j.archived ? " arch" : ""}" data-name="${esc(j.name)}" id="${sec}-${slug(j.name)}">
+      <i class="fresh ${f}"${f ? ` title="${f === "new" ? "New to you" : "Changed since you looked"}"` : ""}></i>
+      <button class="open" title="${esc(j.name)}"><b>${esc(tail(j.name))}</b><span>${esc(j.about || "")}</span></button>
+      ${COPY}${tags(j)}${chip && j.project ? `<a class="chip" href="/p/${enc(j.project)}">${esc(j.project)}</a>` : ""}<span class="when">${ago(j.updated_ms)}</span>
+      <button class="dots" data-act="menu" aria-haspopup="menu" aria-label="More for ${esc(tail(j.name))}">···</button></div>`;
+  }
+  const rows = (list, sec, chip) => `<div class="${list.length > 8 ? "cols" : ""}">${list.map((j) => row(j, sec, chip)).join("")}</div>`;
+
+  // A project: what is kept, what is not, and what was archived, behind a button.
+  function projectSection(p, list) {
+    const kept = list.filter((j) => j.kept && !j.archived), rest = list.filter((j) => !j.kept && !j.archived), arch = list.filter((j) => j.archived);
+    const total = jellies.filter((j) => j.project === p).length, editing = ui.edit?.kind === "rename" && ui.edit.project === p;
+    const counts = total ? [kept.length && `${kept.length} kept`, rest.length && `${rest.length} not kept`, arch.length && `${arch.length} archived`].filter(Boolean).join(" · ") : "empty";
+    const showArch = ui.archived.has(p) || !!ui.q;
+    return `<section id="s-${slug(p || "none")}"><h2 class="proj">${editing ? `<input class="pin" id="rename" value="${esc(ui.edit.value)}" aria-label="New name for ${esc(p)}" autocomplete="off">` : p ? `<a href="/p/${enc(p)}">${esc(p)}</a>` : "No project"}
+      <span class="n">${counts}</span><span class="sp"></span>${p && !editing ? `<button class="btn quiet" data-rename="${esc(p)}">Rename</button>${total ? "" : `<button class="btn quiet" data-rmproject="${esc(p)}">Remove</button>`}` : ""}</h2>
+      <div class="box">${total ? "" : `<div class="none">No jellies yet. Agents working in a repo named ${esc(p)} put theirs here; move one in from its ··· menu.</div>`}
+        ${kept.length ? `<div class="sub">Kept</div>${rows(kept, "k")}` : ""}
+        ${rest.length ? `<div class="sub">Not kept</div>${rows(rest, "k")}` : ""}
+        ${arch.length ? (showArch ? `<div class="sub">Archived</div>${rows(arch, "k")}` : `<button class="btn quiet" data-arch="${esc(p)}">Show ${arch.length} archived</button>`) : ""}
+      </div></section>`;
   }
 
-  // ---- dock: what waits on the person ---------------------------------------------------------
+  const until = (ms) => `${left(ms)} left`;
+  function shareSection(list) {
+    return `<section><h2>Shared now <span class="n">${list.length}</span></h2><div class="box" id="shared">${list.map((s) => {
+      const i = shares.indexOf(s), here = s.people.reduce((n, p) => n + (p.here || 0), 0), named = s.people.filter((p) => p.who).length, anyone = s.people.some((p) => !p.who);
+      const how = [named && plural(named, "person", "people"), anyone && "a view-only link", !s.people.length && "a PIN only", here && `${here} here now`].filter(Boolean).join(" · ");
+      return `<div class="share"><div class="sh-top"><button class="open" data-share-open="${i}" title="Open ${esc(s.jelly)}"><b>${esc(PROJECT ? tail(s.jelly) : s.jelly)}</b><span>${esc(how)}</span></button>
+        ${s.expires_at ? `<span class="left${s.expires_at - Date.now() < DAY / 8 ? " low" : ""}" title="Until ${esc(new Date(s.expires_at).toLocaleString())}">${until(s.expires_at)}</span>` : ""}
+        <button class="btn quiet" data-share-who="${i}" aria-expanded="${ui.share === s.jelly}">${ui.share === s.jelly ? "Hide" : "Who"}</button><button class="btn" data-stop="${i}">Stop sharing</button></div>
+        ${ui.share !== s.jelly ? "" : (s.people.map((p, k) => `<div class="sh-p"><span class="dot${p.here ? " live" : ""}"></span>
+          <span class="who">${p.who ? esc(p.who) : "Anyone with the view-only link"}</span>
+          <span class="ap-done">${p.here ? "here now" : p.opened_ms ? `opened ${ago(p.opened_ms)}` : s.people_from === "relay" ? "not opened yet" : ""}${p.who && !p.can_act ? " · view only" : ""}</span>
+          ${s.links[p.who] ? `<button class="cp" data-copylink="${i}:${k}">Copy link</button>` : ""}
+          <button class="cp" data-revoke="${i}:${k}">Stop</button></div>`).join("") || `<div class="sh-p ap-done">No links yet: only a PIN.</div>`)
+          + (s.people_from === "relay" ? "" : `<div class="sh-p ap-done">The relay did not answer, so who opened it is unknown.</div>`)}
+      </div>`;
+    }).join("")}</div></section>`;
+  }
 
-  let dockOpen = false, lastCount = null;
-  let pendingAttend = null;
-  // One row per thing to do: a round of questions on an ask page is one row
-  // ("3 questions"), a single ask is one row, comment replies are one row.
-  function dockRows() {
-    const rows = [], groups = new Map();
-    for (const a of openAsks) {
-      if (!a.group) { rows.push({ ...a, kind: "ask" }); continue; }
-      const k = a.jelly + "/" + a.group;
-      if (!groups.has(k)) { const r = { jelly: a.jelly, id: a.id, kind: "ask", title: a.about || a.title, count: 0 }; groups.set(k, r); rows.push(r); }
-      groups.get(k).count++;
+  let drawn = { rail: "", list: "" };
+  function render() {
+    const scope = jellies.filter((j) => inScope(j) && !removing.has(j.name));
+    const found = scope.filter(matches), live = found.filter((j) => !j.archived);
+    // Projects, the one touched last first; empty ones after those, by name.
+    const last = (p) => Math.max(0, ...jellies.filter((j) => j.project === p).map((j) => j.updated_ms));
+    const names = [...new Set([...projects.map((p) => p.name), ...jellies.map((j) => j.project).filter(Boolean), ...(PROJECT ? [PROJECT] : [])])].sort((a, b) => last(b) - last(a) || a.localeCompare(b));
+    const link = (href, label, list, on) => { const w = list.filter(waits).length; return `<a href="${href}" class="${on ? "on" : ""}"><span class="pn">${esc(label)}</span>${w ? `<span class="tag" title="${w} wait on you">${w}</span>` : ""}<span class="ct">${list.filter((j) => !j.archived).length}</span></a>`; };
+    const rail = `<h2>Projects</h2>${link("/", "All", jellies, !PROJECT)}${names.map((p) => link(`/p/${enc(p)}`, p, jellies.filter((j) => j.project === p), p === PROJECT)).join("")}`
+      + (ui.edit?.kind === "new" ? `<input class="pin" id="newproject" value="${esc(ui.edit.value)}" placeholder="Name, then Enter" aria-label="Name of the new project" autocomplete="off"><div class="hint">a-z, 0-9, - and _</div>` : `<button class="padd" id="addproject">+ New project</button>`);
+
+    let html = "";
+    const w = found.filter(waits).sort(byChange);
+    if (w.length) html += `<section><h2>Waiting on you <span class="n">${w.length}</span><span class="sp"></span><span class="n"><kbd>n</kbd> next</span></h2><div class="box hot" id="waiting">${rows(w, "w", !PROJECT)}</div></section>`;
+    const sh = shares.filter((s) => found.some((j) => j.name === s.jelly));
+    if (sh.length) html += shareSection(sh);
+    const going = live.filter(soon).sort((a, b) => a.archives_ms - b.archives_ms);
+    if (going.length) html += `<section><h2>Disappearing soon <span class="n">${going.length} · archived after a quiet week unless you keep them</span></h2><div class="box" id="going">${rows(going, "g", !PROJECT)}</div></section>`;
+    if (!PROJECT && !ui.q && live.length) html += `<section><h2>Recent <span class="n">by last change</span></h2><div class="box" id="recent">${rows([...live].sort(byChange).slice(0, 8), "r", true)}</div></section>`;
+    for (const p of PROJECT ? [PROJECT] : [...names, ""]) {
+      const list = found.filter((j) => j.project === p).sort(byChange);
+      // While finding, a project with no match says nothing; an empty project shows so it can be filled or removed.
+      if (list.length || (p && !ui.q)) html += projectSection(p, list);
     }
-    const replies = jellies.filter((j) => j.replies_waiting > 0).map((j) => ({ jelly: j.name, kind: "reply", title: `${j.replies_waiting} comment repl${j.replies_waiting > 1 ? "ies" : "y"} from ${who(j.made_by)}` }));
-    return [...rows, ...replies];
-  }
-  // The dock only points: each row opens the jelly the item is on. Answering
-  // happens there, next to what it is about.
-  function row(a) {
-    const pg = a.count ? `${a.count} question${a.count > 1 ? "s" : ""}` : a.kind;
-    const item = a.kind === "reply" ? "" : esc(a.id);
-    return `<button class="ditem" data-goto="${esc(a.jelly)}" data-item="${item}" title="${esc(a.title)}"><i class="${esc(a.kind)}"></i><span class="tt">${esc(a.title)}<small>${esc(short(a.jelly))}</small></span><span class="pg">${pg}</span></button>`;
-  }
-  function renderDock() {
-    const items = dockRows();
-    const n = items.length;
-    $("dock").hidden = false;
-    $("dock-n").textContent = n || "✓";
-    $("dock-btn").classList.toggle("calm", !n);
-    $("dock-btn").title = n ? `${n} for you: click to open, drag to move (a)` : "Nothing waits on you";
-    $("dock-sub").textContent = n ? `${n} waiting` : "";
-    $("dock-list").innerHTML = n ? items.map(row).join("") : `<div class="dock-empty">Nothing is waiting on you.</div>`;
-    if (lastCount !== null && n > lastCount) jiggle($("dock-btn"));
-    if (lastCount > 0 && n === 0) celebrate();
-    lastCount = n;
-  }
-  function setDock(on) {
-    dockOpen = on;
-    $("dock-panel").hidden = !on;
-  }
-  function jiggle(el) {
-    if (!el) return;
-    el.classList.remove("jig"); void el.getBoundingClientRect(); el.classList.add("jig");
-  }
-  function celebrate() {
-    const logo = $("logo");
-    logo.classList.remove("happy"); void logo.getBoundingClientRect(); logo.classList.add("happy");
-    const r = $("dock-btn").getBoundingClientRect();
-    const colors = ["#ff4f8b", "#ffcf3f", "#7ee0a8", "#8b7cf6", "#46c4b8"];
-    for (let i = 0; i < 18; i++) {
-      const d = document.createElement("span");
-      d.className = "drop";
-      d.style.left = r.left + r.width / 2 + "px";
-      d.style.top = r.top + r.height / 2 + "px";
-      d.style.background = colors[i % colors.length];
-      const a = (Math.PI * 2 * i) / 18;
-      d.style.setProperty("--dx", Math.cos(a) * (60 + Math.random() * 60) + "px");
-      d.style.setProperty("--dy", Math.sin(a) * (60 + Math.random() * 60) - 40 + "px");
-      $("party").appendChild(d);
-      setTimeout(() => d.remove(), 1500);
+    if (!html) html = ui.q ? `<div class="empty"><b>Nothing matches “${esc(ui.q)}”</b>It looks in names and in what each jelly is for.</div>`
+      : `<div class="empty"><b>No jellies yet</b>Agents put things here as they work. Ask one to show you something, or run <code>jelly ask</code>.</div>`;
+
+    // Rows are plain markup, so a redraw is cheap; skipping an unchanged one keeps focus and the hover preview still.
+    for (const [key, next] of [["rail", rail], ["list", html]]) {
+      if (drawn[key] === next) continue;
+      const active = document.activeElement, id = $(key).contains(active) ? active.id || active.closest("[id]")?.id : null, wasOpen = active?.classList?.contains("open");
+      drawn[key] = next;
+      $(key).innerHTML = next;
+      const again = id && $(id);
+      if (again) (wasOpen ? again.querySelector(".open") || again : again).focus();
     }
-  }
-  // Drag the dock anywhere; a click (no drag) opens it. Where you put it is remembered in this browser.
-  (function dockDrag() {
-    const dock = $("dock"), btn = $("dock-btn");
-    const place = (x, y) => {
-      x = Math.max(8, Math.min(innerWidth - 62, x)); y = Math.max(52, Math.min(innerHeight - 62, y));
-      Object.assign(dock.style, { left: x + "px", top: y + "px", right: "auto", bottom: "auto" });
-      dock.classList.toggle("below", y < innerHeight / 2);
-      dock.classList.toggle("left", x < innerWidth / 2);
-    };
-    try { const p = JSON.parse(localStorage.getItem("jelly.dock") || "null"); if (p) place(p.x, p.y); } catch {}
-    let start = null, moved = false;
-    btn.addEventListener("pointerdown", (e) => { start = { x: e.clientX, y: e.clientY, r: btn.getBoundingClientRect() }; moved = false; btn.setPointerCapture(e.pointerId); });
-    btn.addEventListener("pointermove", (e) => {
-      if (!start) return;
-      const dx = e.clientX - start.x, dy = e.clientY - start.y;
-      if (!moved && Math.hypot(dx, dy) < 5) return;
-      moved = true;
-      place(start.r.left + dx, start.r.top + dy);
-    });
-    btn.addEventListener("pointerup", () => {
-      if (moved) { const r = btn.getBoundingClientRect(); try { localStorage.setItem("jelly.dock", JSON.stringify({ x: r.left, y: r.top })); } catch {} }
-      else setDock(!dockOpen);
-      start = null;
-    });
-  })();
-  $("dock-close").onclick = () => setDock(false);
-  $("dock").addEventListener("click", (e) => {
-
-    const g = e.target.closest("[data-goto]");
-    if (g) {
-      setDock(false);
-      openFull(g.dataset.goto);
-      pendingAttend = null;
-      if (g.dataset.item) {
-        const iframe = $("full").querySelector("iframe");
-        const request = { iframe, itemId: g.dataset.item };
-        pendingAttend = request;
-        const send = () => {
-          if (pendingAttend !== request || iframe !== $("full").querySelector("iframe")) { iframe.removeEventListener("load", send); return; }
-          if (iframe.contentDocument?.readyState !== "complete" || iframe.contentWindow.jelly?.name !== g.dataset.goto) return;
-          pendingAttend = null;
-          iframe.removeEventListener("load", send);
-          iframe.contentWindow.postMessage({ type: "jelly:ask", id: request.itemId }, location.origin);
-        };
-        iframe.addEventListener("load", send);
-        send();
-      }
-    }
-  });
-
-  // ---- kept ---------------------------------------------------------------
-
-  function renderBoard() {
-    const kept = jellies.filter((j) => j.kept).sort((a, b) => a.name.localeCompare(b.name));
-    const board = $("board");
-    for (const [name, t] of tiles) if (!kept.some((j) => j.name === name)) { t.remove(); tiles.delete(name); }
-    renderDock();
-    let head = board.querySelector(".pinhead");
-    if (!head) { head = document.createElement("div"); head.className = "group pinhead"; board.appendChild(head); }
-    head.innerHTML = `Kept<span class="n">${kept.length || ""}</span>`;
-    board.querySelector(".pinnote")?.remove();
-    if (!kept.length) head.insertAdjacentHTML("afterend", `<div class="quiet-note pinnote">Keep a jelly to hold it here.</div>`);
-    // Tiles hold live iframes: keep them and rewrite only the captions.
-    let prev = head;
-    for (const j of kept) {
-      let t = tiles.get(j.name);
-      if (!t) {
-        t = document.createElement("button");
-        t.className = "tile";
-        t.dataset.name = j.name;
-        // A jelly's poster (assets/poster.*) stands in for the live thumbnail when it has one.
-        t.innerHTML = j.poster
-          ? `<div class="thumb"><img alt="" src="/j/${enc(j.name)}/assets/${enc(j.poster)}" style="width:100%;height:100%;object-fit:cover;object-position:top"></div><div class="cap"></div>`
-          : `<div class="thumb"><iframe tabindex="-1" data-jelly-swap src="/j/${enc(j.name)}/"></iframe></div><div class="cap"></div>`;
-        tiles.set(j.name, t);
-      }
-      t.querySelector(".cap").innerHTML = `<b>${esc(short(j.name))}<span class="n">${j.replies_waiting ? "reply for you" : j.open_comments ? j.open_comments + " open" : ""}</span></b><div>${esc(j.about)}</div>`;
-      if (prev.nextElementSibling !== t) prev.after(t);
-      prev = t;
-    }
+    const edit = ui.edit && $(ui.edit.kind === "new" ? "newproject" : "rename");
+    if (edit && document.activeElement !== edit) { edit.focus(); edit.select(); }
+    $("fnext").hidden = !full || !waiting().some((j) => j.name !== full);
+    $("fnext").textContent = `Next for you · ${waiting().filter((j) => j.name !== full).length}`;
   }
 
-  // ---- selection, full size -------------------------------------------------
-
-  function select(name, scroll) {
-    if (!name) return;
-    sel = name;
-    for (const [n, el] of entries) el.classList.toggle("sel", n === name);
-    if (scroll) entries.get(name)?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }
+  // ---- full size ----------------------------------------------------------------
 
   // Older local focus echoes must not replace a more recent frame.
   let focusWrites = Promise.resolve(), pendingFocusWrites = 0;
@@ -602,9 +418,11 @@
       if (!pendingFocusWrites) applyFocus(jelly.state);
     });
   }
+  let pendingAttend = null, returnTo = null;
   function openFull(name, fromAgent) {
     if (!byName(name)) return;
-    closeAsk();
+    closeAsk(); closeMenu(); hidePeek();
+    if (!full) returnTo = document.activeElement?.closest?.(".row")?.id || null;
     if (full !== name) {
       pendingAttend = null;
       full = name;
@@ -617,61 +435,76 @@
     }
     $("full").hidden = false;
     renderFull();
-    setCommenting($("fcomment"), false);
+    setCommenting(false);
     if (!fromAgent) writeFocus(name);
     setTimeout(() => markSeen(name), 800);
   }
   function renderFull() {
     const j = byName(full);
-    if (!j) return closeFull();
+    if (!j || removing.has(full)) return closeFull();
     $("ftitle").textContent = j.about || j.name;
     $("fask").innerHTML = askButton(j);
-    $("fmeta").innerHTML = `<code>${esc(short(j.name))}</code>${COPY}<span>by ${esc(who(j.made_by))}</span><span>v${j.version}</span><span>${ago(j.updated_ms)}</span>${flags(j)}`;
-    $("fkeep").textContent = j.kept ? "Stop keeping" : "Keep";
+    $("fmeta").innerHTML = `<code>${esc(j.name)}</code>${COPY}<span>by ${esc(who(j.made_by))}</span><span>v${j.version}</span><span>${ago(j.updated_ms)}</span>${tags(j, true)}`;
+    $("fkeep").textContent = j.archived ? "Restore" : j.kept ? "Stop keeping" : "Keep";
   }
   function closeFull(fromAgent) {
     pendingAttend = null;
     if (!full) return;
     closeAsk();
-    const was = full;
     full = null;
     $("full").hidden = true;
     for (const f of $("full").querySelectorAll("iframe")) f.remove();
-    if (entries.has(was)) select(was, true);
     if (!fromAgent) writeFocus(null);
+    render();
+    (returnTo && $(returnTo))?.querySelector(".open")?.focus();
+  }
+  // Opens the jelly at one of its asks: the view scrolls to it once it has loaded.
+  function attend(name, itemId) {
+    const iframe = $("full").querySelector("iframe");
+    if (!itemId || !iframe) return;
+    const request = { iframe, itemId };
+    pendingAttend = request;
+    const send = () => {
+      if (pendingAttend !== request || iframe !== $("full").querySelector("iframe")) { iframe.removeEventListener("load", send); return; }
+      if (iframe.contentDocument?.readyState !== "complete" || iframe.contentWindow.jelly?.name !== name) return;
+      pendingAttend = null;
+      iframe.removeEventListener("load", send);
+      iframe.contentWindow.postMessage({ type: "jelly:ask", id: itemId }, location.origin);
+    };
+    iframe.addEventListener("load", send);
+    send();
+  }
+  function nextWaiting() {
+    const list = waiting();
+    if (!list.length) return;
+    const j = list[(list.findIndex((x) => x.name === full) + 1) % list.length];
+    openFull(j.name);
+    attend(j.name, openAsks.find((a) => a.jelly === j.name)?.id);
   }
 
   // ---- comments -------------------------------------------------------------
 
-  function setCommenting(button, on) {
-    button.classList.toggle("on", on);
-    button.textContent = on ? "Click a part · Esc" : "Comment";
+  function setCommenting(on) {
+    $("fcomment").classList.toggle("on", on);
+    $("fcomment").textContent = on ? "Click a part · Esc" : "Comment";
   }
-  const frameOf = (name) => (full ? $("full").querySelector("iframe") : entries.get(name)?.querySelector("iframe"));
-  const buttonOf = (name) => (full ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
-  // A message counts only from a frame of the jelly it names: one in its place in the
-  // stream (a reload swaps in a second for a moment) or, while it is open, the full view.
-  const framesOf = (name) => [...(entries.get(name)?.querySelectorAll("iframe") || []), ...(full === name ? $("full").querySelectorAll("iframe") : [])];
-  const sentBy = (e, name) => framesOf(name).some((f) => f.contentWindow === e.source);
-  // Each frame reports its own comment mode, so the button is the sender's: comment mode
-  // begun in the stream and ended behind the full view turns the stream's button off.
-  const buttonFor = (e, name) => ([...$("full").querySelectorAll("iframe")].some((f) => f.contentWindow === e.source)
-    ? $("fcomment") : entries.get(name)?.querySelector('[data-act="comment"]'));
-  function toggleComment(name) {
-    const f = frameOf(name), b = buttonOf(name);
-    if (!f || !b) return;
-    const on = !b.classList.contains("on");
-    setCommenting(b, on);
+  const frame = () => $("full").querySelector("iframe:not(.next)");
+  // A message counts only from the frame of the jelly it names, while it is open
+  // (a reload swaps in a second frame for a moment).
+  const sentBy = (e, name) => full === name && [...$("full").querySelectorAll("iframe")].some((f) => f.contentWindow === e.source);
+  function toggleComment() {
+    const f = frame();
+    if (!f) return;
+    const on = !$("fcomment").classList.contains("on");
+    setCommenting(on);
     f.contentWindow.postMessage({ type: "jelly:comment", on }, location.origin);
     f.focus();
   }
   addEventListener("message", (e) => {
     if (e.origin !== location.origin) return;
     const d = e.data;
-    if (d?.type === "jelly:commenting" && sentBy(e, d.name)) { const b = buttonFor(e, d.name); if (b) setCommenting(b, d.on); }
+    if (d?.type === "jelly:commenting" && sentBy(e, d.name)) setCommenting(d.on);
     if (d?.type === "jelly:show" && byName(d.name)) openFull(d.name);
-    // A click or Tab into a jelly never reaches this page, so the jelly says so.
-    if (d?.type === "jelly:focus" && sentBy(e, d.name) && !full) select(d.name);
     // Keys typed in a jelly that it did not use: the page's shortcuts, as if typed here.
     if (d?.type === "jelly:key" && sentBy(e, d.name)) shortcut(String(d.key));
     if (d?.type === "jelly:reload") {
@@ -686,18 +519,16 @@
   // they mean and where it stands.
   const COPY = `<button class="cp" data-act="copy" title="Copy a reference to this jelly, to paste to your agent" aria-label="Copy reference"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg></button>`;
   function reference(j) {
-    const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
     const maker = jelly.isPerson(j.made_by) ? j.made_by.slice(7) || "the person" : j.made_by;
-    const asks = [j.open_asks && n(j.open_asks, "open question"), j.answered && `${j.answered} answered`].filter(Boolean).join(", ");
-    const state = [`made by ${maker} ${ago(j.created_ms)}`, `updated ${ago(j.updated_ms)}`, `v${j.version}`, asks, j.open_comments && n(j.open_comments, "open comment")];
+    const asks = [j.open_asks && plural(j.open_asks, "open question"), j.answered && `${j.answered} answered`].filter(Boolean).join(", ");
+    const state = [`made by ${maker} ${ago(j.created_ms)}`, `updated ${ago(j.updated_ms)}`, `v${j.version}`, asks, j.open_comments && plural(j.open_comments, "open comment")];
     const about = (j.about || "").replace(/\s+/g, " ").trim();
     return `${j.name}${about ? ` · ${about}` : ""}\n${state.filter(Boolean).join(" · ")}`;
   }
-  async function copyRef(name, button) {
-    const text = reference(byName(name));
-    try { await navigator.clipboard.writeText(text); } catch { prompt("Copy this reference:", text); return; }
+  async function copyText(text, button) {
+    try { await navigator.clipboard.writeText(text); } catch { prompt("Copy this:", text); return; }
     button.classList.add("ok");
-    button.insertAdjacentHTML("beforeend", "<span>Copied</span>");
+    if (!button.querySelector("span")) button.insertAdjacentHTML("beforeend", "<span>Copied</span>");
     setTimeout(() => { button.classList.remove("ok"); button.querySelector("span")?.remove(); }, 1500);
   }
 
@@ -706,21 +537,20 @@
   // A comment without an anchor is about the whole jelly. It reaches the agent
   // like any comment (inbox, `jelly waiting`); its thread shows here, beside
   // the Ask button, because there is no element in the view to pin it to.
-  const DAY = 86400000;
   const lastAt = (c) => Math.max(c.at_ms, ...(c.replies || []).map((r) => r.at_ms));
   // Open threads, plus resolved ones from the last day so the person sees the answer.
   const wholeThreads = (j) => (j?.whole_jelly_comments || []).filter((c) => !c.resolved || Date.now() - lastAt(c) < DAY);
   const agentLast = (c) => !c.resolved && c.replies?.length && !jelly.isPerson(c.replies.at(-1).by);
   function askButton(j) {
-    const t = wholeThreads(j), waiting = t.some(agentLast);
-    const cls = (t.length ? " has" : "") + (waiting ? " waiting" : "") + (ask?.name === j.name && ask.full === !!full ? " on" : "");
-    const title = waiting ? "Your agent replied about this jelly" : "Ask your agent about this whole jelly";
+    const t = wholeThreads(j), waitingOn = t.some(agentLast);
+    const cls = (t.length ? " has" : "") + (waitingOn ? " waiting" : "") + (ask?.name === j.name ? " on" : "");
+    const title = waitingOn ? "Your agent replied about this jelly" : "Ask your agent about this whole jelly";
     return `<button class="btn${cls}" data-act="ask" title="${title}">Ask agent${t.length ? ` · ${t.length}` : ""}</button>`;
   }
 
-  let ask = null; // the open panel: { name, full, el }
+  let ask = null; // the open panel: { name, el }
   function openAsk(name) {
-    if (ask?.name === name && ask.full === !!full) return closeAsk();
+    if (ask?.name === name) return closeAsk();
     closeAsk();
     const el = document.createElement("div");
     el.className = "askpop";
@@ -729,7 +559,7 @@
       <textarea class="ap-new" rows="3" placeholder="Ask your agent about this jelly"></textarea>
       <div class="ap-row"><span>Your agent gets it like a comment. Replies show here.</span><button class="btn" data-ap="send">Send</button></div>`;
     document.body.appendChild(el);
-    ask = { name, full: !!full, el };
+    ask = { name, el };
     el.addEventListener("click", (e) => {
       const b = e.target.closest("[data-ap]");
       if (!b) return;
@@ -749,7 +579,7 @@
     if (!ask) return;
     ask.el.remove();
     ask = null;
-    redrawAskButtons();
+    if (full && byName(full)) $("fask").innerHTML = askButton(byName(full));
   }
   // A field with data-id replies on that thread; the new-question field starts one.
   async function sendAsk(field) {
@@ -759,39 +589,33 @@
     const ok = await act(`/api/jellies/${enc(ask.name)}/${id ? "reply" : "comment"}`, id ? { id, text } : { anchor: null, text });
     if (ok) field.value = "";
   }
-  // Under its button, inside the window; hidden while the button is scrolled away.
+  // Under its button, inside the window.
   function placeAsk() {
     if (!ask) return;
-    const b = ask.full ? $("fask").querySelector("button") : entries.get(ask.name)?.querySelector('[data-act="ask"]');
+    const b = $("fask").querySelector("button");
     if (!b) return closeAsk();
     const r = b.getBoundingClientRect(), w = Math.min(360, innerWidth - 16), el = ask.el;
-    el.hidden = r.bottom < 44 || r.top > innerHeight;
     el.style.width = w + "px";
     el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
     el.style.top = r.bottom + 6 + "px";
     el.style.maxHeight = Math.max(160, innerHeight - r.bottom - 18) + "px";
   }
-  function redrawAskButtons() {
-    for (const [name, el] of entries) { const b = el.querySelector('[data-act="ask"]'); if (b && byName(name)) b.outerHTML = askButton(byName(name)); }
-    if (full && byName(full)) $("fask").innerHTML = askButton(byName(full));
-  }
   // Threads change under an open panel; drafts in its reply fields survive.
   function redrawAsk() {
     if (!ask) return;
     const j = byName(ask.name);
-    if (!j) return closeAsk();
+    if (!j || full !== ask.name) return closeAsk();
     const list = ask.el.querySelector(".ap-list");
     const drafts = new Map([...list.querySelectorAll("input[data-id]")].map((i) => [i.dataset.id, i.value]));
     const focused = document.activeElement?.dataset?.id;
     list.innerHTML = wholeThreads(j).map((c) => `<div class="ap-t">${[c, ...(c.replies || [])].map((m) => `<div class="ap-m${jelly.isPerson(m.by) ? "" : " agent"}"><b>${esc(who(m.by))}</b>${esc(m.text)}</div>`).join("")}
       ${c.resolved ? '<div class="ap-done">Resolved</div>' : `<div class="ap-reply"><input data-id="${esc(c.id)}" placeholder="Reply" aria-label="Reply"><button class="btn quiet" data-ap="resolve" data-id="${esc(c.id)}">Resolve</button></div>`}</div>`).join("");
     for (const i of list.querySelectorAll("input[data-id]")) { i.value = drafts.get(i.dataset.id) || ""; if (i.dataset.id === focused) i.focus(); }
-    redrawAskButtons();
+    $("fask").innerHTML = askButton(j);
     placeAsk();
   }
   addEventListener("pointerdown", (e) => { if (ask && !ask.el.contains(e.target) && !e.target.closest('[data-act="ask"]')) closeAsk(); });
   addEventListener("resize", placeAsk);
-  $("stream").addEventListener("scroll", placeAsk, { passive: true });
 
   // ---- shape --------------------------------------------------------------
 
@@ -809,7 +633,6 @@
     f.classList.add("next");
     f.style.setProperty("--w", old.offsetWidth + "px");
     f.style.setProperty("--h", old.offsetHeight + "px");
-    if (old.parentElement.classList.contains("frame")) autosize(f);
     f.addEventListener("load", () => {
       const win = f.contentWindow;
       win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
@@ -826,7 +649,7 @@
         delete f.swapFor;
         if (focused) f.focus();
         win.__jellyCarry?.put(kept);
-        if (frameOf(name) === f && buttonOf(name)?.classList.contains("on")) win.postMessage({ type: "jelly:comment", on: true }, location.origin);
+        if ($("fcomment").classList.contains("on")) win.postMessage({ type: "jelly:comment", on: true }, location.origin);
       }));
     }, { once: true });
     old.after(f);
@@ -836,118 +659,187 @@
 
   async function act(path, body, method = "POST") {
     const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify({ ...body, by: jelly.person.by }) });
-    if (!r.ok) alert((await r.json()).error);
+    if (!r.ok) alert((await r.json().catch(() => ({}))).error || "That did not work.");
     return r.ok;
   }
-  const keep = (name) => act(`/api/jellies/${enc(name)}/keep`, { kept: !byName(name).kept });
-  const remove = (name) => { if (confirm(`Remove ${name} and its history?`)) act(`/api/jellies/${enc(name)}?by=${enc(jelly.person.by)}`, null, "DELETE"); };
+  const keep = (name) => { const j = byName(name); return j.archived ? act(`/api/jellies/${enc(name)}/restore`, {}) : act(`/api/jellies/${enc(name)}/keep`, { kept: !j.kept }); };
 
-  $("col").addEventListener("click", (e) => {
-    const r = e.target.closest("[data-restore]");
-    if (r) return act(`/api/jellies/${enc(r.dataset.restore)}/restore`, {});
-    if (e.target.closest("[data-toggle-arch]")) { showArchived = !showArchived; return renderStream(); }
-    const name = e.target.closest(".entry")?.dataset.name;
-    if (!name) return;
-    select(name);
-    const b = e.target.closest("[data-act]");
-    if (b) ({ ask: () => openAsk(name), copy: () => copyRef(name, b), comment: () => toggleComment(name), open: () => openFull(name), unfold: () => { const fr = b.closest(".frame"); fr.dataset.open = 1; fr.classList.remove("tall"); }, keep: () => keep(name), rm: () => remove(name) })[b.dataset.act]();
+  // Remove takes the jelly off the list at once and deletes it ten seconds
+  // later, so a slip can be taken back. A second remove, or leaving the page,
+  // settles the first.
+  const removing = new Map(); // name -> the timer that deletes it
+  const removeUrl = (name) => `/api/jellies/${enc(name)}?by=${enc(jelly.person.by)}`;
+  function remove(name) {
+    if (shared(name)) return alert(`${name} is shared. Stop sharing it first.`);
+    for (const n of [...removing.keys()]) settle(n);
+    removing.set(name, setTimeout(() => settle(name), 10000));
+    $("toast").innerHTML = `<span>Removed <b>${esc(tail(name))}</b></span><button id="unremove">Undo</button><i></i>`;
+    $("toast").hidden = false;
+    if (full === name) closeFull(); else render();
+  }
+  async function settle(name) {
+    clearTimeout(removing.get(name));
+    $("toast").hidden = true;
+    // The row stays hidden until the list comes back without it; if the daemon refuses, it returns.
+    await act(removeUrl(name), null, "DELETE");
+    removing.delete(name);
+    refresh();
+  }
+  $("toast").addEventListener("click", (e) => {
+    if (e.target.id !== "unremove") return;
+    for (const [name, timer] of removing) { clearTimeout(timer); removing.delete(name); }
+    $("toast").hidden = true;
+    render();
   });
-  $("board").addEventListener("click", (e) => {
+  addEventListener("pagehide", () => { for (const name of removing.keys()) fetch(removeUrl(name), { method: "DELETE", keepalive: true }); });
 
-    const name = e.target.closest("[data-name]")?.dataset.name;
+  // The ··· on a row: what is done on purpose, so one step further away than copy.
+  let menuFor = null;
+  function openMenu(name, button) {
+    if (menuFor === name && !$("menu").hidden) return closeMenu();
+    closeMenu(); hidePeek();
+    const j = byName(name), m = $("menu");
+    menuFor = name;
+    button.classList.add("on");
+    const others = [...new Set([...projects.map((p) => p.name), ...jellies.map((x) => x.project)])].filter((p) => p && p !== j.project).sort();
+    m.innerHTML = `<div class="mh">${esc(j.name)}</div>
+      <button role="menuitem" data-m="keep">${j.archived ? "Restore" : j.kept ? "Stop keeping" : "Keep"}</button>
+      <button role="menuitem" class="bad" data-m="remove">Remove</button>
+      ${others.length ? `<div class="ms">Move to</div>${others.map((p) => `<button role="menuitem" data-m="move" data-p="${esc(p)}">${esc(p)}</button>`).join("")}` : ""}`;
+    m.hidden = false;
+    const r = button.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+    m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
+    m.style.top = Math.max(8, r.bottom + 4 + h > innerHeight - 8 ? r.top - h - 4 : r.bottom + 4) + "px";
+    m.querySelector("button").focus();
+  }
+  function closeMenu() {
+    if ($("menu").hidden) return;
+    $("menu").hidden = true;
+    document.querySelectorAll(".dots.on").forEach((d) => d.classList.remove("on"));
+  }
+  $("menu").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-m]");
+    if (!b) return;
+    const name = menuFor;
+    closeMenu();
+    if (b.dataset.m === "keep") keep(name);
+    if (b.dataset.m === "remove") remove(name);
+    if (b.dataset.m === "move") act(`/api/jellies/${enc(name)}/move`, { project: b.dataset.p });
+  });
+  addEventListener("pointerdown", (e) => { if (!e.target.closest("#menu, .dots")) closeMenu(); });
+
+  // Rest on a row for half a second: a small live look at that jelly, or its poster if it has one.
+  let peekTimer = 0, peekName = null;
+  function showPeek(el) {
+    const j = byName(el.dataset.name);
+    if (!j || full || !$("menu").hidden) return;
+    peekName = j.name;
+    const src = `/j/${enc(j.name)}/`, p = $("peek");
+    p.innerHTML = `<div class="shot">${j.poster ? `<img alt="" src="${src}assets/${enc(j.poster)}">` : `<iframe tabindex="-1" title="" src="${src}"></iframe>`}</div><div class="cap"><span>${esc(j.name)}</span><span>v${j.version}</span></div>`;
+    p.hidden = false;
+    const r = el.getBoundingClientRect(), w = 404, h = p.offsetHeight;
+    p.style.left = Math.max(8, Math.min(r.left + 140, innerWidth - w - 8)) + "px";
+    p.style.top = Math.max(8, r.bottom + 6 + h > innerHeight - 8 ? r.top - h - 6 : r.bottom + 6) + "px";
+  }
+  function hidePeek() { clearTimeout(peekTimer); peekName = null; $("peek").hidden = true; $("peek").innerHTML = ""; }
+  $("list").addEventListener("mouseover", (e) => {
+    const r = e.target.closest(".row");
+    if (r && r.dataset.name === peekName) return;
+    hidePeek();
+    if (r) peekTimer = setTimeout(() => showPeek(r), 500);
+  });
+  $("list").addEventListener("mouseleave", hidePeek);
+  $("list").addEventListener("scroll", () => { hidePeek(); closeMenu(); }, { passive: true });
+
+  // Projects: make one, rename one (its jellies move with it), remove an empty one.
+  const projectAt = (p) => `/api/projects/${enc(p)}`;
+  async function finishEdit(input) {
+    const e = ui.edit, name = input.value.trim();
+    if (!name || (e.kind === "rename" && name === e.project)) { ui.edit = null; return render(); }
+    if (e.kind === "new") { if (await act("/api/projects", { name })) location.href = `/p/${enc(name)}`; return; }
+    const merge = projects.some((p) => p.name === name) || jellies.some((j) => j.project === name);
+    if (merge && !confirm(`There is already a project ${name}. Move every jelly in ${e.project} into it?`)) return;
+    if (!(await act(`${projectAt(e.project)}/move`, { to: name }))) return;
+    ui.edit = null;
+    if (PROJECT === e.project) location.href = `/p/${enc(name)}`; else refresh();
+  }
+  $("app").addEventListener("input", (e) => { if (ui.edit && e.target.classList.contains("pin")) ui.edit.value = e.target.value; });
+  $("app").addEventListener("keydown", (e) => {
+    if (!e.target.classList.contains("pin")) return;
+    if (e.key === "Enter") finishEdit(e.target);
+    if (e.key === "Escape") { e.stopPropagation(); ui.edit = null; render(); }
+  });
+  $("rail").addEventListener("click", (e) => { if (e.target.id === "addproject") { ui.edit = { kind: "new", value: "" }; render(); } });
+
+  $("list").addEventListener("click", async (e) => {
+    const t = (sel) => e.target.closest(sel);
+    if (t("[data-arch]")) { ui.archived.add(t("[data-arch]").dataset.arch); return render(); }
+    if (t("[data-rename]")) { const p = t("[data-rename]").dataset.rename; ui.edit = { kind: "rename", project: p, value: p }; return render(); }
+    if (t("[data-rmproject]")) { const p = t("[data-rmproject]").dataset.rmproject; if (await act(projectAt(p), null, "DELETE")) { if (PROJECT === p) location.href = "/"; else refresh(); } return; }
+    if (t("#shared")) return shareClick(e);
+    if (t("a, input")) return;
+    const name = t(".row")?.dataset.name;
     if (!name) return;
-    if (entries.has(name) && !full) select(name, true); else openFull(name);
+    const b = t("[data-act]");
+    if (b?.dataset.act === "copy") return copyText(reference(byName(name)), b);
+    if (b?.dataset.act === "menu") return openMenu(name, b);
+    openFull(name);
   });
   document.querySelector(".fbar").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]");
     if (b?.dataset.act === "ask") openAsk(full);
-    if (b?.dataset.act === "copy") copyRef(full, b);
+    if (b?.dataset.act === "copy") copyText(reference(byName(full)), b);
   });
   $("back").onclick = () => closeFull();
-  $("fcomment").onclick = () => toggleComment(full);
+  $("fnext").onclick = nextWaiting;
+  $("fcomment").onclick = toggleComment;
   $("fundo").onclick = () => act(`/api/jellies/${enc(full)}/undo`, {});
   $("fkeep").onclick = () => keep(full);
   $("frm").onclick = () => remove(full);
-  $("stream").addEventListener("scroll", () => {
-    const s = $("stream");
-    if (s.scrollTop < 200) $("newpill").hidden = true;
-  });
+  $("q").addEventListener("input", (e) => { ui.q = e.target.value.trim(); render(); });
 
   // The page's shortcuts, for keys typed on the page and keys a jelly passes up.
   // Returns true when the key did something. Letters ignore Caps Lock.
   function shortcut(key) {
     if (key.length === 1) key = key.toLowerCase();
     if (key === "Escape" && ask) return closeAsk(), true;
-    if (key === "Escape" && dockOpen) return setDock(false), true;
-    if (key === "a") return setDock(!dockOpen), true;
+    if (key === "Escape" && !$("menu").hidden) return closeMenu(), true;
     if (key === "Escape" && full) return closeFull(), true;
-    if (key === "c") return toggleComment(full || sel), true;
-    if (full) return false;
-    const names = [...entries.keys()].sort((a, b) => byName(b).created_ms - byName(a).created_ms);
-    const i = names.indexOf(sel);
-    if (key === "j" || key === "ArrowDown") return select(names[Math.min(names.length - 1, i + 1)], true), true;
-    if (key === "k" || key === "ArrowUp") return select(names[Math.max(0, i - 1)], true), true;
-    if (key === "Enter" && sel) return openFull(sel), true;
-    if (key === "p") return $("app").classList.toggle("nokept"), true;
+    if (key === "n") return nextWaiting(), true;
+    if (full) return key === "c" ? (toggleComment(), true) : false;
+    if (key === "/") return $("q").focus(), $("q").select(), true;
+    if (["j", "k", "ArrowDown", "ArrowUp"].includes(key)) {
+      const all = [...$("list").querySelectorAll(".row .open")], i = all.indexOf(document.activeElement), down = key === "j" || key === "ArrowDown";
+      const to = all[i < 0 ? 0 : Math.max(0, Math.min(all.length - 1, i + (down ? 1 : -1)))];
+      if (to) { to.focus(); to.scrollIntoView({ block: "nearest" }); }
+      return true;
+    }
     return false;
   }
   addEventListener("keydown", (e) => {
     if (e.key === "Escape" && ask) return closeAsk();
+    if (e.key === "Escape" && e.target === $("q")) { $("q").value = ui.q = ""; $("q").blur(); return render(); }
     if (e.target.closest("input, textarea, select") || e.target.isContentEditable || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (shortcut(e.key) && e.key.startsWith("Arrow")) e.preventDefault();
+    if (shortcut(e.key) && (e.key.startsWith("Arrow") || e.key === "/")) e.preventDefault();
   });
 
   // ---- live -----------------------------------------------------------------
 
-  function describe(ev) {
-    if (ev.kind === "do") return ev.verb;
-    if (ev.kind === "comment") return "commented";
-    if (ev.kind === "reply") return "replied on a comment";
-    if (ev.kind === "shape") return "shaped it";
-    if (ev.kind === "working") return ev.args ? `started: ${ev.args}` : "finished";
-    if (ev.kind === "ask") return `asked: ${ev.args?.title || ""}`;
-    if (ev.kind === "answer") return "answered";
-    return ev.kind;
-  }
-
-  function renderProjects(all) {
-    const counts = {}, latest = {};
-    for (const j of all) if (j.project) {
-      counts[j.project] = (counts[j.project] || 0) + 1;
-      latest[j.project] = Math.max(latest[j.project] || 0, j.updated_ms || 0);
-    }
-    const link = (href, label, n, on) => `<a href="${href}" class="${on ? "on" : ""}">${esc(label)}<span>${n}</span></a>`;
-    // Most recently active first, so the projects in use are the visible ones.
-    const nav = $("projects");
-    nav.innerHTML = link("/", "All", all.length, !PROJECT)
-      + Object.keys(counts).sort((a, b) => latest[b] - latest[a] || a.localeCompare(b)).map((p) => link(`/p/${enc(p)}`, p, counts[p], p === PROJECT)).join("")
-      + (PROJECT && !counts[PROJECT] ? link(`/p/${enc(PROJECT)}`, PROJECT, 0, true) : "");
-    fadeProjects();
-  }
-  function fadeProjects() {
-    const nav = $("projects");
-    nav.classList.toggle("more", nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1);
-  }
-
-  $("projects").addEventListener("scroll", fadeProjects, { passive: true });
-  addEventListener("resize", fadeProjects);
-
+  function jiggle(el, cls = "jig") { el.classList.remove(cls); void el.getBoundingClientRect(); el.classList.add(cls); }
+  let lastWaiting = null;
   async function refresh() {
-    const all = (await (await fetch("/api/jellies")).json()).filter((j) => j.name !== "page");
-    const live = all.filter((j) => !j.archived);
-    const scope = (list) => (PROJECT ? list.filter((j) => j.project === PROJECT) : list);
-    jellies = scope(live);
-    archived = scope(all.filter((j) => j.archived));
-    renderProjects(live);
-    openAsks = await (await fetch(`/api/asks?project=${enc(PROJECT || "")}`)).json();
-    renderStream();
-    renderBoard();
+    const json = (url) => fetch(url).then((r) => r.json());
+    [jellies, projects, openAsks] = await Promise.all([json("/api/jellies"), json("/api/projects"), json(`/api/asks?project=${enc(PROJECT || "")}`)]);
+    jellies = jellies.filter((j) => j.name !== "page");
+    render();
     if (full) renderFull();
     redrawAsk();
+    // Nothing waits on the person any more: the blob hops.
+    const n = waiting().length;
+    if (lastWaiting > 0 && n === 0) jiggle($("logo"), "happy");
+    lastWaiting = n;
     if (!booted) {
       booted = true;
-      // Newest is at the top, so the page opens there.
-      select([...entries.keys()][0], false);
       if (jelly.state.shown && byName(jelly.state.shown)) openFull(jelly.state.shown, true);
     }
   }
@@ -976,9 +868,6 @@
     notify(ev);
     if (ev.view_rev) viewRevs.set(ev.jelly, ev.view_rev);
     if (!jelly.isPerson(ev.by)) jiggle($("logo"));
-    if (ev.kind !== "remove") lastEvent.set(ev.jelly, { text: describe(ev), by: ev.by, at: ev.at_ms || Date.now() });
-    const el = entries.get(ev.jelly);
-    if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
     clearTimeout(pending);
     pending = setTimeout(refresh, 120); // one refresh per burst of changes
   });
@@ -990,74 +879,40 @@
   jelly.onState((s, ev) => {
     if (!ev || !booted) return;
     if (ev.verb === "show" && pendingFocusWrites) return;
-    if (ev.verb === "seen") return renderStream(); // a jelly was looked at: update New / Updated
+    if (ev.verb === "seen") return render(); // a jelly was looked at: its mark goes
     applyFocus(s);
   });
-  setInterval(() => jellies.length && (renderStream(), renderBoard()), 30000); // keep "3m ago" honest
-  // ---- shares: what is shared, who opened it, stop it --------------------------
-  let shares = [], sharepop = null;
-  const until = (ms) => { const d = Math.ceil((ms - Date.now()) / 86400000); return d > 1 ? `ends in ${d} days` : "ends within a day"; };
-  function drawShares() {
-    const here = shares.reduce((n, s) => n + s.people.reduce((m, p) => m + (p.here || 0), 0), 0);
-    $("shares").hidden = !shares.length;
-    $("shares").innerHTML = `<span class="dot${here ? " live" : ""}"></span>${shares.length} shared${here ? ` · ${here} here` : ""}`;
-    if (!sharepop) return;
-    if (!shares.length) return closeShares();
-    sharepop.innerHTML = `<div class="ap-h"><b>Shared</b><button class="btn quiet" data-close title="Close (Esc)">✕</button></div>` + shares.map((s, i) => `
-      <div class="ap-t">
-        <div class="sh-p"><span class="sh-j" data-open="${i}" title="Open ${esc(s.jelly)}">${esc(short(s.jelly))}</span>
-          <span class="ap-done">${s.expires_at ? until(s.expires_at) : ""}</span>
-          <button class="btn" data-stop="${i}">Stop sharing</button></div>
-        ${s.people.map((p, k) => `<div class="sh-p"><span class="dot${p.here ? " live" : ""}"></span>
-          <span class="who">${p.who ? esc(p.who) : "Anyone with the view-only link"}</span>
-          <span class="ap-done">${p.here ? "here now" : p.opened_ms ? `opened ${ago(p.opened_ms)}` : s.people_from === "relay" ? "not opened yet" : ""}${p.who && !p.can_act ? " · view only" : ""}</span>
-          ${s.links[p.who] ? `<button class="cp" data-copy="${i}:${k}">Copy link</button>` : ""}
-          <button class="cp" data-revoke="${i}:${k}">Stop</button></div>`).join("") || `<div class="ap-done">No links yet: only a PIN.</div>`}
-        ${s.people_from === "relay" ? "" : `<div class="ap-done">The relay did not answer, so who opened it is unknown.</div>`}
-      </div>`).join("");
-  }
+  // Keep "3m ago" and "archives in 5h" honest, and pick up a project made from the CLI.
+  setInterval(() => (document.hidden ? 0 : refresh()), 30000);
+
+  // ---- shares: what is shared, for how long, who opened it, stop it ------------
   async function loadShares() {
     // Who opened a link and who is here now is asked of the relay, and only
-    // while the panel that shows it is open: an idle page costs the relay nothing.
-    try { shares = await (await fetch(sharepop ? "/api/shares?here=true" : "/api/shares")).json(); } catch { return; }
-    if (!Array.isArray(shares)) shares = [];
-    if (PROJECT) shares = shares.filter((s) => s.jelly.startsWith(PROJECT + ":"));
-    drawShares();
+    // while a share's people are showing: an idle page costs the relay nothing.
+    let list;
+    try { list = await (await fetch(ui.share ? "/api/shares?here=true" : "/api/shares")).json(); } catch { return; }
+    shares = Array.isArray(list) ? list : [];
+    if (ui.share && !shared(ui.share)) ui.share = null;
+    render();
   }
-  function closeShares() { sharepop?.remove(); sharepop = null; }
-  $("shares").onclick = (e) => {
-    e.stopPropagation();
-    if (sharepop) return closeShares();
-    sharepop = document.createElement("div");
-    sharepop.className = "askpop"; sharepop.id = "sharepop";
-    sharepop.onclick = async (e) => {
-      e.stopPropagation();
-      const b = e.target.closest("[data-close], [data-open], [data-stop], [data-copy], [data-revoke]");
-      if (!b) return;
-      if (b.dataset.close !== undefined) return closeShares();
-      if (b.dataset.open) { const name = shares[b.dataset.open].jelly; closeShares(); return openFull(name); }
-      const [i, k] = (b.dataset.stop ?? b.dataset.copy ?? b.dataset.revoke).split(":"), s = shares[i], p = s.people[k];
-      if (b.dataset.copy) {
-        await navigator.clipboard.writeText(s.links[p.who]);
-        b.textContent = "Copied"; b.classList.add("ok");
-        return;
-      }
-      const what = p ? `Stop ${p.who || "the view-only link"} on ${short(s.jelly)}? Their link stops working and their open page closes.`
-        : `Stop sharing ${short(s.jelly)}? Every link stops working. The jelly stays here with its last state.`;
-      if (!confirm(what)) return;
-      const r = await fetch(`/api/jellies/${enc(s.jelly)}/share${p ? `?to=${enc(p.who)}` : ""}`, { method: "DELETE" });
-      if (!r.ok) alert((await r.json().catch(() => ({}))).error || "Could not stop it.");
-      loadShares();
-    };
-    document.body.appendChild(sharepop);
-    drawShares();
+  async function shareClick(e) {
+    const b = e.target.closest("[data-share-open], [data-share-who], [data-stop], [data-copylink], [data-revoke]");
+    if (!b) return;
+    if (b.dataset.shareOpen) return openFull(shares[b.dataset.shareOpen].jelly);
+    if (b.dataset.shareWho) { const name = shares[b.dataset.shareWho].jelly; ui.share = ui.share === name ? null : name; return loadShares(); }
+    const [i, k] = (b.dataset.stop ?? b.dataset.copylink ?? b.dataset.revoke).split(":"), s = shares[i], p = s.people[k];
+    if (b.dataset.copylink) return copyText(s.links[p.who], b);
+    const what = p ? `Stop ${p.who || "the view-only link"} on ${s.jelly}? Their link stops working and their open page closes.`
+      : `Stop sharing ${s.jelly}? Every link stops working. The jelly stays here with its last state.`;
+    if (!confirm(what)) return;
+    const r = await fetch(`/api/jellies/${enc(s.jelly)}/share${p ? `?to=${enc(p.who)}` : ""}`, { method: "DELETE" });
+    if (!r.ok) alert((await r.json().catch(() => ({}))).error || "Could not stop it.");
     loadShares();
-  };
-  addEventListener("click", () => closeShares());
-  addEventListener("keydown", (e) => { if (e.key === "Escape" && sharepop) closeShares(); });
+  }
   // What is shared, and who is here, change without any event reaching this page, so ask again now and then.
   setInterval(loadShares, 20000);
   loadShares();
+
   // ---- a newer jelly ---------------------------------------------------------
   // The daemon asks npm once a day. This page asks the daemon every hour, and
   // every second while an update runs: the daemon's new start time says the new
@@ -1105,7 +960,7 @@
     if (name === null) return;
     jelly.person.name = name;
     drawMe();
-    renderStream(); renderBoard();
+    render();
   };
   drawMe();
   $("live").classList.add("live");

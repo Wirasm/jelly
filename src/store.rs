@@ -940,11 +940,9 @@ impl Store {
     /// Archives jellies nobody keeps or touched for `idle_ms`, unless they still
     /// wait on the person (an open ask or an open comment).
     pub fn sweep(&mut self, idle_ms: u64) -> Vec<Event> {
-        let cutoff = now_ms().saturating_sub(idle_ms);
+        let now = now_ms();
         let stale: Vec<String> = self.list()
-            .filter(|j| !j.kept && !j.archived && j.name != PAGE && j.updated_ms < cutoff)
-            .filter(|j| j.comments.iter().all(|f| f.resolved))
-            .filter(|j| j.asks.iter().all(|a| !a.is_open()))
+            .filter(|j| j.archives_ms(idle_ms).is_some_and(|at| at < now))
             .map(|j| j.name.clone())
             .collect();
         stale.iter().filter_map(|n| match self.set_archived(n, true, "jelly") {
@@ -1759,6 +1757,15 @@ impl Jelly {
     /// The project part of `project:name`, or "".
     pub fn project(&self) -> &str {
         self.name.split_once(':').map_or("", |(p, _)| p)
+    }
+
+    /// When `Store::sweep` archives this jelly, given how long one may stay
+    /// quiet: `idle_ms` after its last change. None while it is kept, already
+    /// archived, or still waits on someone (an open ask or an open comment).
+    pub fn archives_ms(&self, idle_ms: u64) -> Option<u64> {
+        let stays = self.kept || self.archived || self.name == PAGE
+            || self.comments.iter().any(|c| !c.resolved) || self.asks.iter().any(|a| a.is_open());
+        (!stays).then(|| self.updated_ms.saturating_add(idle_ms))
     }
 
     /// The agent whose jelly this is: whoever last shaped it, else its maker.
@@ -2611,6 +2618,10 @@ mod tests {
         s.keep("kept", true, "person").unwrap();
         s.make("asked", "".into(), VERBS.into(), json!({}), "agent", false, "", "").unwrap();
         s.comment("asked", json!({}), "why?", "person").unwrap();
+        let old = s.get("old").unwrap();
+        assert_eq!(old.archives_ms(1000), Some(old.updated_ms + 1000), "the page says when, by the rule the sweep uses");
+        assert_eq!(s.get("kept").unwrap().archives_ms(1000), None);
+        assert_eq!(s.get("asked").unwrap().archives_ms(1000), None);
         let swept: Vec<String> = s.sweep(0).into_iter().map(|e| e.jelly).collect();
         assert_eq!(swept, ["old"], "kept and open-comment jellies stay");
         assert!(s.get("old").unwrap().archived);

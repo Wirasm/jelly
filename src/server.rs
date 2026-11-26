@@ -415,6 +415,8 @@ async fn list(State(app): State<Shared>) -> Json<Value> {
             // Threads about the whole jelly (no selector); the jelly page shows them in the header.
             "whole_jelly_comments": j.comments.iter().filter(|c| c.is_whole_jelly()).collect::<Vec<_>>(),
             "working": j.working,
+            // When it will be archived if nobody keeps or touches it; null when it will not.
+            "archives_ms": j.archives_ms(ARCHIVE_AFTER_MS),
             "poster": store.assets(&j.name).into_iter().find(|f| f.starts_with("poster.")),
         }))
         .collect::<Vec<_>>()))
