@@ -98,6 +98,27 @@
       ]
     },
     {
+      "name": "set keeps __proto__ as a key like any other",
+      "jelly": { "state": { "a": {} } },
+      "steps": [
+        { "change": { "op": "set", "pointer": "/__proto__", "value": { "x": 1 }, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/__proto__" }, "version": 2, "view_rev": 1 },
+          "jelly": { "state": { "a": {}, "__proto__": { "x": 1 } } } },
+        { "change": { "op": "set", "pointer": "/a/__proto__", "value": 5, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/a/__proto__" }, "version": 3, "view_rev": 1 },
+          "jelly": { "state": { "a": { "__proto__": 5 }, "__proto__": { "x": 1 } } } },
+        { "change": { "op": "set", "pointer": "/__proto__/y", "value": 2, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/__proto__/y" }, "version": 4, "view_rev": 1 },
+          "jelly": { "state": { "a": { "__proto__": 5 }, "__proto__": { "x": 1, "y": 2 } } } },
+        { "change": { "op": "set", "pointer": "/__proto__", "remove": true, "by": "agent" },
+          "event": { "kind": "set", "by": "agent", "args": { "pointer": "/__proto__" }, "version": 5, "view_rev": 1 },
+          "jelly": { "state": { "a": { "__proto__": 5 } } } },
+        { "change": { "op": "set", "pointer": "/__proto__", "remove": true, "by": "agent" }, "refused": "nothing at /__proto__" },
+        { "change": { "op": "set", "pointer": "/__proto__/y", "value": 1, "by": "agent" }, "refused": "nothing at /__proto__",
+          "jelly": { "state": { "a": { "__proto__": 5 } }, "version": 5 } }
+      ]
+    },
+    {
       "name": "set refuses a pointer that does not lead anywhere",
       "jelly": { "state": { "list": [1], "n": 5, "o": {} } },
       "steps": [

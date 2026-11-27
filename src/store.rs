@@ -93,7 +93,7 @@ pub struct Jelly {
 /// One ask for the person's attention. It wants an option or words, or, when
 /// `seen`, a glance: "seen", or a word back. Asks made together, as one
 /// `jelly ask --spec` round, share a group.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Ask {
     pub id: String,
     /// The person can answer with nothing, meaning "seen" (`jelly ask --seen`).
@@ -157,7 +157,7 @@ impl Ask {
 
 /// One choice in an ask. Only `id` and `label` are needed; the rest is there
 /// when the agent lays out tradeoffs.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct AskOption {
     pub id: String,
     #[serde(default)]
@@ -178,7 +178,7 @@ pub struct AskOption {
 
 /// The person's answer: an option, words, or both. A seen ask answered with
 /// neither means "seen".
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Answer {
     #[serde(default)]
     pub option: Option<String>,
@@ -188,13 +188,13 @@ pub struct Answer {
     pub at_ms: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Stamp {
     pub by: String,
     pub at_ms: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: String,
     /// Where in the view: `{"selector": "#opt-b .preview", "quote": "first words"}`.
@@ -208,7 +208,7 @@ pub struct Comment {
     pub replies: Vec<Reply>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Reply {
     pub text: String,
     pub by: String,
@@ -545,8 +545,8 @@ impl Event {
             EventKind::Restore => "restored it".into(),
             EventKind::Missed => match a["missed"].as_u64() {
                 Some(0) | None => format!("caught up from the relay: this home was behind its share (restored from a backup?), so it took the jelly as the relay has it; `jelly state {}` shows it, and `jelly look {}` what people did", self.jelly, self.jelly),
-                Some(n) => format!("caught up from the relay: {n} change{} on the shared jelly were not heard one by one (the relay keeps a week of them); `jelly state {}` has the jelly as it is now, and `jelly look {}` what people did",
-                    if n == 1 { "" } else { "s" }, self.jelly, self.jelly),
+                Some(n) => format!("caught up from the relay: {} on the shared jelly {} not heard one by one (the relay keeps a week of them); `jelly state {}` has the jelly as it is now, and `jelly look {}` what people did",
+                    if n == 1 { "1 change".into() } else { format!("{n} changes") }, if n == 1 { "was" } else { "were" }, self.jelly, self.jelly),
             },
             EventKind::Unknown => format!("made {} of a kind this jelly does not know; `jelly update`, and `jelly state {}` has the jelly as it is now",
                 if times > 1 { format!("{times} changes") } else { "a change".into() }, self.jelly),
@@ -1280,11 +1280,18 @@ impl Store {
         self.record(name, EventKind::Missed, "relay", None, Some(serde_json::json!({"missed": missed})), changed, previous_entry)
     }
 
-    /// Whether `doc`, the whole jelly as a relay sends it, holds more than this
-    /// home has: changes this home lost, such as to a restored backup.
+    /// Whether `doc`, the whole jelly as a relay sends it, differs from what
+    /// this home has: changes this home lost, such as to a restored backup.
+    /// The version stands for the state, whose numbers the relay can write
+    /// another way (`1` for `1.0`), and anchors are left out for the same
+    /// reason: they never change once made.
     pub fn behind(&self, name: &str, doc: &MirroredDoc) -> bool {
+        let comment = |c: &Comment| Comment { anchor: Value::Null, ..c.clone() };
+        let ask = |a: &Ask| Ask { anchor: Value::Null, ..a.clone() };
         self.get(name).is_ok_and(|j| doc.version.is_some_and(|v| v != j.version) || doc.view_rev.is_some_and(|v| v != j.view_rev)
-            || doc.comments.as_ref().is_some_and(|c| c.len() != j.comments.len()) || doc.asks.as_ref().is_some_and(|a| a.len() != j.asks.len()))
+            || doc.about.as_ref().is_some_and(|a| *a != j.about) || doc.unsent.is_some_and(|u| u != j.unsent)
+            || doc.comments.as_ref().is_some_and(|c| !c.iter().map(comment).eq(j.comments.iter().map(comment)))
+            || doc.asks.as_ref().is_some_and(|a| !a.iter().map(ask).eq(j.asks.iter().map(ask))))
     }
 
     fn entry(&mut self, name: &str) -> Result<&mut Entry, Error> {
@@ -1891,7 +1898,8 @@ fn read_optional(path: &Path) -> std::io::Result<String> {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Writes a `.json` file beside itself and renames it over the old one.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, bytes)?;
     fs::rename(tmp, path)
@@ -2916,6 +2924,15 @@ mod tests {
         assert!(s.undo("p:j", "agent").is_err());
         assert!(s.at_version("p:j", 9).is_err());
         assert_eq!(s.at_version("p:j", 10).unwrap().state, json!({"n": 10, "last": "fifth"}));
+    }
+
+    #[test]
+    fn a_missed_event_says_one_change_or_several() {
+        let (_d, mut s) = store();
+        s.make("p:j", "".into(), VERBS.into(), json!({"labels": {}}), "agent", false, "", "").unwrap();
+        let said = |s: &mut Store, n| s.caught_up("p:j", n, &MirroredDoc::default()).unwrap().describe();
+        assert!(said(&mut s, 1).starts_with("caught up from the relay: 1 change on the shared jelly was not heard one by one"));
+        assert!(said(&mut s, 2).starts_with("caught up from the relay: 2 changes on the shared jelly were not heard one by one"));
     }
 
     #[test]
