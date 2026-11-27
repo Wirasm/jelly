@@ -180,8 +180,7 @@ pub(crate) async fn forward(app: &Shared, live: &Live, change: &Change) -> Resul
     let arrived = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match mirrored.recv().await {
-                // Past it too: a catch-up that skipped it still made it.
-                Ok((s, ev)) if s >= seq => return Some(ev),
+                Ok((s, ev)) if s == seq => return Some(ev),
                 Err(broadcast::error::RecvError::Closed) => return None,
                 _ => {}
             }
@@ -548,9 +547,9 @@ mod tests {
             Arc::new(Mutex::new(Held { doc, ..Default::default() }))
         }
 
-        /// As `Live.saved` does: the events up to `seq` go, but never the newest.
-        /// As `relay/src/trim.ts` does: of the events up to `seq`, those older
-        /// than a week go, but never the newest.
+        /// The rule of `relay/src/trim.ts`: of the events up to `seq`, those
+        /// older than a week go, but never the newest. It runs on every
+        /// report; the relay runs it at most once an hour.
         fn trim(&mut self, seq: u64) {
             self.saved.push(seq);
             let newest = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap());
@@ -574,6 +573,17 @@ mod tests {
             for e in &mut self.events {
                 e["at_ms"] = json!(e["at_ms"].as_u64().unwrap() - days * DAY);
             }
+        }
+
+        /// A change on the relay that leaves the state and the version alone:
+        /// `edit` makes it in the jelly.
+        fn edit(&mut self, kind: &str, by: &str, edit: impl FnOnce(&mut Value)) {
+            let seq = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap()) + 1;
+            edit(&mut self.doc);
+            let ev = json!({"seq": seq, "at_ms": now_ms(), "kind": kind, "by": by, "version": self.doc["version"], "view_rev": 1, "unsent": self.doc["unsent"]});
+            self.events.push(ev.clone());
+            let msg = json!({"type": "events", "events": [ev], "doc": {"state": self.doc["state"], "comments": self.doc["comments"], "asks": self.doc["asks"], "unsent": self.doc["unsent"]}}).to_string();
+            self.sockets.retain(|s| s.send(msg.clone()).is_ok());
         }
 
         fn seqs(&self) -> Vec<u64> {
@@ -907,5 +917,42 @@ mod tests {
         arrives(&again, json!({"n": 1})).await;
         assert_eq!(again.store.lock().unwrap().get("t:j").unwrap().comments.len(), 1);
         assert_eq!(heard(&again).last().unwrap(), "caught up from the relay: this home was behind its share (restored from a backup?), so it took the jelly as the relay has it; `jelly state t:j` shows it, and `jelly look t:j` what people did");
+    }
+
+    /// The same when only an answer and a reply are missing, which change
+    /// neither the version nor how many asks and comments there are. A daemon
+    /// that starts with nothing missing records nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_jelly_missing_only_an_answer_and_a_reply_catches_up() {
+        let (dir, old) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        serve(dir.path(), &held).await;
+        let live = shared(&app, 0);
+        held.lock().unwrap().edit("ask", "agent", |d| d["asks"] = json!([{"id": "a1", "title": "Which?", "by": "agent", "at_ms": 1}]));
+        held.lock().unwrap().edit("comment", "person:ana", |d| d["comments"] = json!([{"id": "c1", "anchor": null, "text": "Nice", "by": "person:ana", "at_ms": 1, "resolved": false, "replies": []}]));
+        until("the daemon says it saved 2", || held.lock().unwrap().saved.ends_with(&[2])).await;
+        copy(&dir.path().join("jellies"), old.path());
+        held.lock().unwrap().edit("answer", "person:ana", |d| d["asks"][0]["answer"] = json!({"option": null, "text": "The first", "by": "person:ana", "at_ms": 2}));
+        held.lock().unwrap().edit("reply", "agent", |d| d["comments"][0]["replies"] = json!([{"text": "Thanks", "by": "agent", "at_ms": 3}]));
+        until("the daemon says it saved 4", || held.lock().unwrap().saved.ends_with(&[4])).await;
+        halt(&live);
+        copy(old.path(), &dir.path().join("jellies"));
+
+        let again = restart(dir.path());
+        until("the answer and the reply land", || {
+            let store = again.store.lock().unwrap();
+            let j = store.get("t:j").unwrap();
+            j.asks[0].answer.as_ref().is_some_and(|a| a.text == "The first") && j.comments[0].replies.len() == 1
+        }).await;
+        halt(&again.live("t:j").unwrap());
+
+        let third = restart(dir.path());
+        // Its catch-up carries no event; the change after it shows the catch-up was read.
+        until("the third daemon connects", || held.lock().unwrap().since == [0, 4, 4]).await;
+        held.lock().unwrap().edit("do", "person:ana", |d| { d["state"] = json!({"n": 1}); d["version"] = json!(2); });
+        arrives(&third, json!({"n": 1})).await;
+        let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        assert_eq!(log.matches(r#""kind":"missed""#).count(), 1, "once for the restored jelly, and not again by a daemon that missed nothing");
     }
 }

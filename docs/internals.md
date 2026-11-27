@@ -254,18 +254,17 @@ daemon more than a week behind), the daemon mirrors the ones still there and
 then takes the jelly as the relay has it, with one `missed` event by `relay`
 that the inbox shows: how many changes it did not hear one by one, and to
 read the jelly's state. It does the same, with none missed, when no event is
-new but the relay's jelly has another version, view or number of comments or
-asks than this home's: the jelly file is older than the record, as after
-restoring only it. A `missed` event does not end `hear --wait`: a daemon that
+new but the relay's jelly differs from this home's in its version, view,
+about, comments, asks or count toward Send: the jelly file is older than the
+record, as after restoring only it. The version stands for the state, and
+anchors are not compared, because the relay can write a number another way
+(`1` for `1.0`). A `missed` event does not end `hear --wait`: a daemon that
 far behind has been away, so no wait was listening while those changes came
 in, and the next Send ends the wait as usual. Any later message with a gap
 closes the socket, and the next catch-up settles it. The missed changes are
 not in this home's log, so `look --compare` cannot rebuild their versions, and
 undo has nothing to undo across them: a mirrored change keeps an undo step
 only when it is one version on from a jelly this home had in full.
-
-`share::forward` answers a change with the first change mirrored at or past
-its seq, so a catch-up that skipped it still answers.
 
 ## Shares on the jelly page
 

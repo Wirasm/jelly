@@ -247,7 +247,8 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   jelly past 4 MB is refused ("This jelly is full"). The jelly is one SQLite
   row, which holds 8 MB, so the rest stays for you: changes from your daemon
   are not limited. Each change from a link stores up to 64 KB in the event
-  log, even when the verb ignores its args, until your daemon has it.
+  log, even when the verb ignores its args, until your daemon has saved it
+  and it is a week old.
 - While shared, the relay's copy is the live one. The daemon forwards local
   changes (`do`, `set`, `shape`, `ask`, `unask`, `answer`, `comment`, `reply`,
   `resolve`, `send`) to it, and mirrors every change back over a WebSocket,
@@ -264,7 +265,9 @@ recipe's Pause and Stop buttons do nothing here: no run is listening.
   event it missed and hears each one. One away longer finds some gone: it
   mirrors the events still there, takes the whole jelly the catch-up
   carries, and the agent hears one line saying how many changes it did not
-  hear one by one. While your daemon is away, nothing is deleted.
+  hear one by one. Events no daemon has reported saved are never deleted.
+  With two daemons on one share record, what one reports saved goes after a
+  week while the other is away.
 - `undo`, `move`, `rm` and a new `ask --spec` round are refused while shared.
 - Every page the relay serves (a link, `/pin`, a link that no longer works)
   says "Made with jelly", linking to getjellyware.com. On a link it is a strip
