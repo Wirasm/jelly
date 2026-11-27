@@ -262,6 +262,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
     });
 
     let port = listener.local_addr()?.port();
+    let _ = PORT.set(port);
     let _ = writeln!(std::io::stderr().lock(), "jelly on http://127.0.0.1:{port}");
     if let Some(note) = note {
         let _ = writeln!(std::io::stderr().lock(), "{note}");
@@ -270,6 +271,7 @@ pub async fn serve(store: Store, listener: tokio::net::TcpListener, note: Option
 }
 
 fn router(app: Shared) -> Router {
+    let home = app.store.lock().expect("store lock").home().to_path_buf();
     Router::new()
         // The jelly page: every project at /, one project at /p/<project>.
         .route("/", get(|st: State<Shared>| async move { view(st, Path(PAGE.into()), Query(ViewQ::default())).await }))
@@ -331,27 +333,32 @@ fn router(app: Shared) -> Router {
         .route("/api/jellies/{name}/comment", post(comment))
         .route("/api/jellies/{name}/resolve", post(resolve))
         .route("/api/jellies/{name}/reply", post(reply))
-        .layer(axum::middleware::from_fn(local_only))
+        .layer(axum::middleware::from_fn_with_state(home, local_only))
         .with_state(app)
 }
 
-/// jelly has no login, so only this machine may use it (#8, #66). A request's
-/// `Host` must be a loopback address, which stops DNS rebinding. A browser's
-/// `Origin`, when it sends one (every WebSocket and cross-site request does), must
-/// be the daemon itself, so another site cannot read events or call verbs. The CLI
-/// sends no `Origin` and passes. Another site's `<img>` sends no `Origin` either,
-/// but the browser marks it `Sec-Fetch-Site: cross-site` (or `same-site`), so it
-/// cannot start a render or write a file through a GET such as look (#148). The
-/// daemon's own pages are `same-origin`, an address opened from outside a browser
-/// is `none`, and the CLI sends no `Sec-Fetch-Site`. Pages may be framed only by
-/// the daemon's own pages.
-async fn local_only(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+/// jelly has no login, so only this machine may use it (#8, #66), or the one
+/// address the person named with `jelly trust`, whose proxy decides who gets in.
+/// A request's `Host` must be a loopback address or that address, which stops DNS
+/// rebinding. A browser's `Origin`, when it sends one (every WebSocket and
+/// cross-site request does), must be the daemon itself, so another site cannot
+/// read events or call verbs. The CLI sends no `Origin` and passes. Another
+/// site's `<img>` sends no `Origin` either, but the browser marks it
+/// `Sec-Fetch-Site: cross-site` (or `same-site`), so it cannot start a render or
+/// write a file through a GET such as look (#148). The daemon's own pages are
+/// `same-origin`, an address opened from outside a browser is `none`, and the CLI
+/// sends no `Sec-Fetch-Site`. Pages may be framed only by the daemon's own pages.
+async fn local_only(State(home): State<std::path::PathBuf>, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let allowed = {
         let text = |name| req.headers().get(name).and_then(|v: &axum::http::HeaderValue| v.to_str().ok());
-        same_local_origin(text(header::HOST), text(header::ORIGIN)) && !matches!(text(header::HeaderName::from_static("sec-fetch-site")), Some("cross-site" | "same-site"))
+        let (host, origin) = (text(header::HOST), text(header::ORIGIN));
+        // The file is read only for a request that did not name this machine, so
+        // `jelly trust` takes effect at once and local requests never wait on it.
+        let trusted = || crate::trust::read(&home).ok().flatten().is_some_and(|t| host.is_some_and(|h| crate::trust::allows(&t, h, origin)));
+        (same_local_origin(host, origin) || trusted()) && !matches!(text(header::HeaderName::from_static("sec-fetch-site")), Some("cross-site" | "same-site"))
     };
     if !allowed {
-        return (StatusCode::FORBIDDEN, "jelly accepts requests from this machine only").into_response();
+        return (StatusCode::FORBIDDEN, "jelly accepts requests from this machine only, or at the address `jelly trust` names").into_response();
     }
     let mut resp = next.run(req).await;
     resp.headers_mut().insert(header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_static("frame-ancestors 'self'"));
@@ -887,9 +894,14 @@ async fn unpin_live(State(app): State<Shared>, Path(name): Path<String>) -> Resu
     Ok(Json(share::unshare(&app, &name, share::Stop::Pin).await?))
 }
 
-/// The port this request came in on, for rendering our own pages.
+/// The port `serve` listens on.
+static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+/// The daemon's own port, for rendering our own pages. A request that came
+/// by the trusted address names the proxy's port in its `Host`, not this one, so
+/// the `Host` is read only where `serve` did not run (a test on the router).
 fn port_of(headers: &axum::http::HeaderMap) -> u16 {
-    headers.get(header::HOST).and_then(|h| h.to_str().ok()).and_then(|h| h.rsplit(':').next()).and_then(|p| p.parse().ok()).unwrap_or(7878)
+    PORT.get().copied().or_else(|| headers.get(header::HOST)?.to_str().ok()?.rsplit(':').next()?.parse().ok()).unwrap_or(7878)
 }
 
 #[derive(Deserialize)]

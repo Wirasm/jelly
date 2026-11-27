@@ -478,6 +478,17 @@ pub enum Cmd {
         #[arg(long)]
         pin: bool,
     },
+    /// Trust one address besides this machine's own, so another machine or a
+    /// phone can use this daemon: `jelly trust https://mini.example.ts.net`.
+    /// Run it on the daemon's machine. The daemon still listens on 127.0.0.1
+    /// only and has no login: serve the address with a proxy on that machine,
+    /// such as `tailscale serve --bg 7878`, and whoever the proxy lets in can
+    /// use every jelly. On the other machines, set JELLY_URL to the address.
+    /// Without an address, prints the trusted one; "" trusts none.
+    Trust {
+        /// The address the proxy serves, with no path. (Not named `url`: that would collide with the global --url.)
+        address: Option<String>,
+    },
     /// Use the relay you deployed (relay/ in the jelly repo) for share links.
     /// Saves the URL with a new publish secret in $JELLY_HOME/relay.json and
     /// prints the command that gives the relay the same secret.

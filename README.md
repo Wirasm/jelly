@@ -142,7 +142,10 @@ project you run them from. `jelly --help` lists every command.
 
 A local daemon holds every jelly and serves them on 127.0.0.1 only, without
 authentication: anything that can reach the port can run verbs. It refuses
-requests from other websites. A jelly's view is not another website: the daemon
+requests from other websites. To use it from another machine or a phone, name
+one address with `jelly trust ADDRESS` and put a proxy that serves it in front
+of the daemon, such as `tailscale serve`: the proxy is then the only login.
+A jelly's view is not another website: the daemon
 serves it on the same origin as its API, so the view, and every script it loads
 (from a CDN too), can use the whole API: read every project's jellies and
 send them anywhere, change or remove any jelly, answer as the person or act as
