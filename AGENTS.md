@@ -21,6 +21,10 @@ thing: no aliases for commands, flags or runtime fields.
   keep an undo step. Do not add a way to write state that skips the event, or a
   new kind of edit that skips the undo step: undo, the inbox and attribution
   depend on it.
+- A change a shared jelly's relay can make too is an `op::Change`, made through
+  `server::apply`: in the store, or on the relay while the jelly is shared. The
+  relay makes it again in `relay/src/ops.ts`; `tests/ops.json` says what both
+  must do, and both test suites run it. Change the fixture with the change.
 - Verbs run one at a time under the store lock in `server.rs`.
 - Shape and create refuse verbs that do not load (`verbs::check`).
 - An event's `state` field goes to live listeners only, never into `events.jsonl`.

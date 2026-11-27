@@ -202,7 +202,7 @@ fn inbox_daemon_failures_are_visible_in_hooks() {
     let mut missing_field = event.clone();
     missing_field.as_object_mut().unwrap().remove("seq");
     let mut unknown_kind = event.clone();
-    unknown_kind["kind"] = json!("unknown");
+    unknown_kind["kind"] = json!("no-such-kind"); // `unknown` itself is a kind: what the mirror records for one it does not know
     let mut old = missing_field.clone();
     old["at_ms"] = json!(0);
     let mut excluded = missing_field.clone();

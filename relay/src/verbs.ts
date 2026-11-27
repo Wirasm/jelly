@@ -1,17 +1,13 @@
 // Runs a jelly's verbs as the daemon does (src/verbs.rs): the same QuickJS
-// engine, the same wrapper script, a fresh runtime per call, a 64 MB limit.
-// Workers cannot eval, so QuickJS runs as WebAssembly, and the .wasm is
-// imported as a module because a Worker cannot fetch it at runtime.
+// engine (engine.ts), the same wrapper script, a fresh runtime per call, a
+// 64 MB limit.
 //
 // The daemon stops a verb after 1 s. A Worker's clock stands still while code
 // runs (Date.now() is the time of the last I/O), so the relay counts steps
 // instead: it counts calls to QuickJS's interrupt handler, which runs as
-// JavaScript calls functions and turns loops.
+// JavaScript calls functions and turns loops. Both say the same when they stop one.
 
-import { newQuickJSWASMModuleFromVariant, newVariant, type QuickJSWASMModule } from "quickjs-emscripten-core";
-import baseVariant from "@jitl/quickjs-wasmfile-release-sync";
-// By path, not the package's "./wasm" export: wrangler picks the wasm loader by file name.
-import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm";
+import type { QuickJSWASMModule } from "quickjs-emscripten-core";
 
 /** Interrupt handler calls a verb gets: roughly 25 million turns of an empty
  *  loop. How long that takes depends on the work in each turn and the machine,
@@ -20,15 +16,11 @@ import wasmModule from "../node_modules/@jitl/quickjs-wasmfile-release-sync/dist
  *  can still run until the platform's CPU limit resets the object. */
 const STEPS = 5_000;
 
-const variant = newVariant(baseVariant, { wasmModule });
-let loading: Promise<QuickJSWASMModule> | undefined;
-export const engine = () => (loading ??= newQuickJSWASMModuleFromVariant(variant));
-
 /** A reason to refuse a change, shown to whoever asked for it. */
 export class Refusal extends Error {}
 
 function script(src: string, body: string): string {
-  return `(function() {
+  return `(function() { 'use strict';
   var __v;
   try { __v = (function() {
 ${src}

@@ -7,6 +7,7 @@
 
 use super::{content_type, ApiError, App, Shared, RUNTIME_JS};
 use crate::relay::{self, Fail, Record, Relay};
+use crate::op::Change;
 use crate::store::{Error, Event, Mirrored, MirroredDoc, PAGE};
 use axum::Json;
 use futures_util::{SinkExt, StreamExt};
@@ -132,14 +133,14 @@ fn apply(app: &App, live: &Live, record: &mut Record, batch: &Batch) -> Result<O
 /// Makes one change on the relay and returns its event as mirrored here. The
 /// socket mirrors every change, this one too, so people's changes keep coming
 /// in however many local ones are waiting on the relay.
-pub(crate) async fn forward(app: &Shared, live: &Live, op: Value) -> Result<Json<Event>, ApiError> {
+pub(crate) async fn forward(app: &Shared, live: &Live, change: &Change) -> Result<Json<Event>, ApiError> {
     let relay = home(app).relay()?;
     // Subscribed before the change is made, so its event cannot pass unseen.
     let mut mirrored = live.mirrored.subscribe();
     // Waits for a publish under way, so the change reaches the relay after it.
     let share = live.record.lock().await.share.clone();
-    let r = relay.clone();
-    let answer = match blocking(move || r.change(&share, &op)).await {
+    let (r, change) = (relay.clone(), change.clone());
+    let answer = match blocking(move || r.change(&share, &change)).await {
         Err(Fail::Gone) => {
             let record = live.record.lock().await;
             stop(app, &record);
@@ -226,7 +227,7 @@ async fn publish(app: &Shared, relay: &Relay, name: &str) -> Result<Arc<Live>, A
         let store = app.store.lock().expect("store lock");
         let j = store.get(name)?;
         let doc = json!({"name": j.name, "about": j.about, "view": j.view, "verbs": j.verbs, "state": j.state,
-            "version": j.version, "view_rev": j.view_rev, "comments": j.comments, "asks": j.asks});
+            "version": j.version, "view_rev": j.view_rev, "comments": j.comments, "asks": j.asks, "unsent": j.unsent});
         let dir = store.asset_dir(name);
         let files = store.try_assets(name).map_err(|e| ApiError::Internal(format!("could not read assets of {name}: {e}")))?;
         let assets: Vec<(String, Vec<u8>)> = files.into_iter()
@@ -466,9 +467,111 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let ev = forward(&app, &live, json!({"op": "do", "verb": "pos", "by": "agent"})).await.map_err(|e| format!("{e:?}")).unwrap();
+        let ev = forward(&app, &live, &Change { by: "agent".into(), op: crate::op::Op::Do { verb: "pos".into(), args: Value::Null, source: None, quiet: false } }).await.map_err(|e| format!("{e:?}")).unwrap();
         assert!(seen.load(Ordering::SeqCst), "the other person's change waited for the local one");
         assert_eq!((ev.0.version, ev.0.by.as_str()), (3, "agent"));
         assert_eq!(app.store.lock().unwrap().get("t:race").unwrap().state, json!({"other": 1, "mine": 1}));
+    }
+
+    /// A daemon with an empty store, and the jelly `t:j` in it.
+    fn app(dir: &std::path::Path) -> Shared {
+        let (events, _) = broadcast::channel(32);
+        let app: Shared = Arc::new(App { store: Mutex::new(crate::store::Store::open(dir).unwrap()), events, screens: Default::default(), trials: Default::default(), probes: Default::default(), shares: Default::default(), sharing: Default::default(), open: Default::default(), feeds: Default::default(), update: Default::default() });
+        app.store.lock().unwrap().make("j", "".into(), "const verbs = { pos() {} };".into(), json!({}), "agent", false, "", "t").unwrap();
+        app
+    }
+
+    /// What a fake relay holds of the share `SHARE`, as `relay/src/index.ts` keeps it.
+    #[derive(Default)]
+    struct Held {
+        events: Vec<Value>,
+        /// The whole jelly, as after the last event.
+        doc: Value,
+        /// The `since` of every socket the daemon opened.
+        since: Vec<u64>,
+        sockets: Vec<mpsc::UnboundedSender<String>>,
+    }
+    type Fake = Arc<Mutex<Held>>;
+
+    impl Held {
+        fn new(state: Value) -> Fake {
+            let doc = json!({"name": "t:j", "about": "", "view": "", "verbs": "const verbs = { pos() {} };", "state": state, "version": 1, "view_rev": 1, "comments": [], "asks": [], "unsent": 0});
+            Arc::new(Mutex::new(Held { doc, ..Default::default() }))
+        }
+
+        fn after(&self, since: u64) -> Value {
+            json!({"type": "events", "events": self.events.iter().filter(|e| e["seq"].as_u64().unwrap() > since).collect::<Vec<_>>(), "doc": self.doc})
+        }
+
+        /// Someone changes the jelly on the relay: the event is kept and sent
+        /// to the daemon's open socket with the state after it.
+        fn change(&mut self, kind: &str, by: &str, state: Value) {
+            let seq = self.events.last().map_or(0, |e| e["seq"].as_u64().unwrap()) + 1;
+            self.doc["version"] = json!(self.doc["version"].as_u64().unwrap() + 1);
+            self.doc["state"] = state.clone();
+            let ev = json!({"seq": seq, "at_ms": 1, "kind": kind, "by": by, "version": self.doc["version"], "view_rev": 1, "unsent": 0});
+            self.events.push(ev.clone());
+            let msg = json!({"type": "events", "events": [ev], "doc": {"state": state, "comments": [], "asks": [], "unsent": 0}}).to_string();
+            self.sockets.retain(|s| s.send(msg.clone()).is_ok());
+        }
+    }
+
+    /// Serves `held` as the relay of `dir`'s home.
+    async fn serve(dir: &std::path::Path, held: &Fake) {
+        let held = held.clone();
+        let fake = axum::Router::new().route(&format!("/api/live/{SHARE}/ws"), get(move |q: axum::extract::Query<std::collections::HashMap<String, String>>, up: WebSocketUpgrade| async move {
+            let since: u64 = q.get("since").and_then(|s| s.parse().ok()).unwrap_or(0);
+            up.on_upgrade(move |mut ws| async move {
+                let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+                let first = {
+                    let mut h = held.lock().unwrap();
+                    h.since.push(since);
+                    h.sockets.push(tx);
+                    h.after(since).to_string()
+                };
+                if ws.send(WsMessage::Text(first.into())).await.is_err() { return; }
+                loop {
+                    tokio::select! {
+                        m = rx.recv() => match m {
+                            Some(m) => if ws.send(WsMessage::Text(m.into())).await.is_err() { return },
+                            None => return,
+                        },
+                        m = ws.recv() => if !matches!(m, Some(Ok(_))) { return },
+                    }
+                }
+            })
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
+        relay::Home(dir.into()).set_relay(&url).unwrap();
+    }
+
+    /// Waits up to 5 s for `t:j` to hold `state`.
+    async fn arrives(app: &Shared, state: Value) {
+        let landed = tokio::time::timeout(Duration::from_secs(5), async {
+            while app.store.lock().unwrap().get("t:j").unwrap().state != state {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert!(landed.is_ok(), "{state} never arrived; the jelly holds {}", app.store.lock().unwrap().get("t:j").unwrap().state);
+    }
+
+    /// A newer relay may make a kind of change this daemon does not know. The
+    /// mirror takes the jelly as the relay sent it and goes on, on the same socket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_mirror_goes_on_past_a_kind_of_change_it_does_not_know() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let held = Held::new(json!({}));
+        held.lock().unwrap().change("wave", "person:ana", json!({"waved": true}));
+        serve(dir.path(), &held).await;
+        let live = track(&app, Record { jelly: "t:j".into(), share: SHARE.into(), seq: 0, links: Default::default(), expires_at: None });
+        run(&app, &live);
+        arrives(&app, json!({"waved": true})).await;
+        held.lock().unwrap().change("do", "person:ana", json!({"waved": true, "after": 1}));
+        arrives(&app, json!({"waved": true, "after": 1})).await;
+        assert_eq!(held.lock().unwrap().since, [0], "the daemon kept its first socket");
+        assert_eq!(live.record.lock().await.seq, 2);
     }
 }

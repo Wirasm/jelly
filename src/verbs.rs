@@ -38,7 +38,7 @@ pub fn run(src: &str, verb: &str, state: &Value, args: &Value, by: &str, at_ms: 
 /// Wraps the verbs source so `__v` holds its `verbs` object, then runs `body`.
 fn script(src: &str, body: &str) -> String {
     format!(
-        "(function() {{
+        "(function() {{ 'use strict';
            var __v;
            try {{ __v = (function() {{
 {src}
@@ -66,7 +66,7 @@ fn eval(script: &str) -> Result<Value, String> {
             let name: String = ex.and_then(|e| e.get("name").ok()).unwrap_or_else(|| "Error".into());
             let msg = ex.and_then(|e| e.message()).unwrap_or_else(|| "unknown error".into());
             Err(if Instant::now() > deadline {
-                format!("verb ran longer than {}s and was stopped", TIME_LIMIT.as_secs())
+                "verb ran too long and was stopped: does it loop forever?".into()
             } else {
                 format!("verbs did not load: {name}: {msg}")
             })

@@ -65,11 +65,8 @@ async fn run(app: &Shared, feed: &Feed) -> Result<(), String> {
     let args: Value = if text.trim().is_empty() { Value::Null } else {
         serde_json::from_str(text.trim()).map_err(|e| format!("the command did not print JSON: {e}"))?
     };
-    let done = match app.live(&feed.jelly) {
-        Some(live) => share::forward(app, &live, json!({"op": "do", "verb": feed.verb, "args": args, "by": crate::store::FEED})).await.map(|_| ()),
-        None => app.change(|s| s.do_verb(&feed.jelly, &feed.verb, args, crate::store::FEED)).map(|_| ()),
-    };
-    done.map_err(|e| match e {
+    let change = Change { by: crate::store::FEED.into(), op: Op::Do { verb: feed.verb.clone(), args, source: None, quiet: false } };
+    super::apply(app, &feed.jelly, change).await.map(drop).map_err(|e| match e {
         ApiError::Store(e) => e.to_string(),
         ApiError::Conflict(e) | ApiError::Internal(e) => e,
     })

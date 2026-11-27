@@ -5,6 +5,7 @@ mod design;
 mod disk;
 mod doctor;
 mod feed;
+mod op;
 mod pr;
 mod recipes;
 mod relay;
@@ -1092,9 +1093,11 @@ fn write_inbox(output: &mut impl Write, project: &str, hook: bool, batch: &store
 /// many there were and the last args. A view that calls a verb several times
 /// a second (a game's `pos`) would otherwise print thousands of lines.
 fn inbox_lines(items: &[store::InboxItem]) -> Vec<String> {
-    fn call(item: &store::InboxItem) -> Option<(&str, &str, Option<&str>)> {
+    /// Calls of one verb by one person on one jelly fold into one line, and so
+    /// do changes of kinds this jelly does not know.
+    fn call(item: &store::InboxItem) -> Option<(&str, store::EventKind, &str, Option<&str>)> {
         let e = &item.event;
-        (e.kind == store::EventKind::Do).then_some((e.jelly.as_str(), e.by.as_str(), e.verb.as_deref()))
+        matches!(e.kind, store::EventKind::Do | store::EventKind::Unknown).then_some((e.jelly.as_str(), e.kind, e.by.as_str(), e.verb.as_deref()))
     }
     let mut calls = std::collections::HashMap::<_, usize>::new();
     for key in items.iter().filter_map(call) {
@@ -1488,6 +1491,8 @@ mod tests {
             item("p:race", "person:billy", "do", Some("honk"), json!({})),
             item("p:other", "person:billy", "do", Some("pos"), json!({"progress": 0.9})),
             item("p:race", "person:billy", "do", Some("pos"), json!({"progress": 0.4})),
+            item("p:race", "person:ana", "unknown", None, json!(null)),
+            item("p:race", "person:ana", "unknown", None, json!(null)),
         ];
         assert_eq!(super::inbox_lines(&events), [
             r#"p:race: ana pos {"progress":0.2} (via "HOLD TO GAS")"#,
@@ -1495,6 +1500,7 @@ mod tests {
             r#"p:race: billy honk {} (via "HOLD TO GAS")"#,
             r#"p:other: billy pos {"progress":0.9} (via "HOLD TO GAS")"#,
             r#"p:race: billy pos ×3, last {"progress":0.4} (via "HOLD TO GAS")"#,
+            "p:race: ana made 2 changes of a kind this jelly does not know; `jelly update`, and `jelly state p:race` has the jelly as it is now",
         ]);
     }
 

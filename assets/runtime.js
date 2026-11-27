@@ -118,10 +118,33 @@
   const askSubs = [];
   const openSubs = new Set();
   let working = boot.working || null;
-  // What people did here since someone last pressed Send.
+  // What people did here since someone last pressed Send. The daemon, or a
+  // shared jelly's relay, counts it, and every change carries the count.
   let unsent = boot.unsent || 0;
   const unsentSubs = [];
-  const FOR_AGENT = ["do", "comment", "reply", "resolve", "undo", "answer"];
+  const setUnsent = (n) => {
+    if (n === unsent) return;
+    unsent = n;
+    drawSend();
+    unsentSubs.forEach((fn) => fn(unsent));
+  };
+  // How many counts events have brought, so a fetch started before one cannot set an older count.
+  let counted = 0;
+  // A relay deployed before changes carried the count has it only in the jelly:
+  // one fetch at a time, and one more after it when changes came meanwhile.
+  let recounting = null, recountAgain = false;
+  function recount() {
+    if (recounting) { recountAgain = true; return; }
+    const at = counted;
+    recounting = (async () => {
+      try {
+        const j = share ? await viaShare("show") : await (await fetch(api)).json();
+        if (counted === at) setUnsent(j.unsent || 0);
+      } catch (e) { console.error(e); }
+      recounting = null;
+      if (recountAgain) { recountAgain = false; recount(); }
+    })();
+  }
   const subs = [];
   const enc = encodeURIComponent;
   const api = `/api/jellies/${enc(boot.name)}`;
@@ -272,10 +295,8 @@
       return;
     }
     if (ev.kind === "make" || ev.view_rev !== boot.viewRev) { reload(); return; }
-    const was = unsent;
-    if (ev.kind === "send") unsent = 0;
-    else if (isPerson(ev.by) && FOR_AGENT.includes(ev.kind) && !ev.quiet) unsent++;
-    if (unsent !== was) { drawSend(); unsentSubs.forEach((fn) => fn(unsent)); }
+    if (typeof ev.unsent === "number") { counted++; setUnsent(ev.unsent); }
+    else recount();
     if (ev.kind === "comment" || ev.kind === "resolve" || ev.kind === "reply") refreshThreads().catch(console.error);
     if (ev.kind === "ask" || ev.kind === "answer" || ev.kind === "unask") refreshThreads().catch(console.error);
 
@@ -1149,6 +1170,7 @@
 
   let latestRefresh;
   function refreshThreads() {
+    const at = counted;
     const refresh = (async () => {
       let j;
       try {
@@ -1163,10 +1185,11 @@
         throw e;
       }
       if (refresh !== latestRefresh) return latestRefresh;
-      comments = j.comments || []; asks = j.asks || []; working = j.working || null; unsent = j.unsent || 0;
+      comments = j.comments || []; asks = j.asks || []; working = j.working || null;
       // The view first: an ask it draws must not flash in the stack.
       for (const fn of askSubs) { try { fn(); } catch (e) { console.error(e); } }
       drawMarkers(); drawWorking(); drawSend();
+      if (counted === at) setUnsent(j.unsent || 0);
     })();
     latestRefresh = refresh;
     return refresh;

@@ -1,6 +1,7 @@
 //! The local daemon: an HTTP API over the store, a live event stream, and the
 //! views. The jelly page people look at is itself an internal jelly named `page`.
 
+use crate::op::{Change, Op};
 use crate::store::{named, viewer, Error, Event, EventKind, InboxBatch, InboxCommit, InboxRequest, Past, Store, PAGE};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -136,7 +137,8 @@ impl App {
     }
 
     /// Runs one store change and broadcasts its event. The store lock is what
-    /// makes verbs run one at a time.
+    /// makes verbs run one at a time. A change a shared jelly's relay makes
+    /// too goes through `apply` instead.
     fn change(&self, f: impl FnOnce(&mut Store) -> Result<Event, Error>) -> Result<Json<Event>, ApiError> {
         let mut store = self.store.lock().expect("store lock");
         let ev = f(&mut store)?;
@@ -195,6 +197,18 @@ impl App {
             return Err(snapshot_changed());
         }
         Ok(())
+    }
+}
+
+/// Makes `change` on the jelly: in the store, or, while the jelly is shared,
+/// on its relay, which holds the live copy and mirrors the change back here.
+async fn apply(app: &Shared, name: &str, change: Change) -> Result<Json<Event>, ApiError> {
+    match app.live(name) {
+        Some(live) => {
+            change.check()?;
+            share::forward(app, &live, &change).await
+        }
+        None => app.change(|s| change.apply(s, name)),
     }
 }
 
@@ -479,10 +493,7 @@ struct CallReq {
 }
 
 async fn call(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CallReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "do", "verb": r.verb, "args": r.args, "source": r.source, "quiet": r.quiet, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.do_verb_from(&name, &r.verb, r.args, &by(r.by)?, r.source, r.quiet))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Do { verb: r.verb, args: r.args, source: r.source, quiet: r.quiet } }).await
 }
 
 #[derive(Deserialize)]
@@ -498,15 +509,11 @@ struct SetReq {
 
 async fn set_state(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<SetReq>) -> Result<Json<Event>, ApiError> {
     let value = match (r.remove, r.value) {
-        (true, _) => None,
-        (false, Some(v)) => Some(v),
+        (true, _) => Value::Null,
+        (false, Some(v)) => v,
         (false, None) => return Err(Error::Invalid("give a value, or remove: true".into()).into()),
     };
-    if let Some(live) = app.live(&name) {
-        let op = json!({"op": "set", "pointer": r.pointer, "remove": value.is_none(), "value": value, "by": by(r.by)?});
-        return share::forward(&app, &live, op).await;
-    }
-    app.change(|s| s.set_state(&name, &r.pointer, value, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Set { pointer: r.pointer, value, remove: r.remove } }).await
 }
 
 #[derive(Deserialize)]
@@ -518,14 +525,7 @@ struct ShapeReq {
 }
 
 async fn shape(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ShapeReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        // The relay trusts the daemon to have checked them, as `Store::shape` does.
-        if let Some(src) = &r.verbs {
-            crate::verbs::check(src).map_err(|e| Error::Invalid(format!("new verbs rejected, jelly unchanged: {e}")))?;
-        }
-        return share::forward(&app, &live, json!({"op": "shape", "view": r.view, "verbs": r.verbs, "about": r.about, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.shape(&name, r.view, r.verbs, r.about, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Shape { view: r.view, verbs: r.verbs, about: r.about } }).await
 }
 
 #[derive(Deserialize)]
@@ -553,10 +553,7 @@ struct CommentReq {
 }
 
 async fn comment(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<CommentReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "comment", "anchor": r.anchor, "text": r.text, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.comment(&name, r.anchor, &r.text, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Comment { anchor: r.anchor, text: r.text } }).await
 }
 
 #[derive(Deserialize)]
@@ -566,10 +563,7 @@ struct ResolveReq {
 }
 
 async fn resolve(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ResolveReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "resolve", "id": r.id, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.resolve(&name, &r.id, &by(r.by)?))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Resolve { id: r.id } }).await
 }
 
 #[derive(Deserialize)]
@@ -582,10 +576,7 @@ struct ReplyReq {
 }
 
 async fn reply(State(app): State<Shared>, Path(name): Path<String>, Json(r): Json<ReplyReq>) -> Result<Json<Event>, ApiError> {
-    if let Some(live) = app.live(&name) {
-        return share::forward(&app, &live, json!({"op": "reply", "id": r.id, "text": r.text, "resolve": r.resolve, "by": by(r.by)?})).await;
-    }
-    app.change(|s| s.reply(&name, &r.id, &r.text, &by(r.by)?, r.resolve))
+    apply(&app, &name, Change { by: by(r.by)?, op: Op::Reply { id: r.id, text: r.text, resolve: r.resolve } }).await
 }
 
 #[derive(Deserialize)]
