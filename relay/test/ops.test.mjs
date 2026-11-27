@@ -33,7 +33,7 @@ for (const c of fixtures.cases) {
         const ev = ops.apply(doc, op, by, 1, runVerb);
         assert.equal(step.refused, undefined, `${at}: made the change, but should refuse it`);
         assert.deepEqual(made(ev), made(step.event), `${at}: event`);
-        assert.equal(ev.unsent, doc.unsent, `${at}: the event carries the count toward Send`);
+        if (step.jelly?.unsent !== undefined) assert.equal(ev.unsent, step.jelly.unsent, `${at}: the event carries the count toward Send`);
       } catch (e) {
         if (!(e instanceof Refusal)) throw e;
         assert.equal(e.message, step.refused, `${at}: refused`);

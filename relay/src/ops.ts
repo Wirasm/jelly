@@ -79,7 +79,9 @@ export function setAt(root: Json, pointer: string, value: Json | undefined): Jso
     else if (value === undefined && i < parent.length) parent.splice(i, 1);
     else throw new Refusal(`${pointer} is past the end of the array`);
   } else if (parent && typeof parent === "object") {
-    if (value !== undefined) parent[key] = value;
+    // Defined, not assigned: assigning to `__proto__` would swap the object's
+    // prototype and store nothing, where the daemon stores a key.
+    if (value !== undefined) Object.defineProperty(parent, key, { value, writable: true, enumerable: true, configurable: true });
     else if (Object.hasOwn(parent, key)) delete parent[key];
     else throw new Refusal(`nothing at ${pointer}`);
   } else throw new Refusal(`${parentPath} is neither an object nor an array`);
