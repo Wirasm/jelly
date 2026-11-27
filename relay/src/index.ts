@@ -35,6 +35,7 @@ import { trim, type Doc, type Ev, type Json, type Op } from "./ops.ts";
 import { shell, MADE, MADE_CSS } from "./shell";
 import { joinPage } from "./join";
 import * as counting from "./counts";
+import { forget } from "./trim.ts";
 
 interface Env {
   LIVE: DurableObjectNamespace<Live>;
@@ -136,6 +137,8 @@ export class Live extends DurableObject<Env> {
   private doc: Doc | undefined;
   private seq = 0;
   private share = "";
+  /** When `saved` last deleted events, in this wake. */
+  private trimmed = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -334,9 +337,24 @@ export class Live extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** The owner's daemon has saved every event up to `seq`: those older than a
+   *  week go (trim.ts). At most once an hour per wake, since the delete reads
+   *  every stored event up to `seq` and a busy share sends one of these per change. */
+  private saved(seq: number) {
+    if (!this.doc || !Number.isSafeInteger(seq) || Date.now() - this.trimmed < 3_600_000) return;
+    this.trimmed = Date.now();
+    forget(this.ctx.storage.sql, seq, this.seq, Date.now());
+  }
+
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const seat = this.seat(ws);
-    if (seat.owner || typeof message !== "string") return;
+    if (typeof message !== "string") return;
+    if (seat.owner) {
+      let saved: unknown;
+      try { ({ saved } = JSON.parse(message)); } catch { return; }
+      if (typeof saved === "number") this.saved(saved);
+      return;
+    }
     let msg: { ref?: number; op?: string; body?: Record<string, unknown> };
     try { msg = JSON.parse(message); } catch { return; }
     const reply = (ok: boolean, value?: unknown, error?: string) => ws.send(JSON.stringify({ type: "reply", ref: msg.ref, ok, value, error }));

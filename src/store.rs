@@ -409,6 +409,8 @@ pub struct MirroredDoc {
     pub comments: Option<Vec<Comment>>,
     pub asks: Option<Vec<Ask>>,
     pub unsent: Option<u32>,
+    pub version: Option<u64>,
+    pub view_rev: Option<u64>,
 }
 
 /// Every kind of change. Adding one means adding it here and to `describe`.
@@ -438,6 +440,9 @@ pub enum EventKind {
     Set,
     /// A shared jelly's PIN locked after too many wrong tries (by `relay`).
     Lock,
+    /// A shared jelly caught up from its relay without hearing some changes one
+    /// by one (by `relay`, `Store::caught_up`). It is heard, and does not end a wait.
+    Missed,
     /// A kind of change a newer relay made that this jelly does not know
     /// (`Mirrored::kind`). Its mirror still applies the jelly as the relay sent it.
     Unknown,
@@ -484,7 +489,7 @@ pub const PAGE: &str = "page";
 impl Event {
     pub fn is_inbox_item(&self, project: &str) -> bool {
         // A lock and a change of an unknown kind come from the relay, and say what to do.
-        let heard = matches!(self.kind, EventKind::Lock | EventKind::Unknown) || is_person(&self.by) && self.kind.is_for_agent();
+        let heard = matches!(self.kind, EventKind::Lock | EventKind::Unknown | EventKind::Missed) || is_person(&self.by) && self.kind.is_for_agent();
         heard && self.jelly != PAGE && (project.is_empty() || self.jelly.starts_with(&format!("{project}:")))
     }
 
@@ -538,6 +543,11 @@ impl Event {
             EventKind::Remove => "removed it".into(),
             EventKind::Archive => "archived it".into(),
             EventKind::Restore => "restored it".into(),
+            EventKind::Missed => match a["missed"].as_u64() {
+                Some(0) | None => format!("caught up from the relay: this home was behind its share (restored from a backup?), so it took the jelly as the relay has it; `jelly state {}` shows it, and `jelly look {}` what people did", self.jelly, self.jelly),
+                Some(n) => format!("caught up from the relay: {n} change{} on the shared jelly were not heard one by one (the relay keeps a week of them); `jelly state {}` has the jelly as it is now, and `jelly look {}` what people did",
+                    if n == 1 { "" } else { "s" }, self.jelly, self.jelly),
+            },
             EventKind::Unknown => format!("made {} of a kind this jelly does not know; `jelly update`, and `jelly state {}` has the jelly as it is now",
                 if times > 1 { format!("{times} changes") } else { "a change".into() }, self.jelly),
             EventKind::Lock => format!("the PIN locked after {} wrong tries, so nobody new can join and its room is over; people already in keep their links. `jelly share {} --pin` makes a new one",
@@ -1225,32 +1235,22 @@ impl Store {
     pub fn mirror(&mut self, name: &str, ev: &Mirrored, doc: Option<&MirroredDoc>) -> Result<Event, Error> {
         let previous_entry = self.jellies.get(name).cloned();
         let entry = self.entry(name)?;
+        let was = entry.jelly.version;
+        let (step, changed) = doc.map(|d| take(&mut entry.jelly, d)).unwrap_or_else(|| (Step::before(&entry.jelly), Vec::new()));
         let j = &mut entry.jelly;
-        let mut step = Step::before(j);
-        let mut changed = Vec::new();
-        if let Some(doc) = doc {
-            if let Some(state) = &doc.state {
-                diff(&j.state, state, &mut String::new(), &mut changed);
-                step.state = state_step(state, &j.state);
-                j.state = state.clone();
-            }
-            let replaced = |old: &mut String, new: &Option<String>| new.as_ref().filter(|n| *n != old).map(|n| std::mem::replace(old, n.clone()));
-            step.view = replaced(&mut j.view, &doc.view);
-            step.verbs = replaced(&mut j.verbs, &doc.verbs);
-            if let Some(a) = &doc.about { j.about = a.clone(); }
-            if let Some(c) = &doc.comments { j.comments = c.clone(); }
-            if let Some(a) = &doc.asks { j.asks = a.clone(); }
-        }
         if ev.kind == EventKind::Shape {
             j.shaped_by = Some(ev.by.clone());
         }
-        let moved = ev.version != j.version;
         j.version = ev.version;
         j.view_rev = ev.view_rev;
-        match (moved, doc) {
-            (true, Some(_)) => push_step(entry, step),
-            (true, None) => entry.history_from = entry.history_from.max(ev.version + 1),
-            (false, _) => {}
+        // An undo step is honest only for one change, made on the jelly as this
+        // home last had it in full: one version on, with the jelly after it,
+        // and no change before it mirrored without one.
+        let honest = doc.is_some() && ev.version == was + 1 && entry.history_from <= was;
+        if honest {
+            push_step(entry, step);
+        } else if ev.version != was {
+            forget_history(entry, ev.version + u64::from(doc.is_none()));
         }
         self.source = ev.source.clone();
         self.quiet = ev.quiet;
@@ -1258,6 +1258,33 @@ impl Store {
         // A relay from before events carried the count may still send it with the jelly.
         self.unsent = ev.unsent.or(doc.and_then(|d| d.unsent));
         self.record(name, ev.kind, &ev.by, ev.verb.clone(), ev.args.clone(), changed, previous_entry)
+    }
+
+    /// Takes a shared jelly as its relay has it, when this home cannot follow
+    /// the changes there one by one: `missed` of them are gone from the relay
+    /// (it keeps a week of them), or, with none missed, this home was behind
+    /// its own share record (restored from a backup). One `missed` event, by
+    /// `relay`, tells the agent; it does not end `hear --wait`.
+    pub fn caught_up(&mut self, name: &str, missed: u64, doc: &MirroredDoc) -> Result<Event, Error> {
+        let previous_entry = self.jellies.get(name).cloned();
+        let entry = self.entry(name)?;
+        let (_, changed) = take(&mut entry.jelly, doc);
+        let j = &mut entry.jelly;
+        j.version = doc.version.unwrap_or(j.version);
+        j.view_rev = doc.view_rev.unwrap_or(j.view_rev);
+        let version = j.version;
+        // The jelly is now all of it at `version`: that one can be rebuilt, none before.
+        entry.steps.clear();
+        entry.history_from = version;
+        self.unsent = doc.unsent;
+        self.record(name, EventKind::Missed, "relay", None, Some(serde_json::json!({"missed": missed})), changed, previous_entry)
+    }
+
+    /// Whether `doc`, the whole jelly as a relay sends it, holds more than this
+    /// home has: changes this home lost, such as to a restored backup.
+    pub fn behind(&self, name: &str, doc: &MirroredDoc) -> bool {
+        self.get(name).is_ok_and(|j| doc.version.is_some_and(|v| v != j.version) || doc.view_rev.is_some_and(|v| v != j.view_rev)
+            || doc.comments.as_ref().is_some_and(|c| c.len() != j.comments.len()) || doc.asks.as_ref().is_some_and(|a| a.len() != j.asks.len()))
     }
 
     fn entry(&mut self, name: &str) -> Result<&mut Entry, Error> {
@@ -1570,6 +1597,31 @@ fn push_step(entry: &mut Entry, step: Step) {
         entry.history_from = entry.history_from.max(steps[drop - 1].version + 1);
     }
     steps.drain(..drop);
+}
+
+/// After changes no step can undo: undo has nothing left, and versions before
+/// `from` cannot be rebuilt.
+fn forget_history(entry: &mut Entry, from: u64) {
+    entry.steps.clear();
+    entry.history_from = entry.history_from.max(from);
+}
+
+/// Puts the parts of a mirrored jelly in place, returning the step back and the pointers that changed.
+fn take(j: &mut Jelly, doc: &MirroredDoc) -> (Step, Vec<String>) {
+    let mut step = Step::before(j);
+    let mut changed = Vec::new();
+    if let Some(state) = &doc.state {
+        diff(&j.state, state, &mut String::new(), &mut changed);
+        step.state = state_step(state, &j.state);
+        j.state = state.clone();
+    }
+    let replaced = |old: &mut String, new: &Option<String>| new.as_ref().filter(|n| *n != old).map(|n| std::mem::replace(old, n.clone()));
+    step.view = replaced(&mut j.view, &doc.view);
+    step.verbs = replaced(&mut j.verbs, &doc.verbs);
+    if let Some(a) = &doc.about { j.about = a.clone(); }
+    if let Some(c) = &doc.comments { j.comments = c.clone(); }
+    if let Some(a) = &doc.asks { j.asks = a.clone(); }
+    (step, changed)
 }
 
 fn undo_budget(state: &Value) -> usize {
@@ -2834,6 +2886,36 @@ mod tests {
         assert!(logged.contains("\"kind\":\"unknown\"") && !logged.contains("\"unsent\""), "the count goes to live listeners only");
         drop(s);
         Store::open(dir.path()).expect("a log with a change of an unknown kind opens");
+    }
+
+    /// A mirrored change that is not one version on, or comes after one
+    /// mirrored without the jelly, has no honest undo step: undo would take
+    /// back changes this home never saw. The steps before it go too.
+    #[test]
+    fn undo_never_jumps_changes_this_home_did_not_see() {
+        let (_d, mut s) = store();
+        let verbs = "const verbs = { inc(s) { s.n = (s.n || 0) + 1; } };";
+        s.make("p:j", "".into(), verbs.into(), json!({}), "agent", false, "", "").unwrap();
+        s.do_verb("p:j", "inc", Value::Null, "agent").unwrap();
+        s.do_verb("p:j", "inc", Value::Null, "agent").unwrap();
+        let ev = |seq: u64, version: u64| -> Mirrored {
+            serde_json::from_value(json!({"seq": seq, "at_ms": now_ms(), "kind": "do", "by": "person:ana", "verb": "inc", "version": version, "view_rev": 1})).unwrap()
+        };
+        let doc = |n: u64| -> MirroredDoc { serde_json::from_value(json!({"state": {"n": n, "last": "fifth"}})).unwrap() };
+        // Three versions on at once.
+        s.mirror("p:j", &ev(1, 6), Some(&doc(6))).unwrap();
+        assert_eq!(s.undo("p:j", "agent").unwrap_err().to_string(), "p:j has nothing to undo");
+        assert_eq!(s.get("p:j").unwrap().state, json!({"n": 6, "last": "fifth"}));
+        // One on with the jelly is honest again, and undoes only itself.
+        s.mirror("p:j", &ev(2, 7), Some(&doc(7))).unwrap();
+        s.undo("p:j", "agent").unwrap();
+        assert_eq!(s.get("p:j").unwrap().state, json!({"n": 6, "last": "fifth"}));
+        // After one mirrored without the jelly, the next has no honest step either.
+        s.mirror("p:j", &ev(3, 9), None).unwrap();
+        s.mirror("p:j", &ev(4, 10), Some(&doc(10))).unwrap();
+        assert!(s.undo("p:j", "agent").is_err());
+        assert!(s.at_version("p:j", 9).is_err());
+        assert_eq!(s.at_version("p:j", 10).unwrap().state, json!({"n": 10, "last": "fifth"}));
     }
 
     #[test]
