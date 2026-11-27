@@ -19,6 +19,26 @@ then use `jelly --url URL ls`. On-demand startup applies only to the default
 local endpoint, including `http://localhost:7878` and equivalent URL spellings;
 other `--url` / `JELLY_URL` targets must already be running.
 
+## The trusted address
+
+The daemon listens on 127.0.0.1 and has no login. `local_only` in
+`src/server.rs` passes a request whose `Host` is a loopback address, or is the
+one origin in `trust.json` in the home, which `jelly trust ADDRESS` writes
+(`src/trust.rs`). A browser's `Origin` must be the same origin as the `Host` it
+came by, and `Sec-Fetch-Site` must not be `cross-site` or `same-site`, at either
+address. The file is read for each request that does not name this machine, so
+a change needs no restart. No route writes it: the CLI does, on the daemon's
+machine, in the home `/api/version` reports.
+
+Nothing else changes: a proxy on that machine, such as `tailscale serve --bg
+7878`, serves the address and passes requests on with their `Host`, and it
+alone decides who gets in. On another machine the CLI uses the address as
+`JELLY_URL`, which is never started on demand. Renders (`look`, `try`, where an
+ask shows) open the daemon's own pages at 127.0.0.1 on the port it listens on,
+whichever address the request came by. What the daemon runs, it runs on its own
+machine: feeds, `hear --wake`'s `codex queue`, and the screenshots `look` and
+`try` save.
+
 ## Updating
 
 `src/update.rs` holds what the daemon, `jelly update`, `jelly doctor` and

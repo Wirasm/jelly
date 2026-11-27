@@ -13,6 +13,7 @@ mod server;
 mod setup;
 mod store;
 mod startup;
+mod trust;
 mod update;
 mod verbs;
 
@@ -142,7 +143,7 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
     let by = cli.by.clone().unwrap_or_else(|| "agent".into());
     let json = cli.json;
     if json && matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Recipes { .. } | Cmd::Setup { .. } | Cmd::Update | Cmd::Open { .. } | Cmd::Pull { .. } | Cmd::Dev { .. }
-        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Pr { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Hear { wait: false, .. }) {
+        | Cmd::Design { .. } | Cmd::Asset { .. } | Cmd::Pr { .. } | Cmd::Share { .. } | Cmd::Unshare { .. } | Cmd::Relay { .. } | Cmd::Takedown { .. } | Cmd::Trust { .. } | Cmd::Hear { wait: false, .. }) {
         return Err("this command has no --json output".into());
     }
     // A change prints the daemon's event as it is, or one line about it.
@@ -888,6 +889,18 @@ fn run_with_start(mut cli: Cli, start: impl FnOnce(&str, bool) -> Result<(), Str
                 (None, true) => output(format_args!("the view-only link to {name} no longer works\n")),
                 (None, false) => output(format_args!("{name} is no longer shared: every link stopped, and its final state is here\n")),
             }
+        }
+        Cmd::Trust { address } => {
+            let home = daemon_home(&cli.url)?;
+            let trusted = match address {
+                None => trust::read(&home)?,
+                Some(address) => trust::set(&home, &address)?,
+            };
+            match trusted {
+                None => output(format_args!("jelly answers on this machine only\n"))?,
+                Some(t) => output(format_args!("jelly trusts {t}\nThe daemon answers requests that come by that address, with no login of its own: whoever your proxy lets in can use every jelly.\nServe the address with a proxy on this machine (`tailscale serve --bg PORT`), and set JELLY_URL={t} on the other machines.\n"))?,
+            }
+            Ok(())
         }
         Cmd::Relay { address } => {
             let home = relay::Home(default_home()?);

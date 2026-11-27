@@ -42,6 +42,8 @@ alternatives or a reason is refused. Never hand the person an empty question.
 
 The first `jelly` command starts the daemon if it is not running. `JELLY_URL` (or
 `--url`) points the CLI at another daemon; the jelly page is then at that address.
+A daemon on another machine answers only at the address its person gave it with
+`jelly trust`; when `JELLY_URL` is set, use that daemon and never start one here.
 
 When something about jelly does not work, run `jelly doctor`: one line per
 check, each failing line with the command that fixes it. `jelly update` installs
@@ -249,7 +251,7 @@ an `answer` with `args.id`, `args.option` and `args.text`. It holds no state;
 read that with `jelly state NAME`. In a
 script, add `--json` instead of parsing text. `hear` takes it only with
 `--wait`; `feed` takes it and prints text; `share`, `unshare`, `pr`, `asset`, `pull`, `dev`, `design`,
-`recipes`, `open`, `relay`, `takedown`, `serve`, `setup` and `update` refuse it.
+`recipes`, `open`, `relay`, `takedown`, `trust`, `serve`, `setup` and `update` refuse it.
 
 **Put the decision where the code is.** When the jelly settled something about
 a pull request, post it there:
@@ -316,6 +318,7 @@ jelly project demo --move launch # rename it, or merge it into launch: every jel
 jelly project launch --rm        # remove it; it must hold no jelly
 jelly find three issues          # the person named a jelly loosely: which one, and its state
 jelly serve --temp               # a throwaway daemon (free port, fresh home); use its URL as JELLY_URL
+jelly trust https://mini.example.ts.net   # on the daemon's machine: it also answers requests that come by that address, behind the person's proxy; "" trusts none
 jelly pull plan ./plan           # the full jelly into a folder: view.html, verbs.js, state.json, assets/
 jelly dev plan ./plan            # shape the jelly on every save in that folder
 jelly asset plan shot.png demo.mp4   # files beside the jelly; the view uses assets/shot.png
